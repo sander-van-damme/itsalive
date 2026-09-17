@@ -47,7 +47,7 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
       const headers: Record<string, string> = { "content-type": "application/json", ...options.headers };
       if (credential?.value) {
         if (format === "anthropic") headers["x-api-key"] = credential.value;
-        else if (format === "google") { /* Google commonly uses a URL key; bearer also works for OAuth. */ headers.authorization = `Bearer ${credential.value}`; }
+        else if (format === "google") headers["x-goog-api-key"] = credential.value;
         else headers.authorization = `Bearer ${credential.value}`;
       }
       let body: Json;

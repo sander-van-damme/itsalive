@@ -13,6 +13,7 @@ let activeSlug: string | undefined;
 let frame: HTMLIFrameElement | undefined;
 let executor: PostMessageExecutor | undefined;
 let running = false;
+let connectionTimer: number | undefined;
 
 const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
 const stored = localStorage.getItem('itsalive.settings');
@@ -30,7 +31,19 @@ const ui = new ShellUI(root, {
   deleteApp: async slug => { await db.apps.delete(slug); if (activeSlug === slug) disposeFrame(); await refreshApps(apps.find(a => a.slug !== slug)?.slug); },
   updatePrompt: async prompt => { const app = currentApp(); if (!app) return; await db.apps.put({ ...app, prompt, updatedAt: Date.now() }); await refreshApps(app.slug); },
   sendMessage: async content => { await runAgent(content); },
-  saveSettings: async value => { settings = value; localStorage.setItem('itsalive.settings', JSON.stringify(value)); ui.setSettings(value); },
+  saveSettings: async value => {
+    const candidate = await testModelConnection(value);
+    settings = candidate;
+    localStorage.setItem('itsalive.settings', JSON.stringify(candidate));
+    ui.setSettings(candidate);
+  },
+  designApp: async goal => {
+    configureRegistry();
+    const result = await registry.generate({ model: modelConfig(), system: `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name and a DNS-safe lowercase slug. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY JSON with string fields "name", "slug", and "prompt". Do not use markdown.`, messages: [{ role: 'user', content: goal }], maxOutputTokens: Math.min(settings.maxOutputTokens, 1200) }, credential());
+    const parsed = JSON.parse(result.text.replace(/^```(?:json)?\s*|\s*```$/g, '')) as { name?: unknown; slug?: unknown; prompt?: unknown };
+    if (typeof parsed.name !== 'string' || typeof parsed.slug !== 'string' || typeof parsed.prompt !== 'string') throw new Error('The app designer returned an invalid proposal. Please try again.');
+    return { name: parsed.name.trim().slice(0, 60), slug: normalizeAppSlug(parsed.slug), prompt: parsed.prompt.trim() };
+  },
   exportLogs: async () => { const logs = activeSlug ? await db.logs.forApp(activeSlug) : await db.logs.all(); downloadJson(`itsalive-logs-${Date.now()}.json`, logs); },
   reloadApp: () => frame?.contentWindow?.postMessage(createBridgeMessage(activeSlug!, createRequestId(), { type: 'reload' }), currentOrigin())
 });
@@ -59,15 +72,18 @@ async function selectApp(slug: string): Promise<void> {
   frame.allow = 'camera; microphone; geolocation; clipboard-read; clipboard-write';
   frame.referrerPolicy = 'strict-origin';
   frame.src = currentOrigin();
-  frame.addEventListener('load', () => ui.setBusy(false, 'App connected'));
+  ui.setConnectionStatus('Connecting…', 'working');
+  connectionTimer = window.setTimeout(() => ui.setConnectionStatus('App unavailable', 'error'), 10_000);
+  frame.addEventListener('error', () => { clearTimeout(connectionTimer); ui.setConnectionStatus('Connection failed', 'error'); });
+  frame.addEventListener('load', () => ui.setConnectionStatus('Starting app…', 'working'));
   executor = new PostMessageExecutor(frame, slug, currentOrigin());
   ui.setApps(apps as AppSummary[], slug); ui.mountFrame(frame);
   await refreshMessages();
 }
 
-function disposeFrame(): void { executor?.dispose(); executor = undefined; frame?.remove(); frame = undefined; }
+function disposeFrame(): void { if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; executor?.dispose(); executor = undefined; frame?.remove(); frame = undefined; }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.slug === activeSlug); }
-function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, ROOT_DOMAIN, location.protocol === 'http:' ? 'http:' : 'https:'); }
+function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, ROOT_DOMAIN, 'https:'); }
 
 async function refreshMessages(): Promise<void> {
   if (!activeSlug) return ui.setMessages([]);
@@ -101,7 +117,7 @@ async function runAgent(trigger: string): Promise<void> {
     const message = error instanceof Error ? error.message : String(error);
     await log('error', `agent:${app.slug}`, message, error, app.slug);
     await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: `Agent stopped: ${message}` });
-  } finally { running = false; ui.setBusy(false); await refreshMessages(); }
+  } finally { running = false; ui.setBusy(false, 'App connected', 'connected'); await refreshMessages(); }
 }
 
 async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void> {
@@ -119,7 +135,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
       break;
     }
     case 'wake': if (!running) void runAgent(message.reason || 'The app requested an agent wake-up.'); break;
-    case 'status': ui.setBusy(message.status === 'busy' || message.status === 'saving', message.detail || message.status); break;
+    case 'status': if (message.status === 'ready' && connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; } ui.setBusy(message.status === 'busy' || message.status === 'saving', message.status === 'ready' ? 'App connected' : (message.detail || message.status), message.status === 'ready' ? 'connected' : (message.status === 'error' ? 'error' : 'working')); break;
   }
 }
 
@@ -153,5 +169,33 @@ async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>
 }
 
 function downloadJson(name: string, value: unknown): void { const url = URL.createObjectURL(new Blob([JSON.stringify(value,null,2)], { type: 'application/json' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
+
+async function testModelConnection(candidate: SettingsValue): Promise<SettingsValue> {
+  const testRegistry = createDefaultRegistry();
+  if (candidate.provider === 'compatible' && candidate.endpoint) testRegistry.register(openAiCompatible('compatible', candidate.endpoint));
+  else if (candidate.provider === 'google') testRegistry.register(createHttpAdapter({ id: 'google', endpoint: candidate.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate.model)}:generateContent`, format: 'google' }));
+  else if (candidate.endpoint) testRegistry.register(createHttpAdapter({ id: candidate.provider, endpoint: candidate.endpoint, format: candidate.provider === 'anthropic' ? 'anthropic' : 'openai' }));
+  const model = { id: 'connection-test', provider: candidate.provider, model: candidate.model, maxContextTokens: candidate.maxContextTokens, maxOutputTokens: candidate.maxOutputTokens };
+  await testRegistry.generate({ model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: 8 }, candidate.apiKey ? { id: 'connection-test', type: 'api-key', value: candidate.apiKey } : undefined);
+  return { ...candidate, ...await retrieveModelLimits(candidate).catch(() => ({})) };
+}
+
+async function retrieveModelLimits(candidate: SettingsValue): Promise<Partial<SettingsValue>> {
+  let url: string | undefined;
+  const headers: Record<string, string> = {};
+  if (candidate.provider === 'openrouter') url = `https://openrouter.ai/api/v1/models/${encodeURIComponent(candidate.model)}/endpoints`;
+  else if (candidate.provider === 'google') url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate.model)}?key=${encodeURIComponent(candidate.apiKey)}`;
+  else if (candidate.provider === 'openai') { url = `https://api.openai.com/v1/models/${encodeURIComponent(candidate.model)}`; headers.authorization = `Bearer ${candidate.apiKey}`; }
+  else if (candidate.provider === 'anthropic') { url = `https://api.anthropic.com/v1/models/${encodeURIComponent(candidate.model)}`; headers['x-api-key'] = candidate.apiKey; headers['anthropic-version'] = '2023-06-01'; headers['anthropic-dangerous-direct-browser-access'] = 'true'; }
+  if (!url) return {};
+  const response = await fetch(url, { headers });
+  if (!response.ok) return {};
+  const json = await response.json() as Record<string, unknown>;
+  const record = (typeof json.data === 'object' && json.data !== null ? json.data : json) as Record<string, unknown>;
+  const endpoint = (Array.isArray(record.endpoints) && typeof record.endpoints[0] === 'object' && record.endpoints[0] !== null ? record.endpoints[0] : {}) as Record<string, unknown>;
+  const maxContextTokens = Number(record.context_length ?? record.inputTokenLimit ?? endpoint.context_length);
+  const maxOutputTokens = Number(record.max_completion_tokens ?? record.outputTokenLimit ?? endpoint.max_completion_tokens);
+  return { ...(Number.isFinite(maxContextTokens) && maxContextTokens > 0 ? { maxContextTokens } : {}), ...(Number.isFinite(maxOutputTokens) && maxOutputTokens > 0 ? { maxOutputTokens } : {}) };
+}
 
 void refreshApps(new URL(location.href).searchParams.get('app') ?? undefined).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));
