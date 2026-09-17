@@ -35,27 +35,30 @@ export class ShellUI {
   constructor(private readonly mount: HTMLElement, private readonly actions: ShellActions) { this.render(); }
 
   setApps(apps: AppSummary[], activeSlug?: string): void {
+    const previousSlug = this.active?.slug;
     this.apps = apps;
     this.active = apps.find(a => a.slug === activeSlug);
+    if (this.active && this.active.slug !== previousSlug) this.tab = 'chat';
+    if (!this.active && this.tab === 'chat') this.tab = 'apps';
     this.render();
   }
   setMessages(messages: ChatLine[]): void { this.messages = messages; if (this.tab === 'chat') this.render(); }
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
   setBusy(busy: boolean, status = busy ? 'Agent is working' : 'Ready', tone: 'idle' | 'working' | 'connected' | 'error' = busy ? 'working' : 'idle'): void { this.busy = busy; this.status = status; this.statusTone = tone; this.renderStatus(); if (this.tab === 'chat') this.renderPanel(); }
   setConnectionStatus(status: string, tone: 'idle' | 'working' | 'connected' | 'error'): void { this.status = status; this.statusTone = tone; this.renderStatus(); }
-  showError(message: string): void { this.messages.push({ id: crypto.randomUUID(), role: 'system', content: `Error: ${message}`, timestamp: Date.now() }); this.tab = 'chat'; this.render(); }
+  showError(message: string): void { this.messages.push({ id: crypto.randomUUID(), role: 'system', content: `Error: ${message}`, timestamp: Date.now() }); if (this.active) this.tab = 'chat'; this.render(); }
 
   private render(): void {
     document.documentElement.dataset.theme = this.theme;
     this.mount.innerHTML = `<main class="shell ${this.collapsed ? 'collapsed' : ''}">
       <section class="stage" aria-label="Active application">
-        <div class="status-pill" data-tone="${this.statusTone}"><span class="status-dot"></span><span data-status>${esc(this.status)}</span></div>
-        <div class="app-frame-wrap"><div class="empty-stage"><div><i data-lucide="sparkles" size="30"></i><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your itsalive apps will appear here.'}</p></div></div></div>
+        ${this.active ? `<div class="status-pill" data-tone="${this.statusTone}"><span class="status-dot"></span><span data-status>${esc(this.status)}</span></div>` : ''}
+        <div class="app-frame-wrap"><div class="empty-stage"><div><span class="empty-logo">IA</span><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your apps will appear here.'}</p></div></div></div>
       </section>
       <aside class="rail">
-        <header class="brand"><span class="brand-mark"><i data-lucide="sprout" size="16"></i></span><strong>itsalive</strong><div class="header-actions"><button class="header-button" data-theme title="Toggle day/night mode"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" size="15"></i></button><button class="header-button ${this.tab === 'settings' ? 'active':''}" data-settings title="Settings"><i data-lucide="settings" size="15"></i></button><button class="header-button" data-collapse title="${this.collapsed ? 'Expand' : 'Collapse'} sidebar"><i data-lucide="panel-right-${this.collapsed ? 'open' : 'close'}" size="15"></i></button></div></header>
+        <header class="brand"><span class="brand-mark" aria-hidden="true">IA</span><strong>itsalive</strong><div class="header-actions"><button class="header-button" data-theme title="Toggle day/night mode"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" size="18"></i></button><button class="header-button ${this.tab === 'settings' ? 'active':''}" data-settings title="Settings"><i data-lucide="settings" size="18"></i></button><button class="header-button" data-collapse title="${this.collapsed ? 'Expand' : 'Collapse'} sidebar"><i data-lucide="panel-right-${this.collapsed ? 'open' : 'close'}" size="18"></i></button></div></header>
         <nav class="tabs" aria-label="Workspace">
-          ${this.tabButton('apps','layout-grid','Apps')}${this.tabButton('chat','message-circle','Chat')}
+          ${this.tabButton('apps','layout-grid','Apps')}${this.active ? this.tabButton('chat','message-circle','Chat') : ''}
         </nav>
         <section class="panel" data-panel></section>
       </aside>
@@ -94,11 +97,11 @@ export class ShellUI {
   private renderApps(panel: HTMLElement): void {
     panel.innerHTML = `<header class="panel-head"><h2>Your apps</h2><p>Each app lives securely on its own subdomain.</p></header><div class="scroll">
       <div class="app-list">${this.apps.map(app => `<button class="app-item ${this.active?.slug === app.slug ? 'active':''}" data-app="${esc(app.slug)}"><span class="app-icon">${esc(app.name.slice(0,2))}</span><span class="app-copy"><strong>${esc(app.name)}</strong><small>${esc(app.slug)}.${esc(ROOT_DOMAIN)}</small></span><i class="kebab" data-lucide="chevron-right" size="14"></i></button>`).join('')}</div>
-      <button class="action primary create-button" data-new><i data-lucide="plus" size="14"></i> Create itsalive app</button>
+      <button class="action primary create-button" data-new><i data-lucide="plus" size="16"></i> Create new app</button>
       ${this.active ? `<hr class="divider"><div class="card"><h3 class="card-title">App instructions</h3><p class="card-copy">This purpose is included in every agent run.</p><div class="field" style="margin-top:10px"><label for="app-prompt">What is this app for?</label><textarea id="app-prompt">${esc(this.active.prompt)}</textarea></div><div class="row" style="margin-top:9px"><button class="action" data-save-prompt>Save prompt</button><button class="action" data-reload><i data-lucide="refresh-cw" size="12"></i>Reload</button><button class="action danger icon-button" data-delete title="Delete app"><i data-lucide="trash-2" size="13"></i></button></div></div>` : ''}
     </div>`;
     panel.querySelector('[data-new]')?.addEventListener('click', () => this.showCreateForm(panel));
-    panel.querySelectorAll<HTMLElement>('[data-app]').forEach(el => el.onclick = () => void this.actions.selectApp(el.dataset.app ?? ''));
+    panel.querySelectorAll<HTMLElement>('[data-app]').forEach(el => el.onclick = () => { this.tab = 'chat'; void this.actions.selectApp(el.dataset.app ?? ''); });
     panel.querySelector('[data-save-prompt]')?.addEventListener('click', () => void this.actions.updatePrompt((panel.querySelector('#app-prompt') as HTMLTextAreaElement).value));
     panel.querySelector('[data-reload]')?.addEventListener('click', () => this.actions.reloadApp());
     panel.querySelector('[data-delete]')?.addEventListener('click', () => { if (this.active && confirm(`Delete ${this.active.name}? App-origin data may remain in this browser.`)) void this.actions.deleteApp(this.active.slug); });
@@ -108,18 +111,20 @@ export class ShellUI {
     panel.innerHTML = `<header class="panel-head"><h2>What should we build?</h2><p>Chat with the app designer. It will turn your goal into a name and clear instructions.</p></header><div class="creation-chat"><div class="message assistant">Tell me what you want the app to help you accomplish. You can describe the audience, workflow, or outcome.</div></div><form class="composer" data-create><div class="composer-box"><label class="sr-only" for="goal">App goal</label><textarea id="goal" required autofocus placeholder="I want an app that…"></textarea><div class="composer-foot"><span></span><button class="send" title="Send"><i data-lucide="arrow-up" size="15"></i></button></div></div></form><button class="action cancel-create" type="button" data-cancel>Cancel</button>`;
     panel.querySelector('[data-cancel]')?.addEventListener('click', () => this.renderPanel());
     const form = panel.querySelector<HTMLFormElement>('form')!; const goal = panel.querySelector<HTMLTextAreaElement>('#goal')!;
-    form.onsubmit = event => { event.preventDefault(); const content = goal.value.trim(); if (!content) return; goal.disabled = true; (form.querySelector('button') as HTMLButtonElement).disabled = true; const chat = panel.querySelector('.creation-chat')!; chat.insertAdjacentHTML('beforeend', `<div class="message user">${esc(content)}</div><div class="thinking"><i></i><i></i><i></i></div>`); void this.actions.designApp(content).then(draft => { chat.querySelector('.thinking')?.remove(); chat.insertAdjacentHTML('beforeend', `<div class="message assistant"><strong>${esc(draft.name)}</strong><br>${esc(draft.prompt)}<br><small>${esc(draft.slug)}.${esc(ROOT_DOMAIN)}</small><div class="proposal-actions"><button class="action primary" data-confirm>Create this app</button></div></div>`); chat.querySelector<HTMLButtonElement>('[data-confirm]')!.onclick = () => void this.actions.createApp(draft); }).catch(error => { chat.querySelector('.thinking')?.remove(); chat.insertAdjacentHTML('beforeend', `<div class="message system">${esc(error instanceof Error ? error.message : String(error))}</div>`); goal.disabled = false; (form.querySelector('button') as HTMLButtonElement).disabled = false; }); };
+    form.onsubmit = event => { event.preventDefault(); const content = goal.value.trim(); if (!content) return; goal.value = ''; goal.disabled = true; (form.querySelector('button') as HTMLButtonElement).disabled = true; const chat = panel.querySelector('.creation-chat')!; chat.insertAdjacentHTML('beforeend', `<div class="message user">${esc(content)}</div><div class="thinking"><i></i><i></i><i></i></div>`); void this.actions.designApp(content).then(draft => { chat.querySelector('.thinking')?.remove(); chat.insertAdjacentHTML('beforeend', `<div class="message assistant"><strong>${esc(draft.name)}</strong><br>${esc(draft.prompt)}<br><small>${esc(draft.slug)}.${esc(ROOT_DOMAIN)}</small><div class="proposal-actions"><button class="action primary" data-confirm>Create this app</button></div></div>`); chat.querySelector<HTMLButtonElement>('[data-confirm]')!.onclick = () => void this.actions.createApp(draft); }).catch(error => { chat.querySelector('.thinking')?.remove(); chat.insertAdjacentHTML('beforeend', `<div class="message system">${esc(error instanceof Error ? error.message : String(error))}</div>`); goal.disabled = false; (form.querySelector('button') as HTMLButtonElement).disabled = false; }); };
     goal.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } };
   }
 
   private renderChat(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-head"><h2>${esc(this.active?.name ?? 'Chat')}</h2><p>${this.active ? 'Ask the agent to inspect, build, or improve this app.' : 'Select or create an app before chatting.'}</p></header>
+    if (!this.active) { this.tab = 'apps'; this.renderApps(panel); return; }
+    panel.innerHTML = `<header class="panel-head chat-head"><button class="back-button" data-back title="Back to apps"><i data-lucide="arrow-left" size="18"></i></button><div><h2>${esc(this.active.name)}</h2><p>Ask the agent to inspect, build, or improve this app.</p></div></header>
       <div class="chat-stream" data-stream>${this.messages.length ? this.messages.map(m => `<div class="message ${m.role}">${esc(m.content)}</div>`).join('') : `<div class="empty-chat"><i data-lucide="wand-sparkles" size="25"></i><strong>Build as you use</strong>Describe what you need. The agent will inspect and change your live app.</div>`}${this.busy ? '<div class="thinking"><i></i><i></i><i></i></div>':''}</div>
       <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" placeholder="Ask the app to change…" ${!this.active || this.busy ? 'disabled':''}></textarea><div class="composer-foot"><span></span><button class="send" title="Send" ${!this.active || this.busy ? 'disabled':''}><i data-lucide="arrow-up" size="15"></i></button></div></div></form>`;
     const stream = panel.querySelector('[data-stream]'); if (stream) stream.scrollTop = stream.scrollHeight;
+    panel.querySelector<HTMLButtonElement>('[data-back]')!.onclick = () => { this.tab = 'apps'; this.render(); };
     const form = panel.querySelector<HTMLFormElement>('[data-composer]')!; const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
-    form.onsubmit = event => { event.preventDefault(); const content = textarea.value.trim(); if (content) { textarea.value=''; void this.actions.sendMessage(content); } };
-    textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } };
+    form.onsubmit = event => { event.preventDefault(); const content = textarea.value.trim(); if (content) { form.reset(); textarea.value = ''; void this.actions.sendMessage(content); } };
+    textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
   }
 
   private renderSettings(panel: HTMLElement): void {

@@ -17,7 +17,11 @@ let connectionTimer: number | undefined;
 
 const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
 const stored = localStorage.getItem('itsalive.settings');
-let settings: SettingsValue = stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
+let settings: SettingsValue = defaultSettings;
+if (stored) {
+  try { settings = { ...defaultSettings, ...JSON.parse(stored) as Partial<SettingsValue> }; }
+  catch (error) { console.warn('[itsalive] Ignoring invalid saved settings', error); }
+}
 
 const ui = new ShellUI(root, {
   createApp: async input => {
@@ -39,12 +43,16 @@ const ui = new ShellUI(root, {
   },
   designApp: async goal => {
     configureRegistry();
-    const result = await registry.generate({ model: modelConfig(), system: `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name and a DNS-safe lowercase slug. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY JSON with string fields "name", "slug", and "prompt". Do not use markdown.`, messages: [{ role: 'user', content: goal }], maxOutputTokens: Math.min(settings.maxOutputTokens, 1200) }, credential());
-    const parsed = JSON.parse(result.text.replace(/^```(?:json)?\s*|\s*```$/g, '')) as { name?: unknown; slug?: unknown; prompt?: unknown };
-    if (typeof parsed.name !== 'string' || typeof parsed.slug !== 'string' || typeof parsed.prompt !== 'string') throw new Error('The app designer returned an invalid proposal. Please try again.');
+    const system = `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name and a DNS-safe lowercase slug. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY one complete JSON object with string fields "name", "slug", and "prompt". Do not use markdown.`;
+    const parsed = await generateAppProposal(goal, system);
     return { name: parsed.name.trim().slice(0, 60), slug: normalizeAppSlug(parsed.slug), prompt: parsed.prompt.trim() };
   },
-  exportLogs: async () => { const logs = activeSlug ? await db.logs.forApp(activeSlug) : await db.logs.all(); downloadJson(`itsalive-logs-${Date.now()}.json`, logs); },
+  exportLogs: async () => {
+    const logs = await db.logs.all();
+    const selected = activeSlug ? logs.filter(item => !item.appSlug || item.appSlug === activeSlug) : logs;
+    const contents = selected.sort((a, b) => a.timestamp - b.timestamp).map(item => `${new Date(item.timestamp).toISOString()} [${item.level.toUpperCase()}] [${item.source}] ${item.message}${item.details === undefined ? '' : ` ${safeStringify(item.details)}`}`).join('\n');
+    downloadText(`itsalive-logs-${Date.now()}.log`, contents || 'No log entries recorded.');
+  },
   reloadApp: () => frame?.contentWindow?.postMessage(createBridgeMessage(activeSlug!, createRequestId(), { type: 'reload' }), currentOrigin())
 });
 ui.setSettings(settings);
@@ -53,6 +61,36 @@ window.addEventListener('message', event => { void handleRuntimeMessage(event); 
 window.addEventListener('unhandledrejection', event => { void log('error', 'shell', String(event.reason), event.reason); });
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
+
+async function generateAppProposal(goal: string, system: string): Promise<{ name: string; slug: string; prompt: string }> {
+  let failure = 'invalid JSON';
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    const repair = attempt === 1 ? goal : `${goal}\n\nYour previous response could not be parsed (${failure}). Return the complete JSON object again. Do not abbreviate or add commentary.`;
+    const result = await registry.generate({ model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(settings.maxOutputTokens, 2000) }, credential());
+    try {
+      const parsed = parseJsonObject(result.text) as { name?: unknown; slug?: unknown; prompt?: unknown };
+      if (typeof parsed.name !== 'string' || typeof parsed.slug !== 'string' || typeof parsed.prompt !== 'string') throw new Error('required string fields are missing');
+      if (!parsed.name.trim() || !parsed.slug.trim() || !parsed.prompt.trim()) throw new Error('required fields are empty');
+      if (attempt > 1) await log('info', 'app-designer', `Recovered valid proposal on attempt ${attempt}`);
+      return parsed as { name: string; slug: string; prompt: string };
+    } catch (error) {
+      failure = error instanceof Error ? error.message : String(error);
+      await log('warn', 'app-designer', `Invalid model JSON on attempt ${attempt}/3: ${failure}`, { response: result.text.slice(0, 2_000) });
+    }
+  }
+  throw new Error('The app designer returned invalid JSON after 3 attempts. Please try again.');
+}
+
+function parseJsonObject(text: string): unknown {
+  const clean = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
+  try { return JSON.parse(clean); }
+  catch (firstError) {
+    const start = clean.indexOf('{');
+    const end = clean.lastIndexOf('}');
+    if (start >= 0 && end > start) return JSON.parse(clean.slice(start, end + 1));
+    throw firstError;
+  }
+}
 
 async function refreshApps(select?: string): Promise<void> {
   apps = (await db.apps.list()).sort((a,b) => b.updatedAt - a.updatedAt);
@@ -106,12 +144,13 @@ function credential(): Credential | undefined { return settings.apiKey ? { id: '
 async function runAgent(trigger: string): Promise<void> {
   const app = currentApp();
   if (!app || !executor || running) return;
-  running = true; ui.setBusy(true); await refreshMessages();
+  running = true; ui.setBusy(true); await log('info', `agent:${app.slug}`, 'Agent run started', { trigger }, app.slug); await refreshMessages();
   try {
     configureRegistry();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
     const result = await runner.run({ appSlug: app.slug, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary });
+    await log('info', `agent:${app.slug}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.slug);
     if (result.status === 'turn-limit') await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
@@ -125,7 +164,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
   const message = validateMessageEvent(event, { expectedOrigin: currentOrigin(), expectedAppSlug: activeSlug, expectedSource: frame.contentWindow, direction: 'to-shell' });
   if (!message || !isAppToShellMessage(message)) return;
   switch (message.type) {
-    case 'log': await db.logs.add({ timestamp: message.record.timestamp, source: message.record.source, level: message.record.level, message: message.record.message, details: message.record.details, appSlug: activeSlug }); break;
+    case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeSlug); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeSlug, message.query, message.limit) }); break;
     case 'logs.request': { const all = await db.logs.forApp(activeSlug); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
     case 'ai.request': await handleAiRequest(message); break;
@@ -156,7 +195,16 @@ async function handleAiRequest(message: BridgeMessage & { type: 'ai.request'; pr
 
 function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { frame?.contentWindow?.postMessage(createBridgeMessage(message.appSlug, message.requestId, payload), currentOrigin()); }
 function toProtocolLog(item: LogEntry) { return { timestamp: item.timestamp, level: item.level, source: item.source, message: item.message, details: item.details }; }
-async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appSlug?: string) { await db.logs.add({ timestamp: Date.now(), level, source, message, details, appSlug }); }
+async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appSlug?: string) {
+  const method = level === 'debug' ? 'debug' : level;
+  console[method](`[itsalive:${source}] ${message}`, ...(details === undefined ? [] : [details]));
+  await db.logs.add({ timestamp: Date.now(), level, source, message, details: serializableDetails(details), appSlug });
+}
+
+function serializableDetails(value: unknown): unknown {
+  if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
+  try { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); } catch { return String(value); }
+}
 
 async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>[2], timeoutMs = 10_000): Promise<T> {
   if (!frame?.contentWindow || !activeSlug) throw new Error('App is not connected');
@@ -168,7 +216,8 @@ async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>
   });
 }
 
-function downloadJson(name: string, value: unknown): void { const url = URL.createObjectURL(new Blob([JSON.stringify(value,null,2)], { type: 'application/json' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
+function safeStringify(value: unknown): string { try { return JSON.stringify(value); } catch { return String(value); } }
+function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
 
 async function testModelConnection(candidate: SettingsValue): Promise<SettingsValue> {
   const testRegistry = createDefaultRegistry();
