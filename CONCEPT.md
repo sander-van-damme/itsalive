@@ -5,10 +5,10 @@
 
 This document describes a deliberately small browser platform where every app is a persistent, self-modifying HTML application controlled by an AI agent.
 
-The platform has two layers:
+The platform has two layers, shipped as **two separate static site builds from one repository**:
 
-1. **Root shell** — the fixed UI, AI configuration, prompts, history, and agent runner.
-2. **App subdomain** — one isolated browser origin containing one living app.
+1. **Root shell site** — the fixed UI, AI configuration, prompts, history, and agent runner.
+2. **App runtime site** — served on the wildcard subdomain; each hostname becomes one isolated living app origin.
 
 Example:
 
@@ -83,27 +83,33 @@ A violin coach, renovation manager, math tutor, personal CRM, research notebook,
 
 # 2. Deployment model
 
-## 2.1 One repository
+## 2.1 One repository, two static site builds
 
-Use one repository for:
+Use one repository, but produce **two separate static sites**:
 
-- the root shell;
-- the app-subdomain bootstrap/runtime;
-- shared static assets;
-- Tailwind/Lucide dependencies;
-- provider adapters.
+```text
+root site build
+    → deployed to <root-domain>
 
-The client determines its mode from `location.hostname`.
-
-Conceptually:
-
-```js
-if (location.hostname === ROOT_DOMAIN) {
-  startShell();
-} else {
-  startAppRuntime();
-}
+app site build
+    → deployed to *.<root-domain>
 ```
+
+The root build contains the shell.
+
+The app build contains the app bootstrap/runtime that is served identically for every app subdomain.
+
+There is **no client-side hostname detection to choose between shell mode and app mode**. The two builds have different entry points and are deployed to different hostname bindings.
+
+The real root domain is injected at build time through an environment variable, for example:
+
+```text
+ROOT_DOMAIN=example.com
+```
+
+Both builds may use that value where they need to construct or validate cross-origin URLs.
+
+The repository may share source modules between the two builds, but their generated static sites are distinct artifacts.
 
 ## 2.2 Cloudflare deployment
 
@@ -111,18 +117,19 @@ Deployment target:
 
 > **Cloudflare Workers Static Assets**
 
-Configure:
+Deploy the two static builds separately:
 
 ```text
-<root-domain>
-*.<root-domain>
+root static site
+    <root-domain>
+
+app static site
+    *.<root-domain>
 ```
 
-to serve the same static asset deployment.
+The intention is that normal page delivery is handled as static assets without request-time application Worker invocations.
 
-The intention is that normal page delivery is handled as static assets without a request-time application Worker.
-
-The wildcard hostname means every app receives its own browser origin without requiring a separate deployment.
+The wildcard app-site binding means every app receives its own browser origin without requiring a separate build or deployment for that app.
 
 ## 2.3 App slug
 
@@ -136,18 +143,9 @@ house.<root-domain>       → house
 math.<root-domain>        → math
 ```
 
-Reserve infrastructure names such as:
+Do not maintain an application-level reserved-slug list.
 
-```text
-www
-assets
-cdn
-admin
-settings
-auth
-```
-
-App slugs must not use reserved names.
+Any slug accepted by app creation and representable as the intended subdomain may be used.
 
 ---
 
@@ -438,20 +436,37 @@ because every generated app would then receive the same credentials.
 
 # 8. What an app is
 
-Each app is conceptually:
+The durable generated application is primarily **one persistent HTML document**.
+
+AI-written CSS and JavaScript belong inside that document, normally in `<style>` and `<script>` elements. Custom Element definitions, cron declarations, helpers, and other generated behavior are therefore part of the saved HTML rather than separate generated source files.
+
+Conceptually:
 
 ```text
 App subdomain
 ├── persistent HTML document
-├── JavaScript
-├── CSS
-├── Custom Elements
-├── cron declarations
+│   ├── markup / UI
+│   ├── <style> AI-written CSS
+│   ├── <script> AI-written JavaScript
+│   ├── Custom Element definitions
+│   ├── cron declarations
+│   ├── small durable app data/context
+│   └── other generated app behavior
+│
+├── injected static app runtime
+│   ├── postMessage bridge
+│   ├── inspectDom / refs
+│   ├── screenshot support
+│   ├── app.ai / history bridge
+│   ├── custom-tool runtime
+│   └── persistence helpers
+│
 ├── app IndexedDB
 ├── optional OPFS/files
-├── custom agent tools
-└── runtime bridge to shell
+└── custom agent tools
 ```
+
+The **injected static app runtime is platform code**, delivered by the app-site build. It is not AI-generated and is not serialized as part of the living HTML document.
 
 Shell-owned state associated with that app:
 
@@ -491,9 +506,12 @@ The app HTML may contain:
 - visible records;
 - plans;
 - notes;
-- scripts;
-- Custom Elements;
+- AI-written CSS in `<style>` elements;
+- AI-written JavaScript in `<script>` elements;
+- Custom Element definitions;
 - cron declarations.
+
+Generated CSS and JavaScript are part of the persistent HTML document. Platform runtime code supplied by the app-site build is injected separately and is not persisted into the generated document.
 
 ## 9.1 Good HTML state
 
@@ -969,15 +987,37 @@ Custom tools should be stored inside the app origin, for example in its IndexedD
 
 Because each app is a separate origin, the tool registry requires no app namespace.
 
-Do not inject every custom tool definition into every model request.
+## 17.1 Compact tool inventory is always in model context
 
-The agent can discover them:
+Every model request for the app must include **every custom tool name plus a very short description**.
+
+Example:
+
+```text
+CUSTOM TOOLS
+
+invoiceTotals — Calculate paid and outstanding invoice totals.
+findContractor — Find contractor records by literal name or company.
+normalizeQuote — Normalize an imported quote into the app's record shape.
+```
+
+This inventory is intentionally compact and is essential: the model should know which reusable capabilities already exist before writing new JavaScript.
+
+Do **not** inject the full implementation, parameter schema, or source code of every tool into every request.
+
+When the model needs more detail, it can retrieve one tool:
+
+```js
+return await tools.get("invoiceTotals");
+```
+
+It can also search the registry when useful:
 
 ```js
 return await tools.search("invoice");
 ```
 
-and retrieve details only when needed.
+The short description stored for each tool should therefore be concise and useful enough for discovery.
 
 ---
 
@@ -1107,34 +1147,56 @@ Stored history does not mean it is all sent to the model.
 
 # 20. Context budgeting
 
-Do not use:
+The request builder must know the **maximum context size of the selected model** and must never send a request that exceeds it.
+
+Do not use a fixed rule such as:
 
 ```text
 last 10 messages
 ```
 
-Use a size budget.
+Budget by tokens/size.
 
 Conceptually:
 
 ```text
-model context capacity
-- reserved output budget
-- reserved execution-result budget
-= input budget
+selected model max context
+- reserved maximum output
+- reserved execution-observation headroom
+= maximum request input
 ```
 
-Fill the input budget in this order:
+Every request has a mandatory context block:
 
-1. global system prompt — always;
-2. app prompt — always;
-3. current trigger — always;
-4. rolling summary — normally;
-5. newest verbatim history backwards until the remaining budget is full.
+1. global system prompt;
+2. app prompt;
+3. current trigger;
+4. compact custom-tool inventory containing every tool name and very short description.
 
-Prefer actual token counting when available.
+Then add conversation context:
 
-Otherwise use a conservative character or byte estimate.
+5. rolling summary;
+6. newest verbatim history backwards while it fits.
+
+## 20.1 Trimming rule
+
+When a request would exceed the selected model's maximum context:
+
+> **Cut conversation history. Never cut the global system prompt.**
+
+Remove old verbatim history first and keep the newest useful history.
+
+If more space is needed, reduce conversation-derived context further, including the rolling summary if necessary.
+
+The system prompt is never truncated to make a request fit.
+
+The app prompt and custom-tool descriptions should be kept deliberately compact so they remain cheap mandatory context.
+
+Execution observations should also be bounded before they enter context so an unexpectedly large DOM inspection, log result, or tool result cannot crowd out the mandatory prompt.
+
+Prefer actual token counting for the selected provider/model.
+
+If exact token counting is unavailable, use a conservative character/byte estimate with safety margin.
 
 ---
 
@@ -1497,17 +1559,27 @@ Application code may call agent.wake(...) whenever another agent run is useful.
 
 CUSTOM TOOLS
 
+Every model request includes a compact inventory of all custom tools for this app: each tool's name and a very short description.
+
+Use that inventory before creating new code or new tools.
+
 You may search, inspect, create and call reusable custom tools.
+
+Use tools.get(...) when you need the full details of one existing tool.
 
 Create a custom tool when a complex operation is likely to recur.
 
 Do not create tools for trivial one-off operations.
 
-HISTORY
+HISTORY AND CONTEXT
 
-The root shell automatically provides bounded recent context and a rolling summary.
+The shell builds every request against the selected model's maximum context size.
 
-Context is bounded by token/character size, not message count.
+The global system prompt is never truncated.
+
+When context must be reduced, conversation history is removed to make the request fit.
+
+Recent context and the rolling summary are therefore bounded by available token/character budget, not message count.
 
 If you need an older exact statement, use literal history.search(...) with useful keywords.
 
@@ -1578,7 +1650,42 @@ The shell always includes the active app's prompt.
 
 ---
 
-# 28. Example agent run
+# 28. Model invocation context
+
+A normal model request is assembled as:
+
+```text
+GLOBAL SYSTEM PROMPT
+<mandatory; never truncated>
+
+APP PROMPT
+<mandatory>
+
+CUSTOM TOOL INVENTORY
+<mandatory; every tool name + very short description>
+
+CURRENT TRIGGER
+<mandatory current user/app/cron event>
+
+LAST EXECUTION OBSERVATION
+<only during a multi-turn run; bounded in size>
+
+ROLLING SUMMARY
+<conversation-derived; include only if it fits>
+
+RECENT VERBATIM HISTORY
+<newest backwards; trim to fit model max context>
+```
+
+The request builder uses the selected model's configured maximum context before every request.
+
+If the request is too large, conversation history is removed until it fits. The immutable global system prompt is never sacrificed.
+
+The full app HTML is not automatically inserted. The agent retrieves app detail through `inspectDom()`.
+
+---
+
+# 29. Example agent run
 
 User in root-shell Chat:
 
@@ -1635,7 +1742,7 @@ The shell displays that message in Chat.
 
 ---
 
-# 29. Architecture summary
+# 30. Architecture summary
 
 ```text
 ROOT DOMAIN
@@ -1665,13 +1772,16 @@ ROOT DOMAIN
 │ APP SUBDOMAIN                                │
 │                                              │
 │ persistent HTML                              │
-│ JavaScript                                   │
-│ Custom Elements                              │
+│   ├─ markup / UI                             │
+│   ├─ AI-written <style> CSS                  │
+│   ├─ AI-written <script> JavaScript          │
+│   ├─ Custom Element definitions              │
+│   └─ cron declarations                       │
+│ injected static app runtime                  │
 │ Tailwind / Lucide                            │
 │ IndexedDB                                    │
 │ OPFS                                         │
 │ custom tools                                 │
-│ cron declarations                            │
 │ inspectDom / refs / screenshot runtime       │
 └──────────────────────────────────────────────┘
 ```
@@ -1691,3 +1801,7 @@ The core architectural rules are:
 > **The browser performs app data isolation for us.**
 
 > **The iframe + `postMessage` bridge is the only connection between shell and app.**
+
+> **The root site and wildcard app site are separate static builds from one repository.**
+
+> **Every model request includes the compact custom-tool inventory and is trimmed to the selected model's maximum context by sacrificing conversation history, never the global system prompt.**
