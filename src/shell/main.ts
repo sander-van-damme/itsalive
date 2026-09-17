@@ -1,0 +1,157 @@
+import './styles.css';
+import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
+import { AgentRunner, PostMessageExecutor, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, normalizeAppSlug, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
+
+const root = document.querySelector<HTMLElement>('#app');
+if (!root) throw new Error('Shell mount point is missing');
+
+const db = new ShellDatabase();
+const registry = createDefaultRegistry();
+let apps: AppRecord[] = [];
+let activeSlug: string | undefined;
+let frame: HTMLIFrameElement | undefined;
+let executor: PostMessageExecutor | undefined;
+let running = false;
+
+const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
+const stored = localStorage.getItem('living-apps.settings');
+let settings: SettingsValue = stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
+
+const ui = new ShellUI(root, {
+  createApp: async input => {
+    const slug = normalizeAppSlug(input.slug);
+    if (await db.apps.get(slug)) throw new Error(`An app named “${slug}” already exists.`);
+    const now = Date.now();
+    await db.apps.put({ ...input, slug, summary: '', createdAt: now, updatedAt: now });
+    await refreshApps(slug);
+  },
+  selectApp: async slug => { await selectApp(slug); },
+  deleteApp: async slug => { await db.apps.delete(slug); if (activeSlug === slug) disposeFrame(); await refreshApps(apps.find(a => a.slug !== slug)?.slug); },
+  updatePrompt: async prompt => { const app = currentApp(); if (!app) return; await db.apps.put({ ...app, prompt, updatedAt: Date.now() }); await refreshApps(app.slug); },
+  sendMessage: async content => { await runAgent(content); },
+  saveSettings: async value => { settings = value; localStorage.setItem('living-apps.settings', JSON.stringify(value)); ui.setSettings(value); },
+  exportLogs: async () => { const logs = activeSlug ? await db.logs.forApp(activeSlug) : await db.logs.all(); downloadJson(`living-apps-logs-${Date.now()}.json`, logs); },
+  reloadApp: () => frame?.contentWindow?.postMessage(createBridgeMessage(activeSlug!, createRequestId(), { type: 'reload' }), currentOrigin())
+});
+ui.setSettings(settings);
+
+window.addEventListener('message', event => { void handleRuntimeMessage(event); });
+window.addEventListener('unhandledrejection', event => { void log('error', 'shell', String(event.reason), event.reason); });
+window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
+setInterval(() => { void fireDueSchedules(); }, 30_000);
+
+async function refreshApps(select?: string): Promise<void> {
+  apps = (await db.apps.list()).sort((a,b) => b.updatedAt - a.updatedAt);
+  if (select) await selectApp(select); else {
+    if (activeSlug && !apps.some(a => a.slug === activeSlug)) activeSlug = undefined;
+    ui.setApps(apps as AppSummary[], activeSlug);
+    await refreshMessages();
+  }
+}
+
+async function selectApp(slug: string): Promise<void> {
+  if (!apps.some(a => a.slug === slug)) return;
+  activeSlug = slug;
+  const url = new URL(location.href); url.searchParams.set('app', slug); history.replaceState(null, '', url);
+  disposeFrame();
+  frame = document.createElement('iframe');
+  frame.allow = 'camera; microphone; geolocation; clipboard-read; clipboard-write';
+  frame.referrerPolicy = 'strict-origin';
+  frame.src = currentOrigin();
+  frame.addEventListener('load', () => ui.setBusy(false, 'App connected'));
+  executor = new PostMessageExecutor(frame, slug, currentOrigin());
+  ui.setApps(apps as AppSummary[], slug); ui.mountFrame(frame);
+  await refreshMessages();
+}
+
+function disposeFrame(): void { executor?.dispose(); executor = undefined; frame?.remove(); frame = undefined; }
+function currentApp(): AppRecord | undefined { return apps.find(a => a.slug === activeSlug); }
+function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, __ROOT_DOMAIN__, location.protocol === 'http:' ? 'http:' : 'https:'); }
+
+async function refreshMessages(): Promise<void> {
+  if (!activeSlug) return ui.setMessages([]);
+  const entries = (await db.history.forApp(activeSlug)).filter(e => e.kind === 'chat' && (e.role === 'user' || e.role === 'assistant'));
+  ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map((e,i) => ({ id: String(e.id ?? i), role: e.role as ChatLine['role'], content: e.content, timestamp: e.timestamp })));
+}
+
+function configureRegistry(): void {
+  if (settings.provider === 'compatible' && settings.endpoint) registry.register(openAiCompatible('compatible', settings.endpoint));
+  if (settings.provider === 'google') {
+    const endpoint = settings.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
+    registry.register(createHttpAdapter({ id: 'google', endpoint, format: 'google' }));
+  }
+  if (settings.endpoint && !['compatible','google'].includes(settings.provider)) registry.register(createHttpAdapter({ id: settings.provider, endpoint: settings.endpoint, format: settings.provider === 'anthropic' ? 'anthropic' : 'openai' }));
+}
+
+function modelConfig(): ModelConfig { return { id: 'active', provider: settings.provider, model: settings.model, maxContextTokens: settings.maxContextTokens, maxOutputTokens: settings.maxOutputTokens, credentialId: 'active' }; }
+function credential(): Credential | undefined { return settings.apiKey ? { id: 'active', type: 'api-key', value: settings.apiKey } : undefined; }
+
+async function runAgent(trigger: string): Promise<void> {
+  const app = currentApp();
+  if (!app || !executor || running) return;
+  running = true; ui.setBusy(true); await refreshMessages();
+  try {
+    configureRegistry();
+    const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await tools.search("");' }).catch(() => []);
+    const runner = new AgentRunner(db, registry, executor);
+    const result = await runner.run({ appSlug: app.slug, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary });
+    if (result.status === 'turn-limit') await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    await log('error', `agent:${app.slug}`, message, error, app.slug);
+    await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: `Agent stopped: ${message}` });
+  } finally { running = false; ui.setBusy(false); await refreshMessages(); }
+}
+
+async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void> {
+  if (!activeSlug || !frame?.contentWindow) return;
+  const message = validateMessageEvent(event, { expectedOrigin: currentOrigin(), expectedAppSlug: activeSlug, expectedSource: frame.contentWindow, direction: 'to-shell' });
+  if (!message || !isAppToShellMessage(message)) return;
+  switch (message.type) {
+    case 'log': await db.logs.add({ timestamp: message.record.timestamp, source: message.record.source, level: message.record.level, message: message.record.message, details: message.record.details, appSlug: activeSlug }); break;
+    case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeSlug, message.query, message.limit) }); break;
+    case 'logs.request': { const all = await db.logs.forApp(activeSlug); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
+    case 'ai.request': await handleAiRequest(message); break;
+    case 'cron.register': {
+      const id = `${activeSlug}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
+      await db.schedules.put({ id, appSlug: activeSlug, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
+      break;
+    }
+    case 'wake': if (!running) void runAgent(message.reason || 'The app requested an agent wake-up.'); break;
+    case 'status': ui.setBusy(message.status === 'busy' || message.status === 'saving', message.detail || message.status); break;
+  }
+}
+
+async function fireDueSchedules(): Promise<void> {
+  const now = Date.now();
+  for (const schedule of await db.schedules.list()) {
+    if (!schedule.nextRun || schedule.nextRun > now || schedule.appSlug !== activeSlug || !frame?.contentWindow) continue;
+    const callbackId = schedule.id.slice(schedule.appSlug.length + 1);
+    frame.contentWindow.postMessage(createBridgeMessage(schedule.appSlug, createRequestId(), { type: 'cron.fire', callbackId }), currentOrigin());
+    await db.schedules.put({ ...schedule, lastFired: now, nextRun: nextCronRun(schedule.expression, now) });
+  }
+}
+
+async function handleAiRequest(message: BridgeMessage & { type: 'ai.request'; prompt: string }): Promise<void> {
+  try { configureRegistry(); const result = await registry.generate({ model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: settings.maxOutputTokens }, credential()); respond(message, { type: 'ai.response', result: result.text }); }
+  catch (error) { respond(message, { type: 'ai.response', error: serializeError(error) }); }
+}
+
+function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { frame?.contentWindow?.postMessage(createBridgeMessage(message.appSlug, message.requestId, payload), currentOrigin()); }
+function toProtocolLog(item: LogEntry) { return { timestamp: item.timestamp, level: item.level, source: item.source, message: item.message, details: item.details }; }
+async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appSlug?: string) { await db.logs.add({ timestamp: Date.now(), level, source, message, details, appSlug }); }
+
+async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>[2], timeoutMs = 10_000): Promise<T> {
+  if (!frame?.contentWindow || !activeSlug) throw new Error('App is not connected');
+  const requestId = createRequestId();
+  return new Promise<T>((resolve, reject) => {
+    const timer = setTimeout(() => { window.removeEventListener('message', listener); reject(new Error('Runtime request timed out')); }, timeoutMs);
+    const listener = (event: MessageEvent) => { const msg = validateMessageEvent(event, { expectedOrigin: currentOrigin(), expectedAppSlug: activeSlug!, expectedSource: frame!.contentWindow, direction: 'to-shell' }); if (!msg || msg.requestId !== requestId || msg.type !== 'result') return; clearTimeout(timer); window.removeEventListener('message', listener); resolve(msg.result as T); };
+    window.addEventListener('message', listener); frame!.contentWindow!.postMessage(createBridgeMessage(activeSlug!, requestId, payload), currentOrigin());
+  });
+}
+
+function downloadJson(name: string, value: unknown): void { const url = URL.createObjectURL(new Blob([JSON.stringify(value,null,2)], { type: 'application/json' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
+
+void refreshApps(new URL(location.href).searchParams.get('app') ?? undefined).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));

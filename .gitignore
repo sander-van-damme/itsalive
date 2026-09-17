@@ -1,0 +1,6 @@
+node_modules/
+dist-root/
+dist-app/
+coverage/
+.env
+*.local
