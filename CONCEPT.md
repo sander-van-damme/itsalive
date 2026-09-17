@@ -13,10 +13,10 @@ The platform has two layers, shipped as **two separate static site builds from o
 Example:
 
 ```text
-https://<root-domain>
-https://violin.<root-domain>
-https://renovation.<root-domain>
-https://math.<root-domain>
+https://itsalive.org
+https://violin.itsalive.org
+https://renovation.itsalive.org
+https://math.itsalive.org
 ```
 
 The user always enters through the root shell. Apps run inside cross-origin iframes.
@@ -89,10 +89,10 @@ Use one repository, but produce **two separate static sites**:
 
 ```text
 root site build
-    → deployed to <root-domain>
+    → deployed to itsalive.org
 
 app site build
-    → deployed to *.<root-domain>
+    → deployed to *.itsalive.org
 ```
 
 The root build contains the shell.
@@ -101,13 +101,7 @@ The app build contains the app bootstrap/runtime that is served identically for 
 
 There is **no client-side hostname detection to choose between shell mode and app mode**. The two builds have different entry points and are deployed to different hostname bindings.
 
-The real root domain is injected at build time through an environment variable, for example:
-
-```text
-ROOT_DOMAIN=example.com
-```
-
-Both builds may use that value where they need to construct or validate cross-origin URLs.
+The root domain is hardcoded as `itsalive.org` in the shared domain module. Both builds use that constant when they construct or validate cross-origin URLs; no environment variable is required.
 
 The repository may share source modules between the two builds, but their generated static sites are distinct artifacts.
 
@@ -121,10 +115,10 @@ Deploy the two static builds separately:
 
 ```text
 root static site
-    <root-domain>
+    itsalive.org
 
 app static site
-    *.<root-domain>
+    *.itsalive.org
 ```
 
 The intention is that normal page delivery is handled as static assets without request-time application Worker invocations.
@@ -138,9 +132,9 @@ The first hostname label is the app slug.
 Example:
 
 ```text
-violin.<root-domain>      → violin
-house.<root-domain>       → house
-math.<root-domain>        → math
+violin.itsalive.org      → violin
+house.itsalive.org       → house
+math.itsalive.org        → math
 ```
 
 Do not maintain an application-level reserved-slug list.
@@ -206,7 +200,7 @@ The shell does **not** own the app DOM or app data.
 Every app runs at:
 
 ```text
-https://<app-slug>.<root-domain>
+https://<app-slug>.itsalive.org
 ```
 
 That gives the app its own origin automatically.
@@ -235,14 +229,14 @@ The browser performs the isolation.
 Conceptually:
 
 ```text
-violin.<root-domain>
+violin.itsalive.org
 ├── its own DOM
 ├── its own IndexedDB
 ├── its own localStorage
 ├── its own Cache Storage
 └── its own OPFS
 
-math.<root-domain>
+math.itsalive.org
 ├── its own DOM
 ├── its own IndexedDB
 ├── its own localStorage
@@ -259,11 +253,11 @@ The root shell still uses the app slug to associate shell-owned metadata such as
 The supported execution environment is:
 
 ```text
-<root-domain>
+itsalive.org
     ↓
 iframe
     ↓
-<app>.<root-domain>
+<app>.itsalive.org
 ```
 
 The app subdomain should not be treated as a standalone product UI.
@@ -271,19 +265,19 @@ The app subdomain should not be treated as a standalone product UI.
 If a user navigates directly to:
 
 ```text
-https://violin.<root-domain>
+https://violin.itsalive.org
 ```
 
 the bootstrap may redirect to:
 
 ```text
-https://<root-domain>/?app=violin
+https://itsalive.org/?app=violin
 ```
 
 The shell then opens:
 
 ```text
-https://violin.<root-domain>
+https://violin.itsalive.org
 ```
 
 inside its iframe.
@@ -418,8 +412,8 @@ root-origin IndexedDB
 A JavaScript-readable cookie is also possible for compact credentials, but if cookies are used they should be **host-only**:
 
 ```text
-Set cookie on <root-domain>
-Do NOT set Domain=<root-domain>
+Set cookie on itsalive.org
+Do NOT set Domain=itsalive.org
 ```
 
 Omitting the `Domain` attribute prevents the credential cookie from being shared with generated app subdomains.
@@ -427,7 +421,7 @@ Omitting the `Domain` attribute prevents the credential cookie from being shared
 Do not use a parent-domain cookie intentionally shared with:
 
 ```text
-*. <root-domain>
+*. itsalive.org
 ```
 
 because every generated app would then receive the same credentials.
@@ -1702,7 +1696,7 @@ return await inspectDom({ search: "quote" });
 The root shell posts this JavaScript to:
 
 ```text
-house.<root-domain>
+house.itsalive.org
 ```
 
 The app runtime executes it and returns:
@@ -1754,7 +1748,7 @@ ROOT DOMAIN
 │ ┌──────────────────────────────────────────┐ │
 │ │ iframe                                   │ │
 │ │                                          │ │
-│ │ violin.<root-domain>                     │ │
+│ │ violin.itsalive.org                      │ │
 │ │                                          │ │
 │ └──────────────────────────────────────────┘ │
 │                                              │

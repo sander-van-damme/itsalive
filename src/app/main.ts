@@ -1,7 +1,7 @@
-import { rootOrigin } from "../shared";
+import { ROOT_DOMAIN, rootOrigin } from "../shared";
 import { redirectStandaloneToShell, startAppRuntime } from "./runtime";
 
-const origin = rootOrigin(__ROOT_DOMAIN__, location.protocol === "http:" ? "http:" : "https:");
+const origin = rootOrigin(ROOT_DOMAIN, location.protocol === "http:" ? "http:" : "https:");
 
 if (!redirectStandaloneToShell(origin)) {
   startAppRuntime({ rootOrigin: origin }).catch(error => {

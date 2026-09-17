@@ -1,4 +1,4 @@
-# Living Apps Runtime
+# itsalive.org
 
 A browser-native platform for applications that keep building themselves while they are used. The root-domain shell owns the AI agent, history, configuration, and credentials. Every app runs as a persistent HTML document on its own wildcard subdomain and browser origin.
 
@@ -8,8 +8,8 @@ This repository produces two independent static builds:
 
 | Build | Output | Deployment binding | Responsibility |
 | --- | --- | --- | --- |
-| Root shell | `dist-root/` | `example.com` | Apps, Chat, Settings, histories, provider calls, agent loop |
-| App runtime | `dist-app/` | `*.example.com` | Persistent document, execution bridge, tools, database, screenshots |
+| Root shell | `dist-root/` | `itsalive.org` | Apps, Chat, Settings, histories, provider calls, agent loop |
+| App runtime | `dist-app/` | `*.itsalive.org` | Persistent document, execution bridge, tools, database, screenshots |
 
 The only connection between the two origins is a versioned `postMessage` protocol. Every message is checked for its exact origin, source window, app slug, direction, request ID, and payload shape. Provider credentials remain in root-origin storage and are never sent into app frames.
 
@@ -37,15 +37,7 @@ npm install
 npm run dev
 ```
 
-The shell defaults to `http://localhost:4173`. Real wildcard-origin testing requires a local DNS domain that resolves wildcard labels (for example `lvh.me`) and serving the two builds on the corresponding root and wildcard hosts. `npm run dev:app` starts the app build separately on port 4174 for isolated runtime development.
-
-Set the production root domain at build time:
-
-```bash
-ROOT_DOMAIN=example.com npm run build
-```
-
-The value can be a bare host or a host with a port for development. Both static builds receive the same value; neither build detects at runtime whether it should act as the shell or app.
+The root domain is fixed to `itsalive.org`. Local wildcard-origin testing therefore requires local DNS overrides for `itsalive.org` and its app subdomains. `npm run dev` serves the shell on port 4173, while `npm run dev:app` serves the app build separately on port 4174 for isolated runtime development.
 
 ## Commands
 

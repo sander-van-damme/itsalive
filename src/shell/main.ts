@@ -1,7 +1,7 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
 import { AgentRunner, PostMessageExecutor, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
-import { appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, normalizeAppSlug, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
+import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, normalizeAppSlug, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -67,7 +67,7 @@ async function selectApp(slug: string): Promise<void> {
 
 function disposeFrame(): void { executor?.dispose(); executor = undefined; frame?.remove(); frame = undefined; }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.slug === activeSlug); }
-function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, __ROOT_DOMAIN__, location.protocol === 'http:' ? 'http:' : 'https:'); }
+function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, ROOT_DOMAIN, location.protocol === 'http:' ? 'http:' : 'https:'); }
 
 async function refreshMessages(): Promise<void> {
   if (!activeSlug) return ui.setMessages([]);

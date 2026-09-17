@@ -5,6 +5,9 @@ export interface ParsedRootDomain {
   origin: string;
 }
 
+/** The canonical root domain used by the shell and every app origin. */
+export const ROOT_DOMAIN = "itsalive.org";
+
 const SLUG_PATTERN = /^(?!-)[a-z0-9-]{1,63}(?<!-)$/;
 
 /** Normalizes and validates a value intended for a single DNS hostname label. */
