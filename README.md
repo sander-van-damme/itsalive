@@ -18,7 +18,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Per-app origin isolation with no storage namespaces or shared app database.
 - IndexedDB shell repositories for app metadata, full history, model settings, schedules, and logs.
 - Persistent app HTML with debounced autosave, live form-control normalization, restore, and script re-execution.
-- JavaScript agent loop with `done()`, bounded observations, turn/time limits, errors, and repair turns.
+- JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, and repair turns.
 - Context budgeting that always retains the immutable system prompt, app prompt, current trigger, and complete compact tool inventory.
 - Provider registry for OpenAI, Anthropic, Google, DeepSeek, OpenRouter, and OpenAI-compatible endpoints.
 - Compact DOM inspection with temporary references, literal history search, in-frame screenshots, and app log retrieval.
@@ -71,31 +71,33 @@ Configure the first Worker route/custom domain for the exact root host and the s
 
 ## Runtime API
 
-Agent JavaScript executes inside the active app and can use ordinary browser APIs plus:
+Agent JavaScript executes inside the active app and can use ordinary browser APIs plus the single, versioned `itsalive` runtime namespace (`itsalive.apiVersion === 1`):
 
 ```js
-inspectDom({ ref, search, detail })
-ref("@12")
-screenshot({ ref })
-getLogs({ level, limit })
-history.search({ query, limit })
-tools.search(query)
-tools.get(name)
-tools.create({ name, description, parameters, code })
-tools.call(name, args)
-tools.delete(name)
-cron(id, expression, callback)
-agent.wake(reason)
-app.db.get(key)
-app.db.set(key, value)
-app.db.delete(key)
-app.db.query(options)
-app.ai.ask(prompt, options)
-app.reload()
-done(message)
+itsalive.dom.inspect({ ref, search, detail })
+itsalive.dom.ref("@12")
+itsalive.dom.screenshot({ ref })
+itsalive.logs.get({ level, limit })
+itsalive.history.search({ query, limit })
+itsalive.tools.search(query)
+itsalive.tools.get(name)
+itsalive.tools.create({ name, description, parameters, code })
+itsalive.tools.call(name, args)
+itsalive.tools.delete(name)
+itsalive.cron(id, expression, callback)
+itsalive.agent.wake(reason)
+itsalive.db.get(key)
+itsalive.db.set(key, value)
+itsalive.db.delete(key)
+itsalive.db.query(options)
+itsalive.ai.ask(prompt, options)
+itsalive.reload()
+itsalive.done(message)
 ```
 
-Generated apps should keep natural, reasonably sized state in semantic HTML and use `app.db` for large, binary, or query-heavy data. Reusable interactive UI should use idempotent native Custom Elements because documents and scripts may be restored at any time.
+The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Custom tools receive the same API object as `env.itsalive` alongside `document`, `window`, and `fetch`.
+
+Generated apps should keep natural, reasonably sized state in semantic HTML and use `itsalive.db` for large, binary, or query-heavy data. Reusable interactive UI should use idempotent native Custom Elements because documents and scripts may be restored at any time.
 
 ## Security notes
 

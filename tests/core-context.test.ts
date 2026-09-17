@@ -5,6 +5,15 @@ import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 const model = { id: "test", provider: "test", model: "test", maxContextTokens: 4_000, maxOutputTokens: 200 };
 
 describe("shell context builder", () => {
+  it("teaches only the namespaced runtime API", () => {
+    for (const current of ["itsalive.done", "itsalive.db", "itsalive.tools", "itsalive.history", "itsalive.dom"]) {
+      expect(SYSTEM_PROMPT).toContain(current);
+    }
+    for (const obsolete of [/return\s+done\(/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
+      expect(SYSTEM_PROMPT).not.toMatch(obsolete);
+    }
+  });
+
   it("always includes immutable and mandatory context plus every tool", () => {
     const result = buildModelContext({ model, appPrompt: "A violin coach", trigger: "Help me", tools: [{ name: "tally", description: "Add totals" }, { name: "find", description: "Find notes" }], history: [] });
     expect(result.system).toBe(SYSTEM_PROMPT);

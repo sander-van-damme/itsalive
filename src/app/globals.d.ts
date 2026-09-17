@@ -3,24 +3,30 @@ import type { inspectDom, ref } from "./inspect";
 import type { captureScreenshot } from "./screenshot";
 import type { createToolsApi } from "./tools";
 
-declare global {
-  interface Window {
-    app: {
-      db: typeof appDatabaseApi;
-      ai: { ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T> };
-      meta: { update(metadata: { name: string }): Promise<{ name: string } | undefined> };
-      reload(): void;
-    };
-    agent: { wake(prompt: string): Promise<unknown> };
-    history: { search(input: { query: string; limit?: number }): Promise<unknown> };
-    tools: ReturnType<typeof createToolsApi>;
-    cron(id: string, schedule: string, callback: () => unknown): { id: string; schedule: string };
-    inspectDom: typeof inspectDom;
+export interface ItsaliveRuntimeApi {
+  readonly apiVersion: 1;
+  readonly db: typeof appDatabaseApi;
+  readonly ai: Readonly<{ ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T> }>;
+  readonly history: Readonly<{ search(input: { query: string; limit?: number }): Promise<unknown> }>;
+  readonly tools: Readonly<ReturnType<typeof createToolsApi>>;
+  readonly agent: Readonly<{ wake(prompt: string): Promise<unknown> }>;
+  readonly dom: Readonly<{
+    inspect: typeof inspectDom;
     ref: typeof ref;
     screenshot: typeof captureScreenshot;
-    getLogs(input?: { level?: "log" | "info" | "warn" | "error"; limit?: number }): unknown[];
-    done(message?: string): unknown;
-  }
+  }>;
+  readonly logs: Readonly<{
+    get(input?: { level?: "log" | "info" | "warn" | "error"; limit?: number }): unknown[];
+  }>;
+  readonly cron: (id: string, schedule: string, callback: () => unknown) => { id: string; schedule: string };
+  readonly reload: () => void;
+  readonly done: (message?: string) => unknown;
 }
 
-export {};
+declare global {
+  const itsalive: ItsaliveRuntimeApi;
+
+  interface Window {
+    readonly itsalive: ItsaliveRuntimeApi;
+  }
+}

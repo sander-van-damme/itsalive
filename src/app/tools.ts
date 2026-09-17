@@ -28,7 +28,7 @@ export function createToolsApi(log: (level: LogEntry["level"], args: unknown[], 
       if (!record) throw new Error(`Unknown tool: ${name}`);
       try {
         const tool = await compile(record);
-        return await tool(args, { app: window.app, document, window, fetch });
+        return await tool(args, { itsalive: window.itsalive, document, window, fetch });
       } catch (error) {
         log("error", [`Tool ${name} failed`, error], "tool", error instanceof Error ? error.stack : undefined);
         throw error;
