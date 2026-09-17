@@ -1,4 +1,5 @@
 export * from "./agent-runner";
+export * from "./app-metadata";
 export * from "./bridge-executor";
 export * from "./runtime-session";
 export * from "./context";

@@ -5,7 +5,12 @@ import type { createToolsApi } from "./tools";
 
 declare global {
   interface Window {
-    app: { db: typeof appDatabaseApi; ai: { ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T> }; reload(): void };
+    app: {
+      db: typeof appDatabaseApi;
+      ai: { ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T> };
+      meta: { update(metadata: { name: string }): Promise<{ name: string } | undefined> };
+      reload(): void;
+    };
     agent: { wake(prompt: string): Promise<unknown> };
     history: { search(input: { query: string; limit?: number }): Promise<unknown> };
     tools: ReturnType<typeof createToolsApi>;

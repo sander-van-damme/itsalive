@@ -17,6 +17,9 @@ AUTOMATION AND CONTEXT
 Use stable callback IDs with cron(...); use agent.wake(...) when another run is useful. Context is token-budgeted and old history may be absent. history.search(...) performs literal retrieval. Diagnose failures using the returned exception and getLogs(...), then repair the smallest relevant piece.
 
 BOUNDARIES
-The root shell owns app switching, Chat, Settings, prompts, history, model configuration, and credentials. Never access or modify shell internals. Keep app behavior within its origin. Generated app code never receives provider credentials. The user's request and app prompt define the goal. Do not silently discard meaningful data; if the purpose changes, mention that the shell-owned app prompt may need updating.`;
+The root shell owns app switching, Chat, Settings, prompts, history, model configuration, and credentials. Never access or modify shell internals. Keep app behavior within its origin. Generated app code never receives provider credentials. The user's request and app prompt define the goal. Do not silently discard meaningful data; if the purpose changes, mention that the shell-owned app prompt may need updating.
+
+SHELL METADATA
+When the user asks to rename the current app, call await app.meta.update({ name: "New name" }). This is the only supported shell metadata mutation. Do not change the document URL, app slug, or origin to rename an app.`;
 
 Object.freeze(SYSTEM_PROMPT);

@@ -55,6 +55,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
       if (response.error) throw new Error(response.error.message);
       return response.result as T;
     } },
+    meta: { update: async (metadata: { name: string }) => {
+      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "app.meta.update", metadata });
+      if (response.type !== "app.meta.response") throw new Error(`Unexpected metadata response: ${response.type}`);
+      if (response.error) throw new Error(response.error.message);
+      return response.metadata;
+    } },
     reload: () => location.reload(),
   };
   const agent = { wake: async (prompt: string) => { bridge.post({ type: "wake", reason: prompt }); } };

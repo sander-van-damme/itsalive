@@ -1,16 +1,16 @@
 import { createIcons, icons } from 'lucide';
-import { ROOT_DOMAIN } from '../shared';
 
-export type ShellTab = 'apps' | 'chat' | 'settings';
 export interface AppSummary { slug: string; name: string; prompt: string; createdAt: number; updatedAt: number }
 export interface ChatLine { id: string; role: 'user' | 'assistant' | 'system'; content: string; timestamp: number }
 export interface SettingsValue { provider: string; model: string; endpoint: string; apiKey: string; maxContextTokens: number; maxOutputTokens: number }
+export type RuntimeViewState = 'loading' | 'ready' | 'working' | 'problem';
+type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
+type MobileView = 'app' | 'chat';
 
 export interface ShellActions {
   createApp(input: { name: string; slug: string; prompt: string }): Promise<void>;
   selectApp(slug: string): Promise<void>;
   deleteApp(slug: string): Promise<void>;
-  updatePrompt(prompt: string): Promise<void>;
   sendMessage(content: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
   designApp(goal: string): Promise<{ name: string; slug: string; prompt: string }>;
@@ -18,72 +18,119 @@ export interface ShellActions {
   reloadApp(): void;
 }
 
-const esc = (value: string) => value.replace(/[&<>'"]/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', "'":'&#39;', '"':'&quot;' })[c] ?? c);
+const PROVIDERS = [
+  ['openai', 'OpenAI'], ['anthropic', 'Anthropic'], ['google', 'Google Gemini'],
+  ['deepseek', 'DeepSeek'], ['openrouter', 'OpenRouter'], ['compatible', 'OpenAI-compatible / Custom'],
+] as const;
+
+const esc = (value: string) => value.replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
+const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase() || 'IA';
+export function friendlyError(error: unknown, appName = 'This app'): string {
+  const message = error instanceof Error ? error.message : String(error);
+  if (/iframe|not connected|not available|not ready/i.test(message)) return `${appName} isn't ready yet. Try reloading it.`;
+  if (/timed? out|timeout/i.test(message)) return `${appName} took too long to respond. Try again.`;
+  return `Something went wrong while working on ${appName}. Try again.`;
+}
 
 export class ShellUI {
-  private tab: ShellTab = 'apps';
+  private view: RailView = 'launcher';
+  private mobileView: MobileView = 'chat';
   private apps: AppSummary[] = [];
   private active?: AppSummary;
   private messages: ChatLine[] = [];
   private settings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
   private busy = false;
-  private status = 'Ready';
-  private statusTone: 'idle' | 'working' | 'connected' | 'error' = 'idle';
+  private runtimeState: RuntimeViewState = 'ready';
+  private runtimeDetail = '';
   private collapsed = localStorage.getItem('itsalive.sidebar') === 'collapsed';
   private theme = localStorage.getItem('itsalive.theme') ?? 'light';
+  private switcherOpen = false;
+  private actionsOpen = false;
+  private chatNearBottom = true;
 
-  constructor(private readonly mount: HTMLElement, private readonly actions: ShellActions) { this.renderShell(); }
+  constructor(private readonly mount: HTMLElement, private readonly actions: ShellActions) {
+    this.renderShell();
+    document.addEventListener('keydown', this.handleDocumentKeydown);
+  }
 
   setApps(apps: AppSummary[], activeSlug?: string): void {
     const previousSlug = this.active?.slug;
     this.apps = apps;
-    this.active = apps.find(a => a.slug === activeSlug);
-    if (this.active && this.active.slug !== previousSlug) this.tab = 'chat';
-    if (!this.active && this.tab === 'chat') this.tab = 'apps';
-    this.renderStage();
+    this.active = apps.find(app => app.slug === activeSlug);
+    if (this.active) this.view = 'workspace';
+    else if (this.view === 'workspace') this.view = 'launcher';
+    if (previousSlug !== this.active?.slug) {
+      this.switcherOpen = false;
+      this.actionsOpen = false;
+      this.mobileView = 'chat';
+    }
+    this.renderStagePlaceholder();
     this.renderRail();
   }
-  setMessages(messages: ChatLine[]): void { this.messages = messages; if (this.tab === 'chat') this.renderPanel(); }
+
+  setMessages(messages: ChatLine[]): void {
+    this.rememberChatPosition();
+    this.messages = messages;
+    if (this.view === 'workspace') this.renderPanel();
+  }
+
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
-  setBusy(busy: boolean, status = busy ? 'Agent is working' : 'Ready', tone: 'idle' | 'working' | 'connected' | 'error' = busy ? 'working' : 'idle'): void { this.busy = busy; this.status = status; this.statusTone = tone; this.renderStatus(); if (this.tab === 'chat') this.renderPanel(); }
-  setConnectionStatus(status: string, tone: 'idle' | 'working' | 'connected' | 'error'): void { this.status = status; this.statusTone = tone; this.renderStatus(); }
-  showError(message: string): void { this.messages.push({ id: crypto.randomUUID(), role: 'system', content: `Error: ${message}`, timestamp: Date.now() }); if (this.active) this.tab = 'chat'; this.renderRail(); }
+
+  setBusy(busy: boolean, _status?: string, _tone?: 'idle' | 'working' | 'connected' | 'error'): void {
+    void _status; void _tone;
+    this.busy = busy;
+    if (busy) this.runtimeState = 'working';
+    else if (this.runtimeState === 'working') this.runtimeState = 'ready';
+    this.renderRail();
+  }
+
+  setConnectionStatus(status: string, tone: 'idle' | 'working' | 'connected' | 'error'): void {
+    this.runtimeDetail = status;
+    this.runtimeState = tone === 'error' ? 'problem' : tone === 'working' ? 'loading' : 'ready';
+    this.renderStageState();
+    this.renderRail();
+  }
+
+  showError(error: unknown): void {
+    const technical = error instanceof Error ? error.message : String(error);
+    console.error('[itsalive] UI operation failed', error);
+    this.messages.push({ id: crypto.randomUUID(), role: 'system', content: friendlyError(technical, this.active?.name), timestamp: Date.now() });
+    if (this.active) this.view = 'workspace';
+    this.renderRail();
+  }
 
   private renderShell(): void {
     document.documentElement.dataset.theme = this.theme;
-    this.mount.innerHTML = `<main class="shell ${this.collapsed ? 'collapsed' : ''}">
-      <section class="stage" aria-label="Active application">
-        <div class="status-pill" hidden><span class="status-dot"></span><span data-status></span></div>
-        <div class="app-frame-wrap"></div>
-      </section>
-      <aside class="rail"></aside>
-    </main>`;
-    this.renderStage();
+    this.mount.innerHTML = `
+      <main class="shell ${this.collapsed ? 'collapsed' : ''}" data-mobile-view="${this.mobileView}">
+        <section class="stage" aria-label="Active application">
+          <div class="app-frame-wrap"></div>
+          <div class="stage-state" data-stage-state hidden></div>
+          <button class="mobile-view-button" data-mobile-chat type="button">
+            <i data-lucide="message-circle" aria-hidden="true"></i><span>Chat</span>
+          </button>
+        </section>
+        <aside class="rail" aria-label="AI workspace"></aside>
+      </main>`;
+    this.renderStagePlaceholder();
     this.renderRail();
   }
 
-  private renderRail(): void {
-    document.documentElement.dataset.theme = this.theme;
-    this.mount.querySelector('.shell')?.classList.toggle('collapsed', this.collapsed);
-    const rail = this.mount.querySelector<HTMLElement>('.rail');
-    if (!rail) return;
-    rail.innerHTML = `<header class="brand"><span class="brand-mark" aria-hidden="true">IA</span><strong>itsalive</strong><div class="header-actions"><button class="header-button" data-theme title="Toggle day/night mode"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" size="18"></i></button><button class="header-button ${this.tab === 'settings' ? 'active':''}" data-settings title="Settings"><i data-lucide="settings" size="18"></i></button><button class="header-button" data-collapse title="${this.collapsed ? 'Expand' : 'Collapse'} sidebar"><i data-lucide="panel-right-${this.collapsed ? 'open' : 'close'}" size="18"></i></button></div></header>
-      <nav class="tabs" aria-label="Workspace">${this.tabButton('apps','layout-grid','Apps')}${this.active ? this.tabButton('chat','message-circle','Chat') : ''}</nav>
-      <section class="panel" data-panel></section>`;
-    rail.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.onclick = () => { this.tab = button.dataset.tab as ShellTab; this.renderRail(); });
-    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.tab = 'settings'; this.collapsed = false; localStorage.setItem('itsalive.sidebar', 'expanded'); this.renderRail(); };
-    rail.querySelector<HTMLButtonElement>('[data-theme]')!.onclick = () => { this.theme = this.theme === 'light' ? 'dark' : 'light'; localStorage.setItem('itsalive.theme', this.theme); this.renderRail(); };
-    rail.querySelector<HTMLButtonElement>('[data-collapse]')!.onclick = () => { this.collapsed = !this.collapsed; localStorage.setItem('itsalive.sidebar', this.collapsed ? 'collapsed' : 'expanded'); this.renderRail(); };
-    this.renderPanel();
-    createIcons({ icons });
+  private renderStagePlaceholder(): void {
+    const wrap = this.mount.querySelector<HTMLElement>('.app-frame-wrap');
+    if (wrap && !wrap.querySelector('iframe')) {
+      wrap.innerHTML = `<div class="empty-stage"><span class="empty-logo">IA</span><strong>${this.active ? 'Loading…' : 'Your next idea starts here'}</strong><p>${this.active ? esc(this.active.name) : 'Create or choose an app to begin.'}</p></div>`;
+    }
+    this.renderStageState();
   }
 
-  private renderStage(): void {
-    const pill = this.mount.querySelector<HTMLElement>('.status-pill');
-    if (pill) pill.hidden = !this.active;
-    this.renderStatus();
-    const wrap = this.mount.querySelector<HTMLElement>('.app-frame-wrap');
-    if (wrap && !wrap.querySelector('iframe')) wrap.innerHTML = `<div class="empty-stage"><div><span class="empty-logo">IA</span><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your apps will appear here.'}</p></div></div>`;
+  private renderStageState(): void {
+    const node = this.mount.querySelector<HTMLElement>('[data-stage-state]');
+    if (!node) return;
+    const isProblem = Boolean(this.active) && this.runtimeState === 'problem';
+    node.hidden = !isProblem;
+    if (isProblem) node.innerHTML = `<strong>${esc(this.active!.name)} couldn't load.</strong><p>Try reloading the app.</p><button class="action" data-stage-retry type="button">Try again</button>`;
+    node.querySelector<HTMLButtonElement>('[data-stage-retry]')?.addEventListener('click', () => this.actions.reloadApp());
   }
 
   mountFrame(frame: HTMLIFrameElement | undefined): void {
@@ -95,65 +142,210 @@ export class ShellUI {
     frame.title = `${this.active?.name ?? 'itsalive app'} application`;
   }
 
-  private tabButton(id: ShellTab, icon: string, label: string): string {
-    return `<button class="tab ${this.tab === id ? 'active':''}" data-tab="${id}" title="${label}"><i data-lucide="${icon}" size="14"></i><span>${label}</span></button>`;
+  private renderRail(): void {
+    document.documentElement.dataset.theme = this.theme;
+    const shell = this.mount.querySelector<HTMLElement>('.shell');
+    shell?.classList.toggle('collapsed', this.collapsed);
+    shell?.setAttribute('data-mobile-view', this.mobileView);
+    const rail = this.mount.querySelector<HTMLElement>('.rail');
+    if (!rail) return;
+    rail.innerHTML = `${this.renderWorkspaceHeader()}<section class="panel" data-panel></section>${this.renderGlobalActions()}`;
+    this.bindHeader(rail);
+    this.renderPanel();
+    createIcons({ icons });
   }
-  private renderStatus(): void { const node = this.mount.querySelector('[data-status]'); if (node) node.textContent = this.status; const pill = this.mount.querySelector<HTMLElement>('.status-pill'); if (pill) pill.dataset.tone = this.statusTone; }
+
+  private renderWorkspaceHeader(): string {
+    const appControl = this.active ? `
+      <div class="menu-anchor workspace-app">
+        <button class="app-trigger" data-switcher type="button" aria-haspopup="menu" aria-expanded="${this.switcherOpen}">
+          <span class="app-icon">${esc(initials(this.active.name))}</span>
+          <span class="app-name">${esc(this.active.name)}</span><i data-lucide="chevron-down" aria-hidden="true"></i>
+        </button>
+        ${this.switcherOpen ? this.renderAppSwitcher() : ''}
+      </div>
+      <div class="menu-anchor">
+        <button class="icon-button quiet" data-app-menu type="button" aria-label="App actions" aria-haspopup="menu" aria-expanded="${this.actionsOpen}"><i data-lucide="ellipsis" aria-hidden="true"></i></button>
+        ${this.actionsOpen ? this.renderAppMenu() : ''}
+      </div>` : `<button class="wordmark" data-launcher type="button" aria-label="Open your apps"><span class="brand-mark">IA</span><strong>itsalive</strong></button>`;
+    return `<header class="workspace-header">
+      <button class="icon-button collapse-button" data-collapse type="button" aria-label="${this.collapsed ? 'Expand' : 'Collapse'} sidebar"><i data-lucide="panel-right-${this.collapsed ? 'open' : 'close'}" aria-hidden="true"></i></button>
+      <div class="expanded-header">${appControl}</div>
+    </header>`;
+  }
+
+  private renderAppSwitcher(): string {
+    return `<div class="popover app-switcher" role="menu" aria-label="Switch app">
+      <div class="menu-list">${this.apps.map(app => `<button type="button" role="menuitem" class="menu-item" data-select-app="${esc(app.slug)}" ${app.slug === this.active?.slug ? 'aria-current="true"' : ''}><span class="app-icon small">${esc(initials(app.name))}</span><span>${esc(app.name)}</span>${app.slug === this.active?.slug ? '<i data-lucide="check" aria-hidden="true"></i>' : ''}</button>`).join('')}</div>
+      <button type="button" role="menuitem" class="menu-item new-app" data-new><i data-lucide="plus" aria-hidden="true"></i><span>New app</span></button>
+    </div>`;
+  }
+
+  private renderAppMenu(): string {
+    return `<div class="popover app-menu" role="menu" aria-label="App actions">
+      <button class="menu-item" role="menuitem" type="button" data-reload><i data-lucide="refresh-cw" aria-hidden="true"></i><span>Reload app</span></button>
+      <button class="menu-item danger" role="menuitem" type="button" data-delete><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete app</span></button>
+    </div>`;
+  }
+
+  private renderGlobalActions(): string {
+    return `<nav class="global-actions" aria-label="Global controls">
+      <button class="icon-button quiet" data-mobile-app type="button" aria-label="View app"><i data-lucide="panel-left" aria-hidden="true"></i><span>App</span></button>
+      <button class="icon-button quiet ${this.view === 'settings' ? 'active' : ''}" data-settings type="button" aria-label="Settings"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></button>
+      <button class="icon-button quiet" data-theme type="button" aria-label="Use ${this.theme === 'light' ? 'dark' : 'light'} theme"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" aria-hidden="true"></i><span>Theme</span></button>
+    </nav>`;
+  }
+
+  private bindHeader(rail: HTMLElement): void {
+    rail.querySelector<HTMLButtonElement>('[data-collapse]')!.onclick = () => {
+      this.collapsed = !this.collapsed;
+      localStorage.setItem('itsalive.sidebar', this.collapsed ? 'collapsed' : 'expanded');
+      this.renderRail();
+    };
+    rail.querySelector<HTMLButtonElement>('[data-theme]')!.onclick = () => {
+      this.theme = this.theme === 'light' ? 'dark' : 'light';
+      localStorage.setItem('itsalive.theme', this.theme);
+      this.renderRail();
+    };
+    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.view = this.view === 'settings' && this.active ? 'workspace' : 'settings'; this.collapsed = false; this.renderRail(); };
+    rail.querySelector<HTMLButtonElement>('[data-switcher]')?.addEventListener('click', () => { this.switcherOpen = !this.switcherOpen; this.actionsOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
+    rail.querySelector<HTMLButtonElement>('[data-app-menu]')?.addEventListener('click', () => { this.actionsOpen = !this.actionsOpen; this.switcherOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
+    rail.querySelector<HTMLButtonElement>('[data-launcher]')?.addEventListener('click', () => { this.view = 'launcher'; this.renderRail(); });
+    rail.querySelector<HTMLButtonElement>('[data-mobile-app]')!.onclick = () => { this.mobileView = 'app'; this.renderRail(); };
+    this.mount.querySelector<HTMLButtonElement>('[data-mobile-chat]')!.onclick = () => { this.mobileView = 'chat'; this.renderRail(); };
+    rail.querySelectorAll<HTMLButtonElement>('[data-select-app]').forEach(button => button.onclick = () => { this.switcherOpen = false; this.view = 'workspace'; void this.actions.selectApp(button.dataset.selectApp ?? ''); });
+    rail.querySelector<HTMLButtonElement>('[data-new]')?.addEventListener('click', () => { this.switcherOpen = false; this.view = 'creation'; this.renderRail(); });
+    rail.querySelector<HTMLButtonElement>('[data-reload]')?.addEventListener('click', () => { this.actionsOpen = false; this.actions.reloadApp(); this.renderRail(); });
+    rail.querySelector<HTMLButtonElement>('[data-delete]')?.addEventListener('click', () => this.handleDelete());
+  }
 
   private renderPanel(): void {
     const panel = this.mount.querySelector<HTMLElement>('[data-panel]');
     if (!panel) return;
-    if (this.tab === 'apps') this.renderApps(panel);
-    else if (this.tab === 'chat') this.renderChat(panel);
-    else this.renderSettings(panel);
+    if (this.view === 'settings') this.renderSettings(panel);
+    else if (this.view === 'creation') this.renderCreation(panel);
+    else if (!this.active || this.view === 'launcher') this.renderLauncher(panel);
+    else this.renderChat(panel);
     createIcons({ icons });
   }
 
-  private renderApps(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-head"><h2>Your apps</h2><p>Each app lives securely on its own subdomain.</p></header><div class="scroll">
-      <div class="app-list">${this.apps.map(app => `<button class="app-item ${this.active?.slug === app.slug ? 'active':''}" data-app="${esc(app.slug)}"><span class="app-icon">${esc(app.name.slice(0,2))}</span><span class="app-copy"><strong>${esc(app.name)}</strong><small>${esc(app.slug)}.${esc(ROOT_DOMAIN)}</small></span><i class="kebab" data-lucide="chevron-right" size="14"></i></button>`).join('')}</div>
-      <button class="action primary create-button" data-new><i data-lucide="plus" size="16"></i> Create new app</button>
-      ${this.active ? `<hr class="divider"><div class="card"><h3 class="card-title">App instructions</h3><p class="card-copy">This purpose is included in every agent run.</p><div class="field" style="margin-top:10px"><label for="app-prompt">What is this app for?</label><textarea id="app-prompt">${esc(this.active.prompt)}</textarea></div><div class="row" style="margin-top:9px"><button class="action" data-save-prompt>Save prompt</button><button class="action" data-reload><i data-lucide="refresh-cw" size="12"></i>Reload</button><button class="action danger icon-button" data-delete title="Delete app"><i data-lucide="trash-2" size="13"></i></button></div></div>` : ''}
-    </div>`;
-    panel.querySelector('[data-new]')?.addEventListener('click', () => this.showCreateForm(panel));
-    panel.querySelectorAll<HTMLElement>('[data-app]').forEach(el => el.onclick = () => { this.tab = 'chat'; void this.actions.selectApp(el.dataset.app ?? ''); });
-    panel.querySelector('[data-save-prompt]')?.addEventListener('click', () => void this.actions.updatePrompt((panel.querySelector('#app-prompt') as HTMLTextAreaElement).value));
-    panel.querySelector('[data-reload]')?.addEventListener('click', () => this.actions.reloadApp());
-    panel.querySelector('[data-delete]')?.addEventListener('click', () => { if (this.active && confirm(`Delete ${this.active.name}? App-origin data may remain in this browser.`)) void this.actions.deleteApp(this.active.slug); });
-  }
-
-  private showCreateForm(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-head"><h2>What should we build?</h2><p>Chat with the app designer. It will turn your goal into a name and clear instructions.</p></header><div class="creation-chat"><div class="message assistant">Tell me what you want the app to help you accomplish. You can describe the audience, workflow, or outcome.</div></div><form class="composer" data-create><div class="composer-box"><label class="sr-only" for="goal">App goal</label><textarea id="goal" required autofocus placeholder="I want an app that…"></textarea><div class="composer-foot"><span></span><button class="send" title="Send"><i data-lucide="arrow-up" size="15"></i></button></div></div></form><button class="action cancel-create" type="button" data-cancel>Cancel</button>`;
-    panel.querySelector('[data-cancel]')?.addEventListener('click', () => this.renderPanel());
-    const form = panel.querySelector<HTMLFormElement>('form')!; const goal = panel.querySelector<HTMLTextAreaElement>('#goal')!;
-    form.onsubmit = event => { event.preventDefault(); const content = goal.value.trim(); if (!content) return; goal.value = ''; goal.disabled = true; (form.querySelector('button') as HTMLButtonElement).disabled = true; const chat = panel.querySelector('.creation-chat')!; chat.insertAdjacentHTML('beforeend', `<div class="message user">${esc(content)}</div><div class="thinking"><i></i><i></i><i></i></div>`); void this.actions.designApp(content).then(draft => { chat.querySelector('.thinking')?.remove(); chat.insertAdjacentHTML('beforeend', `<div class="message assistant"><strong>${esc(draft.name)}</strong><br>${esc(draft.prompt)}<br><small>${esc(draft.slug)}.${esc(ROOT_DOMAIN)}</small><div class="proposal-actions"><button class="action primary" data-confirm>Create this app</button></div></div>`); chat.querySelector<HTMLButtonElement>('[data-confirm]')!.onclick = () => void this.actions.createApp(draft); }).catch(error => { chat.querySelector('.thinking')?.remove(); chat.insertAdjacentHTML('beforeend', `<div class="message system">${esc(error instanceof Error ? error.message : String(error))}</div>`); goal.disabled = false; (form.querySelector('button') as HTMLButtonElement).disabled = false; }); };
-    goal.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); form.requestSubmit(); } };
+  private renderLauncher(panel: HTMLElement): void {
+    panel.innerHTML = `<header class="panel-heading"><p class="eyebrow">Workspace</p><h1>Your apps</h1><p>Choose an app or start something new.</p></header>
+      <div class="scroll launcher-content">
+        <div class="launcher-list">${this.apps.map(app => `<button class="launcher-item" data-launch-app="${esc(app.slug)}" type="button"><span class="app-icon">${esc(initials(app.name))}</span><strong>${esc(app.name)}</strong><i data-lucide="arrow-right" aria-hidden="true"></i></button>`).join('')}</div>
+        <button class="action primary full-width" data-create type="button"><i data-lucide="plus" aria-hidden="true"></i>Create new app</button>
+      </div>`;
+    panel.querySelectorAll<HTMLButtonElement>('[data-launch-app]').forEach(button => button.onclick = () => void this.actions.selectApp(button.dataset.launchApp ?? ''));
+    panel.querySelector<HTMLButtonElement>('[data-create]')!.onclick = () => { this.view = 'creation'; this.renderRail(); };
   }
 
   private renderChat(panel: HTMLElement): void {
-    if (!this.active) { this.tab = 'apps'; this.renderApps(panel); return; }
-    panel.innerHTML = `<header class="panel-head chat-head"><button class="back-button" data-back title="Back to apps"><i data-lucide="arrow-left" size="18"></i></button><div><h2>${esc(this.active.name)}</h2><p>Ask the agent to inspect, build, or improve this app.</p></div></header>
-      <div class="chat-stream" data-stream>${this.messages.length ? this.messages.map(m => `<div class="message ${m.role}">${esc(m.content)}</div>`).join('') : `<div class="empty-chat"><i data-lucide="wand-sparkles" size="25"></i><strong>Build as you use</strong>Describe what you need. The agent will inspect and change your live app.</div>`}${this.busy ? '<div class="thinking"><i></i><i></i><i></i></div>':''}</div>
-      <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" placeholder="Ask the app to change…" ${!this.active || this.busy ? 'disabled':''}></textarea><div class="composer-foot"><span></span><button class="send" title="Send" ${!this.active || this.busy ? 'disabled':''}><i data-lucide="arrow-up" size="15"></i></button></div></div></form>`;
-    const stream = panel.querySelector('[data-stream]'); if (stream) stream.scrollTop = stream.scrollHeight;
-    panel.querySelector<HTMLButtonElement>('[data-back]')!.onclick = () => { this.tab = 'apps'; this.renderRail(); };
-    const form = panel.querySelector<HTMLFormElement>('[data-composer]')!; const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
-    form.onsubmit = event => { event.preventDefault(); const content = textarea.value.trim(); if (content) { form.reset(); textarea.value = ''; void this.actions.sendMessage(content); } };
+    const messages = this.messages.length
+      ? this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')
+      : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>Make ${esc(this.active!.name)} yours</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
+    panel.innerHTML = `${this.busy ? '<div class="working-state"><span class="spinner" aria-hidden="true"></span>Working…</div>' : ''}
+      <div class="chat-stream" data-stream aria-live="polite">${messages}${this.busy ? '<div class="thinking" aria-label="AI is thinking"><i></i><i></i><i></i></div>' : ''}</div>
+      <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" rows="1" placeholder="Ask me to change anything…" ${this.busy ? 'disabled' : ''}></textarea><button class="send" type="submit" aria-label="Send message" ${this.busy ? 'disabled' : ''}><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
+    const stream = panel.querySelector<HTMLElement>('[data-stream]')!;
+    if (this.chatNearBottom) stream.scrollTop = stream.scrollHeight;
+    stream.onscroll = () => { this.chatNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80; };
+    const form = panel.querySelector<HTMLFormElement>('[data-composer]')!;
+    const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
+    const resize = () => { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`; };
+    textarea.oninput = resize;
+    form.onsubmit = event => { event.preventDefault(); const content = textarea.value.trim(); if (!content) return; textarea.value = ''; resize(); this.chatNearBottom = true; void this.actions.sendMessage(content); };
     textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
   }
 
-  private renderSettings(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-head"><h2>Model settings</h2><p>Credentials stay in root-origin browser storage and are never shared with apps.</p></header><form class="scroll form" data-settings>
-      <div class="notice"><strong>Bring your own provider.</strong><br>The browser sends requests directly to your selected model endpoint.</div>
-      <div class="field"><label for="provider">Provider</label><select id="provider"><option value="openai">OpenAI</option><option value="anthropic">Anthropic</option><option value="google">Google Gemini</option><option value="openrouter">OpenRouter</option><option value="compatible">OpenAI-compatible</option></select></div>
-      <div class="field"><label for="model">Model</label><input id="model" required value="${esc(this.settings.model)}" placeholder="gpt-5-mini"></div>
-      <div class="field"><label for="apiKey">API key / bearer token</label><input id="apiKey" type="password" value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Stored only in this browser"></div>
-      <div class="field"><label for="endpoint">Custom endpoint (optional)</label><input id="endpoint" type="url" value="${esc(this.settings.endpoint)}" placeholder="https://api.example.com/v1"></div>
-      <button class="action primary" type="submit">Save and test connection</button><div class="settings-result" data-result role="status"></div><hr class="divider"><button class="action" type="button" data-export><i data-lucide="download" size="13"></i>Export session logs</button>
-      <p class="hint">API keys in browser storage are accessible to root-origin JavaScript. Do not use this on an untrusted shared device.</p>
-    </form>`;
-    const provider = panel.querySelector<HTMLSelectElement>('#provider')!; provider.value = this.settings.provider;
-    panel.querySelector<HTMLFormElement>('form')!.onsubmit = event => { event.preventDefault(); const result = panel.querySelector<HTMLElement>('[data-result]')!; const button = panel.querySelector<HTMLButtonElement>('button[type=submit]')!; result.className = 'settings-result pending'; result.textContent = 'Testing connection…'; button.disabled = true; void this.actions.saveSettings({ provider: provider.value, model: panel.querySelector<HTMLInputElement>('#model')!.value.trim(), apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value, endpoint: panel.querySelector<HTMLInputElement>('#endpoint')!.value.trim(), maxContextTokens: this.settings.maxContextTokens, maxOutputTokens: this.settings.maxOutputTokens }).then(() => { result.className = 'settings-result success'; result.textContent = 'Connection successful. Settings saved.'; }).catch(error => { result.className = 'settings-result failure'; result.textContent = `Connection failed: ${error instanceof Error ? error.message : String(error)}`; }).finally(() => { button.disabled = false; }); };
-    panel.querySelector('[data-export]')?.addEventListener('click', () => void this.actions.exportLogs());
+  private renderCreation(panel: HTMLElement): void {
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-cancel type="button" aria-label="Cancel"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>What do you want to make?</h1><p>Describe the app you have in mind.</p></div></header>
+      <div class="creation-chat" data-creation><div class="message assistant">Tell me what you want your app to help you do.</div></div>
+      <form class="composer" data-create-form><div class="composer-box"><label class="sr-only" for="goal">Describe your app</label><textarea id="goal" rows="1" required autofocus placeholder="Describe your app…"></textarea><button class="send" type="submit" aria-label="Send description"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
+    panel.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
+    const form = panel.querySelector<HTMLFormElement>('[data-create-form]')!;
+    const goal = panel.querySelector<HTMLTextAreaElement>('#goal')!;
+    form.onsubmit = event => { event.preventDefault(); void this.handleDesignApp(panel, form, goal); };
+    goal.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
   }
+
+  private async handleDesignApp(panel: HTMLElement, form: HTMLFormElement, goal: HTMLTextAreaElement): Promise<void> {
+    const content = goal.value.trim();
+    if (!content) return;
+    goal.value = ''; goal.disabled = true;
+    const submit = form.querySelector<HTMLButtonElement>('button')!; submit.disabled = true;
+    const chat = panel.querySelector<HTMLElement>('[data-creation]')!;
+    chat.insertAdjacentHTML('beforeend', `<div class="message user">${esc(content)}</div><div class="thinking"><i></i><i></i><i></i></div>`);
+    try {
+      const draft = await this.actions.designApp(content);
+      chat.querySelector('.thinking')?.remove();
+      const proposal = document.createElement('div');
+      proposal.className = 'creation-proposal';
+      proposal.innerHTML = `<span class="app-icon">${esc(initials(draft.name))}</span><div><strong>${esc(draft.name)}</strong><p>${esc(draft.prompt)}</p></div><button class="action primary" type="button">Create app</button>`;
+      proposal.querySelector<HTMLButtonElement>('button')!.onclick = () => void this.actions.createApp(draft);
+      chat.append(proposal);
+    } catch (error) {
+      chat.querySelector('.thinking')?.remove();
+      chat.insertAdjacentHTML('beforeend', `<div class="message system">${esc(friendlyError(error, 'your new app'))}</div>`);
+      goal.disabled = false; submit.disabled = false;
+    }
+  }
+
+  private renderSettings(panel: HTMLElement): void {
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>Your API key stays in this browser.</p></div></header>
+      <form class="scroll settings-form" data-settings-form>
+        <section class="settings-section" aria-labelledby="model-heading"><h2 id="model-heading">Model</h2>
+          <div class="field"><label for="provider">Provider</label><select id="provider">${PROVIDERS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>
+          <div class="field"><label for="model">Model</label><input id="model" required value="${esc(this.settings.model)}" placeholder="gpt-5-mini"></div>
+          <div class="field"><label for="apiKey">API key</label><input id="apiKey" type="password" value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Paste your API key"></div>
+          <button class="action primary full-width" type="submit">Save &amp; test</button><div class="settings-result" data-result role="status"></div>
+        </section>
+        <details class="settings-section advanced" ${this.settings.provider === 'compatible' ? 'open' : ''}><summary>Advanced</summary>
+          <div class="advanced-content"><div class="field endpoint-field"><label for="endpoint">Custom endpoint</label><input id="endpoint" type="url" value="${esc(this.settings.endpoint)}" placeholder="https://api.example.com/v1"><p>Optional for known providers; required for custom providers.</p></div>
+          <div class="token-grid"><div class="field"><label for="contextTokens">Context limit</label><input id="contextTokens" type="number" min="1" value="${this.settings.maxContextTokens}"></div><div class="field"><label for="outputTokens">Output limit</label><input id="outputTokens" type="number" min="1" value="${this.settings.maxOutputTokens}"></div></div>
+          <p class="security-note">Keys are stored by this site in your browser and are never shared with generated apps. Avoid saving a key on a shared device.</p></div>
+        </details>
+        <section class="settings-section diagnostics"><h2>Diagnostics</h2><p>Download technical session details for troubleshooting.</p><button class="action" type="button" data-export><i data-lucide="download" aria-hidden="true"></i>Export session logs</button></section>
+      </form>`;
+    const provider = panel.querySelector<HTMLSelectElement>('#provider')!; provider.value = this.settings.provider;
+    const endpointField = panel.querySelector<HTMLElement>('.endpoint-field')!;
+    const updateEndpoint = () => endpointField.classList.toggle('prominent', provider.value === 'compatible'); updateEndpoint(); provider.onchange = updateEndpoint;
+    panel.querySelector<HTMLButtonElement>('[data-close-settings]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
+    panel.querySelector<HTMLButtonElement>('[data-export]')!.onclick = () => void this.actions.exportLogs();
+    panel.querySelector<HTMLFormElement>('[data-settings-form]')!.onsubmit = event => { event.preventDefault(); void this.handleSaveSettings(panel, provider); };
+  }
+
+  private async handleSaveSettings(panel: HTMLElement, provider: HTMLSelectElement): Promise<void> {
+    const result = panel.querySelector<HTMLElement>('[data-result]')!;
+    const button = panel.querySelector<HTMLButtonElement>('button[type=submit]')!;
+    result.className = 'settings-result pending'; result.textContent = 'Testing…'; button.disabled = true;
+    const value: SettingsValue = {
+      provider: provider.value,
+      model: panel.querySelector<HTMLInputElement>('#model')!.value.trim(),
+      apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value,
+      endpoint: panel.querySelector<HTMLInputElement>('#endpoint')!.value.trim(),
+      maxContextTokens: Number(panel.querySelector<HTMLInputElement>('#contextTokens')!.value),
+      maxOutputTokens: Number(panel.querySelector<HTMLInputElement>('#outputTokens')!.value),
+    };
+    try { await this.actions.saveSettings(value); result.className = 'settings-result success'; result.textContent = 'Settings saved. Connection works.'; }
+    catch { result.className = 'settings-result failure'; result.textContent = 'We couldn’t connect. Check these settings and try again.'; }
+    finally { button.disabled = false; }
+  }
+
+  private handleDelete(): void {
+    if (!this.active) return;
+    this.actionsOpen = false;
+    if (confirm(`Delete “${this.active.name}”?\n\nThis removes the app and its conversation history.`)) void this.actions.deleteApp(this.active.slug);
+    else this.renderRail();
+  }
+
+  private rememberChatPosition(): void {
+    const stream = this.mount.querySelector<HTMLElement>('[data-stream]');
+    if (stream) this.chatNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
+  }
+
+  private focusFirstMenuItem(): void { requestAnimationFrame(() => this.mount.querySelector<HTMLButtonElement>('[role="menu"] button')?.focus()); }
+  private handleDocumentKeydown = (event: KeyboardEvent): void => {
+    if (event.key !== 'Escape' || (!this.switcherOpen && !this.actionsOpen)) return;
+    this.switcherOpen = false; this.actionsOpen = false; this.renderRail();
+  };
 }

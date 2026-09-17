@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { AgentRunner, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
 import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, normalizeAppSlug, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -31,7 +31,6 @@ const ui = new ShellUI(root, {
   },
   selectApp: async slug => { await selectApp(slug); },
   deleteApp: async slug => { await db.apps.delete(slug); if (activeSlug === slug) disposeFrame(); await refreshApps(apps.find(a => a.slug !== slug)?.slug); },
-  updatePrompt: async prompt => { const app = currentApp(); if (!app) return; await db.apps.put({ ...app, prompt, updatedAt: Date.now() }); await refreshApps(app.slug); },
   sendMessage: async content => { await runAgent(content); },
   saveSettings: async value => {
     const candidate = await testModelConnection(value);
@@ -52,7 +51,7 @@ const ui = new ShellUI(root, {
     downloadText(`itsalive-logs-${Date.now()}.log`, contents || 'No log entries recorded.');
   },
   reloadApp: () => {
-    if (!activeSlug || runtime.state !== 'ready') return;
+    if (!activeSlug || !runtime.frame?.contentWindow) return;
     runtime.setState('loading');
     ui.setConnectionStatus('Reloading app…', 'working');
     runtime.frame?.contentWindow?.postMessage(createBridgeMessage(activeSlug, createRequestId(), { type: 'reload' }), currentOrigin());
@@ -176,6 +175,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeSlug, message.query, message.limit) }); break;
     case 'logs.request': { const all = await db.logs.forApp(activeSlug); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
     case 'ai.request': await handleAiRequest(message); break;
+    case 'app.meta.update': await handleMetadataUpdate(message); break;
     case 'cron.register': {
       const id = `${activeSlug}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
       await db.schedules.put({ id, appSlug: activeSlug, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
@@ -185,8 +185,26 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
     case 'status':
       runtime.setState(message.status === 'ready' ? 'ready' : message.status === 'error' ? 'error' : 'loading');
       if (message.status === 'ready' && connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
-      ui.setConnectionStatus(message.status === 'ready' ? 'App connected' : (message.detail || message.status), message.status === 'ready' ? 'connected' : (message.status === 'error' ? 'error' : 'working'));
+      ui.setConnectionStatus(message.status === 'ready' ? 'Ready' : (message.detail || message.status), message.status === 'ready' ? 'connected' : (message.status === 'error' ? 'error' : 'working'));
       break;
+  }
+}
+
+async function handleMetadataUpdate(message: BridgeMessage & { type: 'app.meta.update'; metadata: { name: string } }): Promise<void> {
+  try {
+    const app = currentApp();
+    if (!app || app.slug !== message.appSlug) throw new Error('The selected app changed');
+    const updated = renameAppRecord(app, message.metadata.name);
+    const name = updated.name;
+    await db.apps.put(updated);
+    apps = apps.map(item => item.slug === updated.slug ? updated : item);
+    ui.setApps(apps as AppSummary[], updated.slug);
+    document.title = `${name} · itsalive`;
+    respond(message, { type: 'app.meta.response', metadata: { name } });
+    await log('info', `agent:${app.slug}`, 'App renamed', { previousName: app.name, name }, app.slug);
+  } catch (error) {
+    await log('error', 'app-metadata', error instanceof Error ? error.message : String(error), error, message.appSlug);
+    respond(message, { type: 'app.meta.response', error: serializeError(error) });
   }
 }
 
