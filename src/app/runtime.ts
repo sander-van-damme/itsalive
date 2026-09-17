@@ -6,6 +6,7 @@ import { installAutosave, loadSavedDocument } from "./persistence";
 import { captureScreenshot } from "./screenshot";
 import { createToolsApi } from "./tools";
 import type { RuntimeOptions } from "./types";
+import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
 import { serializeError } from "../shared";
 
@@ -47,35 +48,38 @@ export async function startAppRuntime(options: RuntimeOptions) {
     bridge.post({ type: "cron.register", registration: { callbackId: id, schedule } });
     return { id, schedule };
   };
-  const app = {
-    db: appDatabaseApi,
-    ai: { ask: async <T = unknown>(prompt: unknown, settings?: unknown) => {
+  const ai = Object.freeze({ ask: async <T = unknown>(prompt: unknown, settings?: unknown) => {
       const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "ai.request", prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt), options: settings && typeof settings === "object" ? settings as Record<string, unknown> : undefined }, 120_000);
       if (response.type !== "ai.response") throw new Error(`Unexpected AI response: ${response.type}`);
       if (response.error) throw new Error(response.error.message);
       return response.result as T;
-    } },
-    meta: { update: async (metadata: { name: string }) => {
-      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "app.meta.update", metadata });
-      if (response.type !== "app.meta.response") throw new Error(`Unexpected metadata response: ${response.type}`);
-      if (response.error) throw new Error(response.error.message);
-      return response.metadata;
-    } },
-    reload: () => location.reload(),
-  };
-  const agent = { wake: async (prompt: string) => { bridge.post({ type: "wake", reason: prompt }); } };
-  const history = { search: async (query: { query: string; limit?: number }) => {
+    } });
+  const agent = Object.freeze({ wake: async (prompt: string) => { bridge.post({ type: "wake", reason: prompt }); } });
+  const history = Object.freeze({ search: async (query: { query: string; limit?: number }) => {
     const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "history.request", query: query.query, limit: query.limit });
     if (response.type !== "history.response") throw new Error(`Unexpected history response: ${response.type}`);
     if (response.error) throw new Error(response.error.message);
     return response.results ?? [];
-  } };
+  } });
 
-  Object.assign(window, { app, agent, history, tools, cron, inspectDom, ref, screenshot, getLogs: logs.get, done });
+  const runtimeApi: ItsaliveRuntimeApi = Object.freeze({
+    apiVersion: 1,
+    db: Object.freeze(appDatabaseApi),
+    ai,
+    history,
+    tools: Object.freeze(tools),
+    agent,
+    dom: Object.freeze({ inspect: inspectDom, ref, screenshot }),
+    logs: Object.freeze({ get: logs.get }),
+    cron,
+    reload: () => location.reload(),
+    done,
+  });
+  installRuntimeApi(window, runtimeApi);
 
   const run = async (code: string) => {
-    // AsyncFunction provides top-level await and return without exposing a lexical
-    // wrapper API; runtime globals deliberately remain ordinary window globals.
+    // AsyncFunction provides top-level await and return. Platform capabilities live
+    // on the single browser-global itsalive namespace, also used by restored scripts.
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     return new AsyncFunction(`"use strict";\n${code}`).call(window);
   };
@@ -124,6 +128,18 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const autosave = installAutosave(options.autosaveDelay);
   bridge.post({ type: "status", status: "ready", detail: appSlug });
   return { bridge, appSlug, autosave, destroy: () => { removeEventListener("message", listener); autosave.disconnect(); } };
+}
+
+export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {
+  if (Object.prototype.hasOwnProperty.call(target, "itsalive")) {
+    throw new Error("Cannot install itsalive runtime API because window.itsalive already exists.");
+  }
+  Object.defineProperty(target, "itsalive", {
+    value: runtimeApi,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
 }
 
 export function redirectStandaloneToShell(rootOrigin: string) {

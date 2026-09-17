@@ -378,7 +378,7 @@ model selection
 The app may call:
 
 ```js
-await app.ai.ask(...);
+await itsalive.ai.ask(...);
 ```
 
 but internally this becomes:
@@ -449,9 +449,9 @@ App subdomain
 │
 ├── injected static app runtime
 │   ├── postMessage bridge
-│   ├── inspectDom / refs
-│   ├── screenshot support
-│   ├── app.ai / history bridge
+│   ├── itsalive.dom inspection / refs / screenshots
+│   ├── single versioned window.itsalive API
+│   ├── itsalive.ai / itsalive.history bridge
 │   ├── custom-tool runtime
 │   └── persistence helpers
 │
@@ -753,11 +753,11 @@ model again if needed
 Expose:
 
 ```js
-done()
-done("Optional chat message")
+itsalive.done()
+itsalive.done("Optional chat message")
 ```
 
-Calling/returning `done(...)` ends the current agent run.
+Calling/returning `itsalive.done(...)` ends the current agent run.
 
 ## 13.3 Errors
 
@@ -788,37 +788,41 @@ These prevent accidental loops without introducing a capability permission syste
 
 # 14. Runtime API inside each app
 
-Keep the runtime small.
+Keep the runtime small. Persisted generated scripts execute independently of an
+individual agent invocation, so they need a browser-global API. To minimize
+namespace pollution, the platform installs exactly one branded, versioned global,
+`window.itsalive`, and leaves generic and native browser globals untouched. Stable
+facade objects are frozen for correctness, not as a security boundary.
 
-Recommended globals:
+The public API is:
 
 ```js
-inspectDom(...)
-screenshot(...)
-getLogs(...)
+itsalive.dom.inspect(...)
+itsalive.dom.screenshot(...)
+itsalive.logs.get(...)
 
-ref("@12")
+itsalive.dom.ref("@12")
 
-history.search(...)
+itsalive.history.search(...)
 
-tools.search(...)
-tools.get(...)
-tools.create(...)
-tools.call(...)
-tools.delete(...)
+itsalive.tools.search(...)
+itsalive.tools.get(...)
+itsalive.tools.create(...)
+itsalive.tools.call(...)
+itsalive.tools.delete(...)
 
-cron(...)
-agent.wake(...)
+itsalive.cron(...)
+itsalive.agent.wake(...)
 
-app.db.get(...)
-app.db.set(...)
-app.db.delete(...)
-app.db.query(...)
+itsalive.db.get(...)
+itsalive.db.set(...)
+itsalive.db.delete(...)
+itsalive.db.query(...)
 
-app.ai.ask(...)
-app.reload()
+itsalive.ai.ask(...)
+itsalive.reload()
 
-done(...)
+itsalive.done(...)
 ```
 
 Normal browser APIs remain available:
@@ -845,7 +849,7 @@ Do not wrap browser functionality unless there is a concrete reason.
 
 The model should not receive the full app HTML automatically.
 
-`inspectDom()` gives it a compact navigational view.
+`itsalive.dom.inspect()` gives it a compact navigational view.
 
 Example:
 
@@ -880,15 +884,15 @@ Custom Elements make the tree easier for both humans and models to understand.
 Examples:
 
 ```js
-return await inspectDom({ ref: "@8" });
+return await itsalive.dom.inspect({ ref: "@8" });
 ```
 
 ```js
-return await inspectDom({ search: "Janssens" });
+return await itsalive.dom.inspect({ search: "Janssens" });
 ```
 
 ```js
-return await inspectDom({
+return await itsalive.dom.inspect({
   ref: "@11",
   detail: "source"
 });
@@ -899,7 +903,7 @@ return await inspectDom({
 Refs exist only inside the app runtime.
 
 ```js
-const node = ref("@8");
+const node = itsalive.dom.ref("@8");
 ```
 
 returns the actual DOM node.
@@ -915,13 +919,13 @@ They may become invalid after reload or major DOM changes. The agent can simply 
 The app runtime provides:
 
 ```js
-return await screenshot();
+return await itsalive.dom.screenshot();
 ```
 
 or:
 
 ```js
-return await screenshot({ ref: "@8" });
+return await itsalive.dom.screenshot({ ref: "@8" });
 ```
 
 Because the iframe is cross-origin, screenshot capture happens **inside the app runtime**, not from the parent shell.
@@ -953,7 +957,7 @@ The agent can turn repeated complex work into reusable tools.
 Example:
 
 ```js
-await tools.create({
+await itsalive.tools.create({
   name: "invoiceTotals",
   description: "Calculate paid and outstanding invoice totals.",
   parameters: {
@@ -967,17 +971,22 @@ await tools.create({
   `
 });
 
-return done();
+return itsalive.done();
 ```
 
 Later:
 
 ```js
-const totals = await tools.call("invoiceTotals", {});
+const totals = await itsalive.tools.call("invoiceTotals", {});
 return totals;
 ```
 
 Custom tools should be stored inside the app origin, for example in its IndexedDB.
+
+Tool functions receive `(args, env)`, where `env` contains the same canonical
+runtime object as `env.itsalive`, plus `document`, `window`, and `fetch`. For
+example, a tool may use `env.itsalive.db.get(...)`; there is no second platform
+API name in the tool environment.
 
 Because each app is a separate origin, the tool registry requires no app namespace.
 
@@ -1002,13 +1011,13 @@ Do **not** inject the full implementation, parameter schema, or source code of e
 When the model needs more detail, it can retrieve one tool:
 
 ```js
-return await tools.get("invoiceTotals");
+return await itsalive.tools.get("invoiceTotals");
 ```
 
 It can also search the registry when useful:
 
 ```js
-return await tools.search("invoice");
+return await itsalive.tools.search("invoice");
 ```
 
 The short description stored for each tool should therefore be concise and useful enough for discovery.
@@ -1020,8 +1029,8 @@ The short description stored for each tool should therefore be concise and usefu
 App JavaScript may schedule future work:
 
 ```js
-cron("daily-practice-review", "0 8 * * *", async () => {
-  await agent.wake("Review today's practice plan.");
+itsalive.cron("daily-practice-review", "0 8 * * *", async () => {
+  await itsalive.agent.wake("Review today's practice plan.");
 });
 ```
 
@@ -1221,7 +1230,7 @@ V1 does not need embeddings or semantic retrieval.
 Expose literal text search:
 
 ```js
-return await history.search({
+return await itsalive.history.search({
   query: "electrician",
   limit: 20
 });
@@ -1277,7 +1286,7 @@ Capture:
 Expose inside the app runtime:
 
 ```js
-return await getLogs({
+return await itsalive.logs.get({
   level: "error",
   limit: 30
 });
@@ -1429,6 +1438,9 @@ Recommended starting point:
 ```text
 You are the autonomous agent responsible for the current app.
 
+The platform runtime is exposed through the single global itsalive.
+Use platform capabilities only through that namespace.
+
 RESPONSE FORMAT
 
 Every response in this agent loop must be executable JavaScript only.
@@ -1440,11 +1452,11 @@ The shell will execute your JavaScript inside the current app environment.
 
 When your work is complete:
 
-return done();
+return itsalive.done();
 
 or:
 
-return done("A short message to show the user in chat");
+return itsalive.done("A short message to show the user in chat");
 
 If you need information first, call an available runtime function and return its result. The result will be provided to you on the next turn.
 
@@ -1476,7 +1488,7 @@ Do not create a separate state model merely out of habit.
 
 If important state naturally belongs to the document, keep it in the document.
 
-Use app.db when data is large, non-visual, binary, query-heavy or awkward to represent in HTML.
+Use itsalive.db when data is large, non-visual, binary, query-heavy or awkward to represent in HTML.
 
 CUSTOM ELEMENTS
 
@@ -1511,15 +1523,15 @@ INSPECT SPARSELY
 
 Do not read or rewrite the full HTML document without a real reason.
 
-Use inspectDom() to get a compact tree, search relevant content, or inspect one region.
+Use itsalive.dom.inspect() to get a compact tree, search relevant content, or inspect one region.
 
 Request source detail only for nodes you need.
 
-inspectDom() may return temporary refs such as @12.
+itsalive.dom.inspect() may return temporary refs such as @12.
 
 Inside your JavaScript:
 
-ref("@12")
+itsalive.dom.ref("@12")
 
 returns the corresponding current DOM node.
 
@@ -1533,7 +1545,7 @@ Prefer precise changes over large rewrites.
 
 Preserve useful user work.
 
-After meaningful visual changes, use screenshot() when visual verification helps.
+After meaningful visual changes, use itsalive.dom.screenshot() when visual verification helps.
 
 RESTARTABILITY
 
@@ -1545,11 +1557,11 @@ Do not depend on old closures, timers, object graphs or runtime-only state.
 
 CALLBACKS
 
-You may schedule future work with cron(...).
+You may schedule future work with itsalive.cron(...).
 
 Prefer stable callback IDs.
 
-Application code may call agent.wake(...) whenever another agent run is useful.
+Application code may call itsalive.agent.wake(...) whenever another agent run is useful.
 
 CUSTOM TOOLS
 
@@ -1559,7 +1571,7 @@ Use that inventory before creating new code or new tools.
 
 You may search, inspect, create and call reusable custom tools.
 
-Use tools.get(...) when you need the full details of one existing tool.
+Use itsalive.tools.get(...) when you need the full details of one existing tool.
 
 Create a custom tool when a complex operation is likely to recur.
 
@@ -1575,13 +1587,13 @@ When context must be reduced, conversation history is removed to make the reques
 
 Recent context and the rolling summary are therefore bounded by available token/character budget, not message count.
 
-If you need an older exact statement, use literal history.search(...) with useful keywords.
+If you need an older exact statement, use literal itsalive.history.search(...) with useful keywords.
 
 History search is literal text retrieval, not semantic retrieval.
 
 ERRORS AND LOGS
 
-If code fails, inspect the exception and getLogs(...) when useful.
+If code fails, inspect the exception and itsalive.logs.get(...) when useful.
 
 Fix the smallest relevant piece and retry.
 
@@ -1675,7 +1687,7 @@ The request builder uses the selected model's configured maximum context before 
 
 If the request is too large, conversation history is removed until it fits. The immutable global system prompt is never sacrificed.
 
-The full app HTML is not automatically inserted. The agent retrieves app detail through `inspectDom()`.
+The full app HTML is not automatically inserted. The agent retrieves app detail through `itsalive.dom.inspect()`.
 
 ---
 
@@ -1690,7 +1702,7 @@ The root shell builds model context and invokes the model.
 The model returns:
 
 ```js
-return await inspectDom({ search: "quote" });
+return await itsalive.dom.inspect({ search: "quote" });
 ```
 
 The root shell posts this JavaScript to:
@@ -1713,7 +1725,7 @@ The shell sends that observation to the model.
 The model returns:
 
 ```js
-const quotes = ref("@4");
+const quotes = itsalive.dom.ref("@4");
 
 const quote = document.createElement("contractor-quote");
 quote.setAttribute("contractor", "Janssens");
@@ -1721,7 +1733,7 @@ quote.setAttribute("amount", "18450");
 
 quotes.append(quote);
 
-return await screenshot({ ref: "@4" });
+return await itsalive.dom.screenshot({ ref: "@4" });
 ```
 
 The app executes it and returns the screenshot.
@@ -1729,7 +1741,7 @@ The app executes it and returns the screenshot.
 The model verifies the result and returns:
 
 ```js
-return done("Added the Janssens quote and updated the comparison.");
+return itsalive.done("Added the Janssens quote and updated the comparison.");
 ```
 
 The shell displays that message in Chat.

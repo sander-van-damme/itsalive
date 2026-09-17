@@ -149,7 +149,7 @@ async function runAgent(trigger: string): Promise<void> {
   running = true; ui.setBusy(true); await log('info', `agent:${app.slug}`, 'Agent run started', { trigger }, app.slug); await refreshMessages();
   try {
     configureRegistry();
-    const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await tools.search("");' }).catch(() => []);
+    const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
     const result = await runner.run({ appSlug: app.slug, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary });
     await log('info', `agent:${app.slug}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.slug);
