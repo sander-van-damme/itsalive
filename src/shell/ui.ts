@@ -32,7 +32,7 @@ export class ShellUI {
   private collapsed = localStorage.getItem('itsalive.sidebar') === 'collapsed';
   private theme = localStorage.getItem('itsalive.theme') ?? 'light';
 
-  constructor(private readonly mount: HTMLElement, private readonly actions: ShellActions) { this.render(); }
+  constructor(private readonly mount: HTMLElement, private readonly actions: ShellActions) { this.renderShell(); }
 
   setApps(apps: AppSummary[], activeSlug?: string): void {
     const previousSlug = this.active?.slug;
@@ -40,35 +40,50 @@ export class ShellUI {
     this.active = apps.find(a => a.slug === activeSlug);
     if (this.active && this.active.slug !== previousSlug) this.tab = 'chat';
     if (!this.active && this.tab === 'chat') this.tab = 'apps';
-    this.render();
+    this.renderStage();
+    this.renderRail();
   }
-  setMessages(messages: ChatLine[]): void { this.messages = messages; if (this.tab === 'chat') this.render(); }
+  setMessages(messages: ChatLine[]): void { this.messages = messages; if (this.tab === 'chat') this.renderPanel(); }
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
   setBusy(busy: boolean, status = busy ? 'Agent is working' : 'Ready', tone: 'idle' | 'working' | 'connected' | 'error' = busy ? 'working' : 'idle'): void { this.busy = busy; this.status = status; this.statusTone = tone; this.renderStatus(); if (this.tab === 'chat') this.renderPanel(); }
   setConnectionStatus(status: string, tone: 'idle' | 'working' | 'connected' | 'error'): void { this.status = status; this.statusTone = tone; this.renderStatus(); }
-  showError(message: string): void { this.messages.push({ id: crypto.randomUUID(), role: 'system', content: `Error: ${message}`, timestamp: Date.now() }); if (this.active) this.tab = 'chat'; this.render(); }
+  showError(message: string): void { this.messages.push({ id: crypto.randomUUID(), role: 'system', content: `Error: ${message}`, timestamp: Date.now() }); if (this.active) this.tab = 'chat'; this.renderRail(); }
 
-  private render(): void {
+  private renderShell(): void {
     document.documentElement.dataset.theme = this.theme;
     this.mount.innerHTML = `<main class="shell ${this.collapsed ? 'collapsed' : ''}">
       <section class="stage" aria-label="Active application">
-        ${this.active ? `<div class="status-pill" data-tone="${this.statusTone}"><span class="status-dot"></span><span data-status>${esc(this.status)}</span></div>` : ''}
-        <div class="app-frame-wrap"><div class="empty-stage"><div><span class="empty-logo">IA</span><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your apps will appear here.'}</p></div></div></div>
+        <div class="status-pill" hidden><span class="status-dot"></span><span data-status></span></div>
+        <div class="app-frame-wrap"></div>
       </section>
-      <aside class="rail">
-        <header class="brand"><span class="brand-mark" aria-hidden="true">IA</span><strong>itsalive</strong><div class="header-actions"><button class="header-button" data-theme title="Toggle day/night mode"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" size="18"></i></button><button class="header-button ${this.tab === 'settings' ? 'active':''}" data-settings title="Settings"><i data-lucide="settings" size="18"></i></button><button class="header-button" data-collapse title="${this.collapsed ? 'Expand' : 'Collapse'} sidebar"><i data-lucide="panel-right-${this.collapsed ? 'open' : 'close'}" size="18"></i></button></div></header>
-        <nav class="tabs" aria-label="Workspace">
-          ${this.tabButton('apps','layout-grid','Apps')}${this.active ? this.tabButton('chat','message-circle','Chat') : ''}
-        </nav>
-        <section class="panel" data-panel></section>
-      </aside>
+      <aside class="rail"></aside>
     </main>`;
-    this.mount.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.onclick = () => { this.tab = button.dataset.tab as ShellTab; this.render(); });
-    this.mount.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.tab = 'settings'; this.collapsed = false; localStorage.setItem('itsalive.sidebar', 'expanded'); this.render(); };
-    this.mount.querySelector<HTMLButtonElement>('[data-theme]')!.onclick = () => { this.theme = this.theme === 'light' ? 'dark' : 'light'; localStorage.setItem('itsalive.theme', this.theme); this.render(); };
-    this.mount.querySelector<HTMLButtonElement>('[data-collapse]')!.onclick = () => { this.collapsed = !this.collapsed; localStorage.setItem('itsalive.sidebar', this.collapsed ? 'collapsed' : 'expanded'); this.render(); };
+    this.renderStage();
+    this.renderRail();
+  }
+
+  private renderRail(): void {
+    document.documentElement.dataset.theme = this.theme;
+    this.mount.querySelector('.shell')?.classList.toggle('collapsed', this.collapsed);
+    const rail = this.mount.querySelector<HTMLElement>('.rail');
+    if (!rail) return;
+    rail.innerHTML = `<header class="brand"><span class="brand-mark" aria-hidden="true">IA</span><strong>itsalive</strong><div class="header-actions"><button class="header-button" data-theme title="Toggle day/night mode"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" size="18"></i></button><button class="header-button ${this.tab === 'settings' ? 'active':''}" data-settings title="Settings"><i data-lucide="settings" size="18"></i></button><button class="header-button" data-collapse title="${this.collapsed ? 'Expand' : 'Collapse'} sidebar"><i data-lucide="panel-right-${this.collapsed ? 'open' : 'close'}" size="18"></i></button></div></header>
+      <nav class="tabs" aria-label="Workspace">${this.tabButton('apps','layout-grid','Apps')}${this.active ? this.tabButton('chat','message-circle','Chat') : ''}</nav>
+      <section class="panel" data-panel></section>`;
+    rail.querySelectorAll<HTMLButtonElement>('[data-tab]').forEach(button => button.onclick = () => { this.tab = button.dataset.tab as ShellTab; this.renderRail(); });
+    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.tab = 'settings'; this.collapsed = false; localStorage.setItem('itsalive.sidebar', 'expanded'); this.renderRail(); };
+    rail.querySelector<HTMLButtonElement>('[data-theme]')!.onclick = () => { this.theme = this.theme === 'light' ? 'dark' : 'light'; localStorage.setItem('itsalive.theme', this.theme); this.renderRail(); };
+    rail.querySelector<HTMLButtonElement>('[data-collapse]')!.onclick = () => { this.collapsed = !this.collapsed; localStorage.setItem('itsalive.sidebar', this.collapsed ? 'collapsed' : 'expanded'); this.renderRail(); };
     this.renderPanel();
     createIcons({ icons });
+  }
+
+  private renderStage(): void {
+    const pill = this.mount.querySelector<HTMLElement>('.status-pill');
+    if (pill) pill.hidden = !this.active;
+    this.renderStatus();
+    const wrap = this.mount.querySelector<HTMLElement>('.app-frame-wrap');
+    if (wrap && !wrap.querySelector('iframe')) wrap.innerHTML = `<div class="empty-stage"><div><span class="empty-logo">IA</span><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your apps will appear here.'}</p></div></div>`;
   }
 
   mountFrame(frame: HTMLIFrameElement | undefined): void {
@@ -121,7 +136,7 @@ export class ShellUI {
       <div class="chat-stream" data-stream>${this.messages.length ? this.messages.map(m => `<div class="message ${m.role}">${esc(m.content)}</div>`).join('') : `<div class="empty-chat"><i data-lucide="wand-sparkles" size="25"></i><strong>Build as you use</strong>Describe what you need. The agent will inspect and change your live app.</div>`}${this.busy ? '<div class="thinking"><i></i><i></i><i></i></div>':''}</div>
       <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" placeholder="Ask the app to change…" ${!this.active || this.busy ? 'disabled':''}></textarea><div class="composer-foot"><span></span><button class="send" title="Send" ${!this.active || this.busy ? 'disabled':''}><i data-lucide="arrow-up" size="15"></i></button></div></div></form>`;
     const stream = panel.querySelector('[data-stream]'); if (stream) stream.scrollTop = stream.scrollHeight;
-    panel.querySelector<HTMLButtonElement>('[data-back]')!.onclick = () => { this.tab = 'apps'; this.render(); };
+    panel.querySelector<HTMLButtonElement>('[data-back]')!.onclick = () => { this.tab = 'apps'; this.renderRail(); };
     const form = panel.querySelector<HTMLFormElement>('[data-composer]')!; const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
     form.onsubmit = event => { event.preventDefault(); const content = textarea.value.trim(); if (content) { form.reset(); textarea.value = ''; void this.actions.sendMessage(content); } };
     textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };

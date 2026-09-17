@@ -88,6 +88,15 @@ describe("bridge protocol", () => {
       expectedOrigin: "https://math.example.com", expectedAppSlug: "math", expectedSource: source,
       direction: "to-shell",
     })).toBeNull();
+    const staleSource = {} as MessageEventSource;
+    expect(validateMessageEvent({ ...event, source: staleSource } as MessageEvent, {
+      expectedOrigin: "https://math.example.com", expectedAppSlug: "math", expectedSource: source,
+      direction: "to-shell",
+    })).toBeNull();
+    expect(validateMessageEvent({ ...event, data: { ...data, appSlug: "old-app" } } as MessageEvent, {
+      expectedOrigin: "https://math.example.com", expectedAppSlug: "math", expectedSource: source,
+      direction: "to-shell",
+    })).toBeNull();
   });
 });
 
