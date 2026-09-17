@@ -1,4 +1,5 @@
 import { createIcons, icons } from 'lucide';
+import { ROOT_DOMAIN } from '../shared';
 
 export type ShellTab = 'apps' | 'chat' | 'settings';
 export interface AppSummary { slug: string; name: string; prompt: string; createdAt: number; updatedAt: number }
@@ -43,10 +44,10 @@ export class ShellUI {
     this.mount.innerHTML = `<main class="shell">
       <section class="stage" aria-label="Active application">
         <div class="status-pill"><span class="status-dot"></span><span data-status>${esc(this.status)}</span></div>
-        <div class="app-frame-wrap"><div class="empty-stage"><div><i data-lucide="sparkles" size="30"></i><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your living applications will appear here.'}</p></div></div></div>
+        <div class="app-frame-wrap"><div class="empty-stage"><div><i data-lucide="sparkles" size="30"></i><strong>${this.active ? 'Loading app…' : 'Create an app to begin'}</strong><p>${this.active ? esc(this.active.name) : 'Your itsalive apps will appear here.'}</p></div></div></div>
       </section>
       <aside class="rail">
-        <header class="brand"><span class="brand-mark"><i data-lucide="sprout" size="16"></i></span><strong>Living Apps</strong><span>runtime · v1</span></header>
+        <header class="brand"><span class="brand-mark"><i data-lucide="sprout" size="16"></i></span><strong>itsalive</strong><span>runtime · v1</span></header>
         <nav class="tabs" aria-label="Workspace">
           ${this.tabButton('apps','layout-grid','Apps')}${this.tabButton('chat','message-circle','Chat')}${this.tabButton('settings','settings-2','Settings')}
         </nav>
@@ -64,7 +65,7 @@ export class ShellUI {
     if (!wrap) return;
     wrap.replaceChildren(frame);
     frame.className = 'app-frame';
-    frame.title = `${this.active?.name ?? 'Living app'} application`;
+    frame.title = `${this.active?.name ?? 'itsalive app'} application`;
   }
 
   private tabButton(id: ShellTab, icon: string, label: string): string {
@@ -83,8 +84,8 @@ export class ShellUI {
 
   private renderApps(panel: HTMLElement): void {
     panel.innerHTML = `<header class="panel-head"><h2>Your apps</h2><p>Each app lives securely on its own subdomain.</p></header><div class="scroll">
-      <button class="action primary" data-new style="width:100%"><i data-lucide="plus" size="14"></i> Create living app</button>
-      <div class="app-list">${this.apps.map(app => `<button class="app-item ${this.active?.slug === app.slug ? 'active':''}" data-app="${esc(app.slug)}"><span class="app-icon">${esc(app.name.slice(0,2))}</span><span class="app-copy"><strong>${esc(app.name)}</strong><small>${esc(app.slug)}.${esc(__ROOT_DOMAIN__)}</small></span><i class="kebab" data-lucide="chevron-right" size="14"></i></button>`).join('')}</div>
+      <button class="action primary" data-new style="width:100%"><i data-lucide="plus" size="14"></i> Create itsalive app</button>
+      <div class="app-list">${this.apps.map(app => `<button class="app-item ${this.active?.slug === app.slug ? 'active':''}" data-app="${esc(app.slug)}"><span class="app-icon">${esc(app.name.slice(0,2))}</span><span class="app-copy"><strong>${esc(app.name)}</strong><small>${esc(app.slug)}.${esc(ROOT_DOMAIN)}</small></span><i class="kebab" data-lucide="chevron-right" size="14"></i></button>`).join('')}</div>
       ${this.active ? `<hr class="divider"><div class="card"><h3 class="card-title">App instructions</h3><p class="card-copy">This purpose is included in every agent run.</p><div class="field" style="margin-top:10px"><label for="app-prompt">What is this app for?</label><textarea id="app-prompt">${esc(this.active.prompt)}</textarea></div><div class="row" style="margin-top:9px"><button class="action" data-save-prompt>Save prompt</button><button class="action" data-reload><i data-lucide="refresh-cw" size="12"></i>Reload</button><button class="action danger icon-button" data-delete title="Delete app"><i data-lucide="trash-2" size="13"></i></button></div></div>` : ''}
     </div>`;
     panel.querySelector('[data-new]')?.addEventListener('click', () => this.showCreateForm(panel));
@@ -95,9 +96,9 @@ export class ShellUI {
   }
 
   private showCreateForm(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-head"><h2>New living app</h2><p>Give your app a durable home and a clear purpose.</p></header><form class="scroll form" data-create>
+    panel.innerHTML = `<header class="panel-head"><h2>New itsalive app</h2><p>Give your app a durable home and a clear purpose.</p></header><form class="scroll form" data-create>
       <div class="field"><label for="name">App name</label><input id="name" required maxlength="60" placeholder="Violin Coach" autofocus></div>
-      <div class="field"><label for="slug">Subdomain</label><input id="slug" required maxlength="63" pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" placeholder="violin"><span class="hint">Lowercase letters, numbers, and hyphens. This becomes slug.${esc(__ROOT_DOMAIN__)}.</span></div>
+      <div class="field"><label for="slug">Subdomain</label><input id="slug" required maxlength="63" pattern="[a-z0-9](?:[a-z0-9-]*[a-z0-9])?" placeholder="violin"><span class="hint">Lowercase letters, numbers, and hyphens. This becomes slug.${esc(ROOT_DOMAIN)}.</span></div>
       <div class="field"><label for="purpose">App purpose</label><textarea id="purpose" required placeholder="This app helps me practice violin with focused, adaptive exercises."></textarea></div>
       <div class="row"><button class="action primary" type="submit">Create app</button><button class="action" type="button" data-cancel>Cancel</button></div>
     </form>`;

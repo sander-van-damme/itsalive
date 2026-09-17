@@ -1,0 +1,8 @@
+# Default configuration used by Cloudflare's `wrangler versions upload` command.
+# The wildcard app runtime is deployed separately with wrangler.app.toml.
+name = "itsalive"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./dist-root"
+not_found_handling = "single-page-application"

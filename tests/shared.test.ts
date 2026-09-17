@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  ROOT_DOMAIN,
   appOrigin,
   appSlugFromUrl,
   createBridgeMessage,
@@ -20,6 +21,10 @@ import {
 } from "../src/shared";
 
 describe("domain helpers", () => {
+  it("uses the canonical itsalive.org root domain", () => {
+    expect(ROOT_DOMAIN).toBe("itsalive.org");
+  });
+
   it("normalizes valid DNS labels and rejects invalid labels", () => {
     expect(normalizeAppSlug("  My-App  ")).toBe("my-app");
     expect(isValidAppSlug("my-app-2")).toBe(true);
