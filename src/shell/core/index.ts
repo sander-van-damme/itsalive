@@ -1,5 +1,6 @@
 export * from "./agent-runner";
 export * from "./bridge-executor";
+export * from "./runtime-session";
 export * from "./context";
 export * from "./database";
 export * from "./history";
