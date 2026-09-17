@@ -1,0 +1,6 @@
+name = "living-apps-runtime"
+compatibility_date = "2026-09-01"
+
+[assets]
+directory = "./dist-app"
+not_found_handling = "single-page-application"
