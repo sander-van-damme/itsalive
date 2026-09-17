@@ -1,6 +1,6 @@
 import type { AppRecord, Credential, HistoryEntry, LogEntry, ModelConfig, ScheduleRecord } from "./types";
 
-const DB_NAME = "living-apps-shell";
+const DB_NAME = "itsalive-shell";
 const DB_VERSION = 1;
 
 type Store = "apps" | "history" | "credentials" | "models" | "logs" | "schedules";

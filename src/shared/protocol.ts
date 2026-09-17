@@ -2,7 +2,7 @@ import { isValidAppSlug } from "./domain";
 import { isValidId } from "./ids";
 import type { SerializedError } from "./serialization";
 
-export const BRIDGE_PROTOCOL = "living-apps" as const;
+export const BRIDGE_PROTOCOL = "itsalive" as const;
 export const BRIDGE_VERSION = 1 as const;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";

@@ -1,4 +1,4 @@
-# Living Apps Runtime
+# itsalive Runtime
 ## Implementation Specification — Subdomain Architecture
 
 **Working concept:** apps that keep building themselves while you use them.
@@ -8,7 +8,7 @@ This document describes a deliberately small browser platform where every app is
 The platform has two layers, shipped as **two separate static site builds from one repository**:
 
 1. **Root shell site** — the fixed UI, AI configuration, prompts, history, and agent runner.
-2. **App runtime site** — served on the wildcard subdomain; each hostname becomes one isolated living app origin.
+2. **App runtime site** — served on the wildcard subdomain; each hostname becomes one isolated itsalive app origin.
 
 Example:
 
@@ -23,7 +23,7 @@ The user always enters through the root shell. Apps run inside cross-origin ifra
 
 The key architectural rule is:
 
-> **The root domain is the brain and shell. Each app subdomain is one isolated living application.**
+> **The root domain is the brain and shell. Each app subdomain is one isolated itsalive application.**
 
 ---
 
@@ -460,7 +460,7 @@ App subdomain
 └── custom agent tools
 ```
 
-The **injected static app runtime is platform code**, delivered by the app-site build. It is not AI-generated and is not serialized as part of the living HTML document.
+The **injected static app runtime is platform code**, delivered by the app-site build. It is not AI-generated and is not serialized as part of the itsalive HTML document.
 
 Shell-owned state associated with that app:
 

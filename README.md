@@ -25,7 +25,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Durable app database helpers and agent-created custom tools.
 - App-to-shell AI requests and agent wake-ups.
 - Stable cron registrations and callback dispatch protocol.
-- Tailwind CSS and Lucide availability in living apps without imposing a generated framework.
+- Tailwind CSS and Lucide availability in itsalive apps without imposing a generated framework.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
 ## Local development
@@ -63,7 +63,7 @@ Provider requests happen directly from root-origin browser JavaScript. The provi
 Two Wrangler configurations are included:
 
 ```bash
-npx wrangler deploy --config wrangler.root.toml
+npx wrangler deploy
 npx wrangler deploy --config wrangler.app.toml
 ```
 

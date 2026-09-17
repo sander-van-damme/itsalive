@@ -15,7 +15,7 @@ let executor: PostMessageExecutor | undefined;
 let running = false;
 
 const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
-const stored = localStorage.getItem('living-apps.settings');
+const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = stored ? { ...defaultSettings, ...JSON.parse(stored) } : defaultSettings;
 
 const ui = new ShellUI(root, {
@@ -30,8 +30,8 @@ const ui = new ShellUI(root, {
   deleteApp: async slug => { await db.apps.delete(slug); if (activeSlug === slug) disposeFrame(); await refreshApps(apps.find(a => a.slug !== slug)?.slug); },
   updatePrompt: async prompt => { const app = currentApp(); if (!app) return; await db.apps.put({ ...app, prompt, updatedAt: Date.now() }); await refreshApps(app.slug); },
   sendMessage: async content => { await runAgent(content); },
-  saveSettings: async value => { settings = value; localStorage.setItem('living-apps.settings', JSON.stringify(value)); ui.setSettings(value); },
-  exportLogs: async () => { const logs = activeSlug ? await db.logs.forApp(activeSlug) : await db.logs.all(); downloadJson(`living-apps-logs-${Date.now()}.json`, logs); },
+  saveSettings: async value => { settings = value; localStorage.setItem('itsalive.settings', JSON.stringify(value)); ui.setSettings(value); },
+  exportLogs: async () => { const logs = activeSlug ? await db.logs.forApp(activeSlug) : await db.logs.all(); downloadJson(`itsalive-logs-${Date.now()}.json`, logs); },
   reloadApp: () => frame?.contentWindow?.postMessage(createBridgeMessage(activeSlug!, createRequestId(), { type: 'reload' }), currentOrigin())
 });
 ui.setSettings(settings);
