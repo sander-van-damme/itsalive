@@ -58,6 +58,15 @@ describe("bridge protocol", () => {
     expect(isAppToShellMessage(result)).toBe(true);
   });
 
+  it("uses the LLM request and response protocol without legacy AI message aliases", () => {
+    const request = createBridgeMessage("violin", "req_llm123", { type: "llm.request", prompt: "compose" });
+    const response = createBridgeMessage("violin", "req_llm123", { type: "llm.response", result: "done" });
+    expect(isAppToShellMessage(request)).toBe(true);
+    expect(isShellToAppMessage(response)).toBe(true);
+    expect(isBridgeMessage({ ...request, type: "ai.request" })).toBe(false);
+    expect(isBridgeMessage({ ...response, type: "ai.response" })).toBe(false);
+  });
+
   it("rejects malformed, unknown, and mismatched messages", () => {
     const valid = createBridgeMessage("math", "req_1234", { type: "execute", code: "return 2" });
     expect(isBridgeMessage({ ...valid, type: "unknown" })).toBe(false);

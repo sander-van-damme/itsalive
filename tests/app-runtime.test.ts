@@ -15,7 +15,7 @@ vi.mock("../src/app/bridge", () => ({
     validate(event: MessageEvent) { return event.data; }
     acceptResponse() { return false; }
     async request(payload: Record<string, unknown>) {
-      if (payload.type === "ai.request") return { type: "ai.response", result: "answer" };
+      if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
       if (payload.type === "history.request") return { type: "history.response", results: ["match"] };
       throw new Error(`Unexpected request: ${String(payload.type)}`);
     }
@@ -64,7 +64,7 @@ describe("app runtime namespace", () => {
   it("installs one immutable, versioned facade without replacing native history", () => {
     expect(window.history).toBe(nativeHistory);
     expect(Object.keys(window.itsalive)).toEqual([
-      "apiVersion", "db", "ai", "history", "tools", "agent", "dom", "logs", "cron", "reload", "done",
+      "apiVersion", "db", "llm", "history", "tools", "agent", "dom", "logs", "cron", "reload", "done",
     ]);
     expect(window.itsalive.apiVersion).toBe(1);
     expect(Object.isFrozen(window.itsalive)).toBe(true);
@@ -77,8 +77,8 @@ describe("app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
 
-  it("preserves bridge-backed AI, history, wake, cron, DOM, logs, and completion behavior", async () => {
-    expect(await window.itsalive.ai.ask("question")).toBe("answer");
+  it("preserves bridge-backed LLM, history, wake, cron, DOM, logs, and completion behavior", async () => {
+    expect(await window.itsalive.llm.ask("question")).toBe("answer");
     expect(await window.itsalive.history.search({ query: "old" })).toEqual(["match"]);
     await window.itsalive.agent.wake("continue");
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);

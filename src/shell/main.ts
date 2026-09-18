@@ -174,7 +174,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeSlug); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeSlug, message.query, message.limit) }); break;
     case 'logs.request': { const all = await db.logs.forApp(activeSlug); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
-    case 'ai.request': await handleAiRequest(message); break;
+    case 'llm.request': await handleLlmRequest(message); break;
     case 'app.meta.update': await handleMetadataUpdate(message); break;
     case 'cron.register': {
       const id = `${activeSlug}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
@@ -218,9 +218,9 @@ async function fireDueSchedules(): Promise<void> {
   }
 }
 
-async function handleAiRequest(message: BridgeMessage & { type: 'ai.request'; prompt: string }): Promise<void> {
-  try { configureRegistry(); const result = await registry.generate({ model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: settings.maxOutputTokens }, credential()); respond(message, { type: 'ai.response', result: result.text }); }
-  catch (error) { respond(message, { type: 'ai.response', error: serializeError(error) }); }
+async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
+  try { configureRegistry(); const result = await registry.generate({ model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: settings.maxOutputTokens }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
+  catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
 function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appSlug, message.requestId, payload), currentOrigin()); }

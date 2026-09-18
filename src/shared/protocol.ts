@@ -17,7 +17,7 @@ export type ShellToAppPayload =
   | { type: "metadata.request" }
   | { type: "execute"; code: string }
   | { type: "reload" }
-  | { type: "ai.response"; result?: unknown; error?: SerializedError }
+  | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
   | { type: "logs.response"; logs?: LogRecord[]; error?: SerializedError }
   | { type: "app.meta.response"; metadata?: { name: string }; error?: SerializedError }
@@ -30,7 +30,7 @@ export type AppToShellPayload =
   | { type: "result"; result?: unknown; done?: boolean; message?: string }
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
-  | { type: "ai.request"; prompt: string; options?: Record<string, unknown> }
+  | { type: "llm.request"; prompt: string; options?: Record<string, unknown> }
   | { type: "history.request"; query: string; limit?: number }
   | { type: "logs.request"; level?: LogLevel; limit?: number }
   | { type: "app.meta.update"; metadata: { name: string } }
@@ -47,8 +47,8 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["ready.request", "metadata.request", "execute", "reload", "ai.response", "history.response", "logs.response", "app.meta.response", "cron.fire", "screenshot.request"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["ready", "metadata", "result", "execution.error", "wake", "ai.request", "history.request", "logs.request", "app.meta.update", "log", "cron.register", "screenshot", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["ready.request", "metadata.request", "execute", "reload", "llm.response", "history.response", "logs.response", "app.meta.response", "cron.fire", "screenshot.request"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["ready", "metadata", "result", "execution.error", "wake", "llm.request", "history.request", "logs.request", "app.meta.update", "log", "cron.register", "screenshot", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -59,7 +59,7 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
       !isValidAppSlug(value.appSlug) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
   switch (value.type) {
     case "execute": return typeof value.code === "string";
-    case "ai.request": return typeof value.prompt === "string";
+    case "llm.request": return typeof value.prompt === "string";
     case "history.request": return typeof value.query === "string";
     case "app.meta.update": return isObject(value.metadata) && typeof value.metadata.name === "string" && Object.keys(value.metadata).every(key => key === "name");
     case "app.meta.response": return (value.metadata === undefined || (isObject(value.metadata) && typeof value.metadata.name === "string" && Object.keys(value.metadata).every(key => key === "name"))) && (value.error === undefined || isSerializedError(value.error));
