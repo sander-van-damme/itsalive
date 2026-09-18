@@ -1,9 +1,7 @@
 import { AppBridge, idFromHostname } from "./bridge";
-import { inspectDom, ref } from "./inspect";
 import { installLogging } from "./logs";
 import { installAutosave, loadSavedDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
-import { createToolsApi } from "./tools";
 import { clearOriginStorage } from "./storage";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
@@ -13,11 +11,30 @@ import { installInteractionObserver } from "./interactions";
 
 const DONE = Symbol("agent-done");
 
+function stringifyExecutionValue(value: unknown): string {
+  const seen = new WeakSet<object>();
+  return JSON.stringify(value, (_key, current: unknown) => {
+    if (current instanceof Document) return `<!doctype html>\n${current.documentElement.outerHTML}`;
+    if (current instanceof Element) return current.outerHTML;
+    if (current instanceof NodeList || current instanceof HTMLCollection) return Array.from(current);
+    if (current instanceof Node) return current.textContent ?? current.nodeName;
+    if (current && typeof current === "object") {
+      if (seen.has(current)) return "[Circular]";
+      seen.add(current);
+    }
+    return current;
+  });
+}
+
 function bounded(value: unknown, maxBytes: number): unknown {
   if (value === undefined) return null;
   let json: string;
-  try { json = JSON.stringify(value); } catch { return { truncated: true, value: String(value), reason: "Result was not serializable" }; }
-  if (new Blob([json]).size <= maxBytes) return value;
+  try { json = stringifyExecutionValue(value); }
+  catch { return { truncated: true, value: String(value), reason: "Result was not serializable" }; }
+  if (new Blob([json]).size <= maxBytes) {
+    try { return JSON.parse(json) as unknown; }
+    catch { return value; }
+  }
   return { truncated: true, size: new Blob([json]).size, preview: json.slice(0, Math.max(0, maxBytes - 200)) };
 }
 
@@ -27,12 +44,9 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const bridge = new AppBridge(rootOrigin, appId);
   const logs = installLogging(bridge);
   const cronCallbacks = new Map<string, () => unknown>();
-  const tools = createToolsApi(logs.add);
-  const screenshot = async (input: { ref?: string; scale?: number } = {}) => {
-    const target = input.ref ? ref(input.ref) : document.documentElement;
-    if (!(target instanceof HTMLElement)) throw new Error(input.ref ? `Unknown or non-HTML ref: ${input.ref}` : "No document element");
+  const screenshot = async (input: { scale?: number } = {}) => {
     try {
-      return options.screenshot ? await options.screenshot(target) : await captureScreenshot(input);
+      return options.screenshot ? await options.screenshot(document.documentElement) : await captureScreenshot(input);
     } catch (error) {
       const unavailable = formatScreenshotUnavailable(error);
       logs.add("warn", ["Screenshot verification unavailable", unavailable], "agent", error instanceof Error ? error.stack : undefined);
@@ -66,9 +80,8 @@ export async function startAppRuntime(options: RuntimeOptions) {
     apiVersion: 2,
     llm,
     history,
-    tools: Object.freeze(tools),
     agent,
-    dom: Object.freeze({ inspect: inspectDom, ref, screenshot }),
+    dom: Object.freeze({ screenshot }),
     logs: Object.freeze({ get: logs.get }),
     cron,
     done,
@@ -76,8 +89,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
   installRuntimeApi(window, runtimeApi);
 
   const run = async (code: string) => {
-    // AsyncFunction provides top-level await and return. Platform capabilities live
-    // on the single browser-global itsalive namespace, also used by restored scripts.
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
     return new AsyncFunction(`"use strict";\n${code}`).call(window);
   };
