@@ -44,10 +44,12 @@ const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 
 const ui = new ShellUI(root, {
-  createApp: async input => {
+  createApp: async goal => {
+    const prompt = goal.trim();
+    if (!prompt) return;
     const id = crypto.randomUUID();
     const now = Date.now();
-    await db.apps.put({ ...input, id, summary: '', createdAt: now, updatedAt: now });
+    await db.apps.put({ name: appNameFromGoal(prompt), prompt, id, summary: '', createdAt: now, updatedAt: now });
     initialBuild.schedule(id);
     ui.setConnectionStatus('Preparing your app…', 'working');
     await refreshApps(id);
@@ -72,11 +74,6 @@ const ui = new ShellUI(root, {
     localStorage.setItem('itsalive.settings', JSON.stringify(candidate));
     ui.setSettings(candidate);
   },
-  designApp: async goal => {
-    const system = `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY one complete JSON object with string fields "name" and "prompt". Do not use markdown.`;
-    const parsed = await generateAppProposal(goal, system);
-    return { name: parsed.name.trim().slice(0, 60), prompt: parsed.prompt.trim() };
-  },
   exportLogs: async () => {
     await diagnostics.flush();
     const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
@@ -98,34 +95,13 @@ window.addEventListener('unhandledrejection', event => { void log('error', 'shel
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
 
-async function generateAppProposal(goal: string, system: string): Promise<{ name: string; prompt: string }> {
-  let failure = 'invalid JSON';
-  for (let attempt = 1; attempt <= 3; attempt++) {
-    const repair = attempt === 1 ? goal : `${goal}\n\nYour previous response could not be parsed (${failure}). Return the complete JSON object again. Do not abbreviate or add commentary.`;
-    const result = await registry.generate({ purpose: `app design attempt ${attempt}`, model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(MODEL_OUTPUT_TOKENS, 2000) }, credential());
-    try {
-      const parsed = parseJsonObject(result.text) as { name?: unknown; prompt?: unknown };
-      if (typeof parsed.name !== 'string' || typeof parsed.prompt !== 'string') throw new Error('required string fields are missing');
-      if (!parsed.name.trim() || !parsed.prompt.trim()) throw new Error('required fields are empty');
-      if (attempt > 1) await log('info', 'app-designer', `Recovered valid proposal on attempt ${attempt}`);
-      return parsed as { name: string; prompt: string };
-    } catch (error) {
-      failure = error instanceof Error ? error.message : String(error);
-      await log('warn', 'app-designer', `Invalid model JSON on attempt ${attempt}/3: ${failure}`, { response: result.text.slice(0, 2_000) });
-    }
-  }
-  throw new Error('The app designer returned invalid JSON after 3 attempts. Please try again.');
-}
-
-function parseJsonObject(text: string): unknown {
-  const clean = text.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/, '');
-  try { return JSON.parse(clean); }
-  catch (firstError) {
-    const start = clean.indexOf('{');
-    const end = clean.lastIndexOf('}');
-    if (start >= 0 && end > start) return JSON.parse(clean.slice(start, end + 1));
-    throw firstError;
-  }
+function appNameFromGoal(goal: string): string {
+  const compact = goal.replace(/\s+/g, ' ').trim()
+    .replace(/^please\s+/i, '')
+    .replace(/^(?:build|make|create|design)\s+(?:me\s+)?(?:an?\s+)?/i, '');
+  const firstThought = compact.split(/[.!?]/, 1)[0]?.trim() || 'New app';
+  const short = firstThought.split(/\s+/).slice(0, 5).join(' ').slice(0, 60).trim() || 'New app';
+  return short.charAt(0).toUpperCase() + short.slice(1);
 }
 
 async function refreshApps(select?: string): Promise<void> {
