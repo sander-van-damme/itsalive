@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { AgentRunner, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
 import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, normalizeAppSlug, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -11,6 +11,7 @@ const registry = createDefaultRegistry();
 let apps: AppRecord[] = [];
 let activeSlug: string | undefined;
 let running = false;
+let activeRun: AbortController | undefined;
 let connectionTimer: number | undefined;
 
 const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
@@ -106,6 +107,7 @@ async function refreshApps(select?: string): Promise<void> {
 
 async function selectApp(slug: string): Promise<void> {
   if (!apps.some(a => a.slug === slug)) return;
+  if (activeSlug !== slug) stopActiveRun('App selection changed');
   activeSlug = slug;
   const url = new URL(location.href); url.searchParams.set('app', slug); history.replaceState(null, '', url);
   disposeFrame();
@@ -118,7 +120,8 @@ async function selectApp(slug: string): Promise<void> {
   await refreshMessages();
 }
 
-function disposeFrame(): void { if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
+function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); }
+function disposeFrame(): void { stopActiveRun('App runtime disposed'); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.slug === activeSlug); }
 function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, ROOT_DOMAIN, 'https:'); }
 
@@ -146,12 +149,17 @@ async function runAgent(trigger: string): Promise<void> {
   let executor: ReturnType<RuntimeSession['requireReady']>;
   try { executor = runtime.requireReady(); }
   catch (error) { ui.setConnectionStatus(error instanceof Error ? error.message : String(error), 'error'); ui.showError(error instanceof Error ? error.message : String(error)); return; }
-  running = true; ui.setBusy(true); await log('info', `agent:${app.slug}`, 'Agent run started', { trigger }, app.slug); await refreshMessages();
+  const runController = new AbortController();
+  activeRun = runController;
+  running = true;
+  ui.setBusy(true);
   try {
+    await log('info', `agent:${app.slug}`, 'Agent run started', { trigger }, app.slug);
+    await refreshMessages();
     configureRegistry();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
-    const result = await runner.run({ appSlug: app.slug, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary });
+    const result = await runner.run({ appSlug: app.slug, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
     await log('info', `agent:${app.slug}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.slug);
     if (result.status === 'turn-limit') await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
   } catch (error) {
@@ -159,9 +167,11 @@ async function runAgent(trigger: string): Promise<void> {
     await log('error', `agent:${app.slug}`, message, error, app.slug);
     await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: `Agent stopped: ${message}` });
   } finally {
+    if (activeRun === runController) activeRun = undefined;
     running = false;
     const connection = runtimePresentation(runtime.state);
-    ui.setBusy(false, connection.status, connection.tone);
+    ui.setBusy(false);
+    ui.setConnectionStatus(connection.status, connection.tone);
     await refreshMessages();
   }
 }
@@ -227,8 +237,10 @@ function respond(message: BridgeMessage, payload: Parameters<typeof createBridge
 function toProtocolLog(item: LogEntry) { return { timestamp: item.timestamp, level: item.level, source: item.source, message: item.message, details: item.details }; }
 async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appSlug?: string) {
   const method = level === 'debug' ? 'debug' : level;
-  console[method](`[itsalive:${source}] ${message}`, ...(details === undefined ? [] : [details]));
-  await db.logs.add({ timestamp: Date.now(), level, source, message, details: serializableDetails(details), appSlug });
+  const safeMessage = String(sanitizeDiagnostic(message));
+  const safeDetails = sanitizeDiagnostic(serializableDetails(details));
+  console[method](`[itsalive:${source}] ${safeMessage}`, ...(safeDetails === undefined ? [] : [safeDetails]));
+  await db.logs.add({ timestamp: Date.now(), level, source, message: safeMessage, details: safeDetails, appSlug });
 }
 
 function serializableDetails(value: unknown): unknown {

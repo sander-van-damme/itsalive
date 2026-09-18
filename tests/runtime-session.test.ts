@@ -31,5 +31,6 @@ describe('RuntimeSession', () => {
     expect(runtimePresentation('error')).toEqual({ status: 'App runtime error', tone: 'error' });
     expect(runtimePresentation('disposed')).toEqual({ status: 'App disconnected', tone: 'error' });
     expect(runtimePresentation('ready')).toEqual({ status: 'App connected', tone: 'connected' });
+    expect(runtimePresentation('loading')).toEqual({ status: 'App connecting', tone: 'working' });
   });
 });

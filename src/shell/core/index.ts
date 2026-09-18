@@ -4,6 +4,7 @@ export * from "./bridge-executor";
 export * from "./runtime-session";
 export * from "./context";
 export * from "./database";
+export * from "./diagnostics";
 export * from "./history";
 export * from "./logs";
 export * from "./providers";

@@ -76,11 +76,8 @@ export class ShellUI {
 
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
 
-  setBusy(busy: boolean, _status?: string, _tone?: 'idle' | 'working' | 'connected' | 'error'): void {
-    void _status; void _tone;
+  setBusy(busy: boolean): void {
     this.busy = busy;
-    if (busy) this.runtimeState = 'working';
-    else if (this.runtimeState === 'working') this.runtimeState = 'ready';
     this.renderRail();
   }
 

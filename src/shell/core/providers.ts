@@ -1,4 +1,12 @@
 import type { Credential, GenerateRequest, GenerateResult, LlmAdapter } from "./types";
+import { sanitizeDiagnostic } from './diagnostics';
+
+export class ProviderResponseError extends Error {
+  constructor(message: string, readonly diagnostic: unknown) {
+    super(message);
+    this.name = 'ProviderResponseError';
+  }
+}
 
 export class ProviderRegistry {
   private readonly adapters = new Map<string, LlmAdapter>();
@@ -63,7 +71,11 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
       const text = format === "anthropic" ? json.content?.find(x => x.type === "text")?.text
         : format === "google" ? json.candidates?.[0]?.content?.parts?.map(x => x.text ?? "").join("")
         : json.choices?.[0]?.message?.content;
-      if (typeof text !== "string") throw new Error("Provider returned no text response");
+      if (typeof text !== "string") {
+        const diagnostic = sanitizeDiagnostic(json);
+        console.error(`[itsalive:provider] ${options.id} returned no text in the expected ${format} response location`, diagnostic);
+        throw new ProviderResponseError("Provider returned no text response", diagnostic);
+      }
       const usage = format === "anthropic" ? { inputTokens: json.usage?.input_tokens, outputTokens: json.usage?.output_tokens }
         : format === "google" ? { inputTokens: json.usageMetadata?.promptTokenCount, outputTokens: json.usageMetadata?.candidatesTokenCount }
         : { inputTokens: json.usage?.prompt_tokens, outputTokens: json.usage?.completion_tokens };
