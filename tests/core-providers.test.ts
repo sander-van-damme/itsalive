@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createHttpAdapter, ProviderRegistry, ProviderResponseError } from "../src/shell/core/providers";
+import { createDefaultRegistry, createHttpAdapter, ProviderRegistry, ProviderResponseError } from "../src/shell/core/providers";
 
 describe("ProviderRegistry", () => {
   afterEach(() => vi.restoreAllMocks());
+  it("exposes only OpenRouter in the default registry", () => {
+    expect(createDefaultRegistry().list()).toEqual(["openrouter"]);
+  });
+
   it("registers and routes neutral generation requests", async () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
