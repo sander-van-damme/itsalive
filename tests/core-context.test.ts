@@ -26,6 +26,8 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
     expect(SYSTEM_PROMPT).toMatch(/classes the LLM introduces dynamically after load/);
+    expect(SYSTEM_PROMPT).toMatch(/few coherent, verifiable mutations/);
+    expect(SYSTEM_PROMPT).toMatch(/inspect the result before declaring completion/);
   });
 
   it("always includes immutable and mandatory context plus every tool", () => {
@@ -37,6 +39,23 @@ describe("shell context builder", () => {
     expect(result.messages.at(-1)?.content).toContain("Help me");
   });
 
+  it("includes the current trigger and latest observation only once", () => {
+    const trigger = "Fix the empty screen";
+    const observation = '{"error":{"message":"Unexpected token"}}';
+    const history = [
+      { id: 1, appId: "app", timestamp: 1, role: "user" as const, kind: "chat" as const, content: trigger },
+      { id: 2, appId: "app", timestamp: 2, role: "agent" as const, kind: "javascript" as const, content: "return 1;" },
+      { id: 3, appId: "app", timestamp: 3, role: "observation" as const, kind: "error" as const, content: observation },
+    ];
+    const result = buildModelContext({ model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger, observation, tools: [], history });
+    const joined = result.messages.map(message => message.content).join("\n");
+
+    expect(joined.split(trigger)).toHaveLength(2);
+    expect(joined.split(observation)).toHaveLength(2);
+    expect(result.includedHistoryIds).not.toContain(1);
+    expect(result.includedHistoryIds).not.toContain(3);
+  });
+
   it("keeps newest fitting history rather than a fixed message count", () => {
     const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, maxOutputTokens: 100, observationHeadroomTokens: 100 };
     const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "user" as const, content: `message-${index} ${"x".repeat(80)}` }));
@@ -44,6 +63,27 @@ describe("shell context builder", () => {
     expect(result.omittedHistoryCount).toBeGreaterThan(0);
     expect(result.includedHistoryIds).toContain(19);
     expect(result.includedHistoryIds).not.toContain(0);
+  });
+
+  it("hard-bounds operational trace history even with a very large context window", () => {
+    const history = Array.from({ length: 30 }, (_, index) => ({
+      id: index + 1,
+      appId: "app",
+      timestamp: index,
+      role: index % 2 ? "observation" as const : "agent" as const,
+      kind: index % 2 ? "execution" as const : "javascript" as const,
+      content: `operation-${index} ${"x".repeat(1_000)}`,
+    }));
+    const result = buildModelContext({
+      model: { ...model, maxContextTokens: 128_000, maxOutputTokens: 8_192 },
+      appPrompt: "coach",
+      trigger: "tiny follow-up",
+      tools: [],
+      history,
+    });
+
+    expect(result.includedHistoryIds).toEqual([25, 26, 27, 28, 29, 30]);
+    expect(result.estimatedInputTokens).toBeLessThan(10_000);
   });
 
   it("rejects mandatory context that cannot fit rather than truncating system prompt", () => {
