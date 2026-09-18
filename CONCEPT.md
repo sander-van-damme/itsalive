@@ -284,7 +284,7 @@ inside its iframe.
 
 This guarantees that the shell is available for:
 
-- AI requests;
+- LLM requests;
 - chat;
 - model configuration;
 - credentials;
@@ -343,7 +343,7 @@ The app runtime may send:
 execution result
 execution error
 agent wake request
-AI request
+LLM request
 logs
 cron registration
 screenshot result
@@ -378,7 +378,7 @@ model selection
 The app may call:
 
 ```js
-await itsalive.ai.ask(...);
+await itsalive.llm.ask(...);
 ```
 
 but internally this becomes:
@@ -451,7 +451,7 @@ App subdomain
 │   ├── postMessage bridge
 │   ├── itsalive.dom inspection / refs / screenshots
 │   ├── single versioned window.itsalive API
-│   ├── itsalive.ai / itsalive.history bridge
+│   ├── itsalive.llm / itsalive.history bridge
 │   ├── custom-tool runtime
 │   └── persistence helpers
 │
@@ -625,9 +625,9 @@ surviving reload.
 
 ---
 
-# 11. Reusable UI uses Custom Elements
+# 11. Meaningful UI uses Custom Elements
 
-Reusable or meaningful interactive UI should prefer native **Custom Elements**.
+Meaningful application UI must use native **Custom Elements**. This is a hard generated-app platform contract, not a preference. Components should prefer light DOM so global Tailwind styling applies; Shadow DOM is reserved for cases that genuinely require isolation.
 
 Example:
 
@@ -679,14 +679,15 @@ The browser itself provides the reusable component model.
 
 The global system prompt should tell the agent:
 
-- prefer Custom Elements for reusable or meaningful interactive UI;
+- implement meaningful application UI as Custom Elements extending `HTMLElement` and register them with `customElements.define(...)`;
 - use clear semantic names;
 - keep important instance state in attributes or child content when practical;
 - make `connectedCallback()` idempotent;
 - do not blindly recreate child markup that already survived reload;
 - reconnect event behavior after reload;
 - reuse an existing suitable Custom Element before creating another;
-- do not create Custom Elements for trivial one-off markup.
+- prefer light DOM rather than defaulting to Shadow DOM;
+- do not create meaningless wrapper elements merely to satisfy the component rule.
 
 Native `<template>` remains available, but it is not the preferred convention.
 
@@ -700,6 +701,8 @@ Make these available in the app runtime:
 Tailwind CSS
 Lucide icons
 ```
+
+Tailwind is deliberately a browser-runtime capability, using the current `@tailwindcss/browser` integration. It must observe and compile utility classes introduced dynamically by the LLM after the app has loaded. This architecture intentionally does not use conventional build-time source scanning, because generated source is not known at build time.
 
 The agent is told:
 
@@ -819,7 +822,7 @@ itsalive.db.set(...)
 itsalive.db.delete(...)
 itsalive.db.query(...)
 
-itsalive.ai.ask(...)
+itsalive.llm.ask(...)
 itsalive.reload()
 
 itsalive.done(...)
@@ -1425,7 +1428,7 @@ LLM credentials remain on the root origin.
 
 Do not deliberately share them with app subdomains.
 
-The app requests AI operations through the bridge.
+The app requests LLM operations through the bridge.
 
 This is a major advantage of the subdomain architecture.
 
@@ -1492,7 +1495,9 @@ Use itsalive.db when data is large, non-visual, binary, query-heavy or awkward t
 
 CUSTOM ELEMENTS
 
-For reusable or meaningful interactive UI, prefer native Custom Elements.
+Meaningful application UI MUST be implemented as native Custom Elements: classes extending HTMLElement and registered with customElements.define(...). This is a hard platform rule, not a preference.
+
+Prefer light DOM so global Tailwind utilities work. Use Shadow DOM only when the component genuinely requires isolation.
 
 Use clear semantic custom-element names.
 
@@ -1508,11 +1513,15 @@ Make connectedCallback() idempotent:
 
 Reuse an existing suitable Custom Element before creating an equivalent one.
 
-Do not create Custom Elements for trivial one-off markup.
+Do not create meaningless wrapper Custom Elements solely to satisfy this rule.
+
+LAYOUT
+
+Apps must be responsive. Prefer a centered max-width content container where appropriate, Grid or Flexbox alignment, and consistent spacing. Default to one column on narrow layouts and expand when space permits. Avoid arbitrary fixed dimensions unless genuinely required. The runtime LLM may override these defaults when the app requires it.
 
 STYLING
 
-Tailwind CSS and Lucide icons are available.
+Tailwind CSS and Lucide icons are available. Tailwind is a runtime capability and may use utility classes introduced dynamically after load; do not assume build-time scanning.
 
 Use them when they make implementation simpler or clearer.
 You are not required to use them.

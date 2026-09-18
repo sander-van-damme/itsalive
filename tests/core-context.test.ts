@@ -6,12 +6,22 @@ const model = { id: "test", provider: "test", model: "test", maxContextTokens: 4
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
-    for (const current of ["itsalive.done", "itsalive.db", "itsalive.tools", "itsalive.history", "itsalive.dom"]) {
+    for (const current of ["itsalive.done", "itsalive.db", "itsalive.tools", "itsalive.history", "itsalive.dom", "itsalive.llm"]) {
       expect(SYSTEM_PROMPT).toContain(current);
     }
-    for (const obsolete of [/return\s+done\(/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
+    for (const obsolete of [/return\s+done\(/, /itsalive\.ai/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
       expect(SYSTEM_PROMPT).not.toMatch(obsolete);
     }
+  });
+
+  it("defines the generated UI and runtime styling contract", () => {
+    expect(SYSTEM_PROMPT).toMatch(/MUST be implemented as native Custom Elements/);
+    expect(SYSTEM_PROMPT).toContain("class TaskList extends HTMLElement");
+    expect(SYSTEM_PROMPT).toContain("customElements.define('task-list'");
+    expect(SYSTEM_PROMPT).toMatch(/Prefer light DOM/);
+    expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
+    expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
+    expect(SYSTEM_PROMPT).toMatch(/classes the LLM introduces dynamically after load/);
   });
 
   it("always includes immutable and mandatory context plus every tool", () => {

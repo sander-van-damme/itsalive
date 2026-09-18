@@ -23,9 +23,9 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Provider registry for OpenAI, Anthropic, Google, DeepSeek, OpenRouter, and OpenAI-compatible endpoints.
 - Compact DOM inspection with temporary references, literal history search, in-frame screenshots, and app log retrieval.
 - Durable app database helpers and agent-created custom tools.
-- App-to-shell AI requests and agent wake-ups.
+- App-to-shell LLM requests and agent wake-ups.
 - Stable cron registrations and callback dispatch protocol.
-- Tailwind CSS and Lucide availability in itsalive apps without imposing a generated framework.
+- Tailwind's browser runtime and Lucide availability in itsalive apps without imposing a generated framework. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
 ## Local development
@@ -90,14 +90,14 @@ itsalive.db.get(key)
 itsalive.db.set(key, value)
 itsalive.db.delete(key)
 itsalive.db.query(options)
-itsalive.ai.ask(prompt, options)
+itsalive.llm.ask(prompt, options)
 itsalive.reload()
 itsalive.done(message)
 ```
 
 The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Custom tools receive the same API object as `env.itsalive` alongside `document`, `window`, and `fetch`.
 
-Generated apps should keep natural, reasonably sized state in semantic HTML and use `itsalive.db` for large, binary, or query-heavy data. Reusable interactive UI should use idempotent native Custom Elements because documents and scripts may be restored at any time.
+Generated apps should keep natural, reasonably sized state in semantic HTML and use `itsalive.db` for large, binary, or query-heavy data. Meaningful application UI must use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should normally use light DOM so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply.
 
 ## Security notes
 

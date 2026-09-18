@@ -3,10 +3,14 @@ import type { inspectDom, ref } from "./inspect";
 import type { captureScreenshot } from "./screenshot";
 import type { createToolsApi } from "./tools";
 
+export interface LlmApi {
+  ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T>;
+}
+
 export interface ItsaliveRuntimeApi {
   readonly apiVersion: 1;
   readonly db: typeof appDatabaseApi;
-  readonly ai: Readonly<{ ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T> }>;
+  readonly llm: Readonly<LlmApi>;
   readonly history: Readonly<{ search(input: { query: string; limit?: number }): Promise<unknown> }>;
   readonly tools: Readonly<ReturnType<typeof createToolsApi>>;
   readonly agent: Readonly<{ wake(prompt: string): Promise<unknown> }>;

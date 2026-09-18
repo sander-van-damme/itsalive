@@ -48,9 +48,9 @@ export async function startAppRuntime(options: RuntimeOptions) {
     bridge.post({ type: "cron.register", registration: { callbackId: id, schedule } });
     return { id, schedule };
   };
-  const ai = Object.freeze({ ask: async <T = unknown>(prompt: unknown, settings?: unknown) => {
-      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "ai.request", prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt), options: settings && typeof settings === "object" ? settings as Record<string, unknown> : undefined }, 120_000);
-      if (response.type !== "ai.response") throw new Error(`Unexpected AI response: ${response.type}`);
+  const llm = Object.freeze({ ask: async <T = unknown>(prompt: unknown, settings?: unknown) => {
+      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "llm.request", prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt), options: settings && typeof settings === "object" ? settings as Record<string, unknown> : undefined }, 120_000);
+      if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
       if (response.error) throw new Error(response.error.message);
       return response.result as T;
     } });
@@ -65,7 +65,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const runtimeApi: ItsaliveRuntimeApi = Object.freeze({
     apiVersion: 1,
     db: Object.freeze(appDatabaseApi),
-    ai,
+    llm,
     history,
     tools: Object.freeze(tools),
     agent,

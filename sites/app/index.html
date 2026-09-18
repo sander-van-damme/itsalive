@@ -4,7 +4,9 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>itsalive</title>
-    <script data-app-runtime src="https://cdn.tailwindcss.com"></script>
+    <!-- Tailwind's browser runtime intentionally observes live markup so LLM-added
+         utility classes work after load; this is not a development-only build shortcut. -->
+    <script data-app-runtime src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <script data-app-runtime src="https://unpkg.com/lucide@latest"></script>
   </head>
   <body>
