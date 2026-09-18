@@ -99,8 +99,11 @@ function recentHistory(history: HistoryEntry[], trigger: string, observation?: s
   const operations = remaining.filter(isOperational).slice(-MAX_RECENT_OPERATION_ENTRIES);
   const compaction = remaining.filter(entry => entry.kind === "compaction").slice(-1);
 
-  return [...new Map([...chat, ...operations, ...compaction].map(entry => [entry.id ?? `${entry.timestamp}:${entry.role}:${entry.content}`, entry])).values()]
-    .sort((a, b) => a.timestamp - b.timestamp);
+  const unique = new Map<string | number, HistoryEntry>();
+  for (const entry of [...chat, ...operations, ...compaction]) {
+    unique.set(entry.id ?? `${entry.timestamp}:${entry.role}:${entry.content}`, entry);
+  }
+  return [...unique.values()].sort((a, b) => a.timestamp - b.timestamp);
 }
 
 function isOperational(entry: HistoryEntry): boolean {
