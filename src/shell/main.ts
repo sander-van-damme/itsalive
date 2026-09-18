@@ -1,7 +1,7 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, DiagnosticLog, InitialBuildIntent, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, deleteApp, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
-import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage } from '../shared';
+import { AgentRunner, CloudflareJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, deleteApp, formatReactionBatch, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -17,6 +17,7 @@ let activeRun: AbortController | undefined;
 let connectionTimer: number | undefined;
 const initialBuild = new InitialBuildIntent();
 const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
+const JEV_ESCALATION_THRESHOLD = 0.7;
 
 const OPENROUTER_PROVIDER = 'openrouter';
 const OPENROUTER_MODEL = 'openrouter/auto';
@@ -28,14 +29,17 @@ const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
 if (stored) {
   try {
-    const parsed = JSON.parse(stored) as { apiKey?: unknown };
-    settings = { apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '' };
+    const parsed = JSON.parse(stored) as { apiKey?: unknown; jevAccountId?: unknown; jevApiToken?: unknown };
+    settings = { apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '', ...(typeof parsed.jevAccountId === 'string' ? { jevAccountId: parsed.jevAccountId } : {}), ...(typeof parsed.jevApiToken === 'string' ? { jevApiToken: parsed.jevApiToken } : {}) };
     localStorage.setItem('itsalive.settings', JSON.stringify(settings));
   } catch (error) {
     console.warn('[itsalive] Ignoring invalid saved settings', error);
     localStorage.removeItem('itsalive.settings');
   }
 }
+
+const environmentalObservations: string[] = [];
+const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 
 const ui = new ShellUI(root, {
   createApp: async input => {
@@ -147,7 +151,7 @@ async function selectApp(id: string): Promise<void> {
 }
 
 function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); ui.setBusy(false); }
-function disposeFrame(): void { stopActiveRun('App runtime disposed'); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
+function disposeFrame(): void { stopActiveRun('App runtime disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
 function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
 
@@ -188,6 +192,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       tools,
       summary: app.summary,
       signal: runController.signal,
+      consumeEnvironmentObservations: () => environmentalObservations.splice(0),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
@@ -203,6 +208,10 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     ui.setConnectionStatus(connection.status, connection.tone);
     await refreshMessages();
     void startPendingInitialBuild();
+    if (environmentalObservations.length && runtime.state === 'ready') {
+      const trigger = environmentalObservations.splice(0).join('\n\n');
+      void runAgent(trigger, false);
+    }
   }
   return true;
 }
@@ -225,6 +234,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
   switch (message.type) {
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
+    case 'jev.request': await handleJevRequest(message); break;
     case 'llm.request': await handleLlmRequest(message); break;
     case 'cron.register': {
       const id = `${activeId}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
@@ -239,6 +249,33 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
       void startPendingInitialBuild();
       break;
   }
+}
+
+async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; state: JevState }): Promise<void> {
+  const startedAt = performance.now();
+  try {
+    if (!settings.jevAccountId || !settings.jevApiToken) throw new Error('Jev is not configured');
+    const decisionModel: DecisionModel = new CloudflareJevAdapter(settings.jevAccountId);
+    const result = await decisionModel.evaluate({ state: message.state }, { id: 'jev', type: 'bearer-token', value: settings.jevApiToken });
+    const escalated = result.probability >= JEV_ESCALATION_THRESHOLD;
+    await log('info', 'jev', 'Interaction decision', { probability: result.probability, threshold: JEV_ESCALATION_THRESHOLD, escalated, durationMs: Math.round(performance.now() - startedAt), snapshotCharacters: message.state.document.length, inputTokens: result.usage?.inputTokens }, activeId);
+    respond(message, { type: 'jev.response', probability: result.probability, escalated });
+    if (escalated) reactionBatcher.add(message.state);
+  } catch (error) {
+    await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message : String(error) }, activeId);
+    respond(message, { type: 'jev.response', probability: 0, escalated: false, error: serializeError(error) });
+  }
+}
+
+async function deliverReactionBatch(batch: ReactionBatch): Promise<void> {
+  const observation = formatReactionBatch(batch);
+  if (running) {
+    environmentalObservations.push(observation);
+    await log('info', 'reaction', 'Attached reaction batch to active agent', { size: batch.events.length }, activeId);
+    return;
+  }
+  await log('info', 'reaction', 'Starting agent for reaction batch', { size: batch.events.length }, activeId);
+  await runAgent(observation, false);
 }
 
 async function fireDueSchedules(): Promise<void> {

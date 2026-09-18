@@ -197,8 +197,7 @@ export class DiagnosticLog {
   }
 
   private persist(entry: LogEntry): void {
-    let pending: Promise<void>;
-    pending = this.db.logs.add(entry)
+    const pending: Promise<void> = this.db.logs.add(entry)
       .then(() => undefined)
       .catch(error => { this.native.error("[itsalive:logging] Failed to persist console entry", error); })
       .finally(() => { this.pending.delete(pending); });

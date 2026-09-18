@@ -61,6 +61,10 @@ export interface LlmAdapter {
   generate(request: GenerateRequest, credential?: Credential): Promise<GenerateResult>;
 }
 
+export interface DecisionRequest { state: unknown; signal?: AbortSignal; }
+export interface DecisionResult { probability: number; usage?: { inputTokens?: number }; raw?: unknown; }
+export interface DecisionModel { id: string; evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult>; }
+
 export interface LogEntry {
   id?: number;
   timestamp: number;

@@ -9,6 +9,7 @@ import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
 import { serializeError, shellUrlForApp } from "../shared";
+import { installInteractionObserver } from "./interactions";
 
 const DONE = Symbol("agent-done");
 
@@ -116,9 +117,10 @@ export async function startAppRuntime(options: RuntimeOptions) {
   addEventListener("message", listener);
 
   await loadSavedDocument();
+  const interactions = installInteractionObserver(bridge);
   const autosave = installAutosave(options.autosaveDelay);
   bridge.post({ type: "status", status: "ready", detail: appId });
-  return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); autosave.disconnect(); logs.destroy(); } };
+  return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); interactions.destroy(); bridge.destroy(); autosave.disconnect(); logs.destroy(); } };
 }
 
 export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {

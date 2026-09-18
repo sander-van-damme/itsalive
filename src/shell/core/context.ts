@@ -11,6 +11,7 @@ export interface ContextInput {
   tools: ToolSummary[];
   summary?: string;
   observation?: string;
+  environmentObservation?: string;
   history: HistoryEntry[];
   countTokens?: TokenCounter;
 }
@@ -43,6 +44,10 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     const maxObservation = Math.max(128, Math.min(headroom * 3, budget - used));
     const bounded = truncateToTokens(input.observation, maxObservation, count);
     const content = section("LAST EXECUTION OBSERVATION", bounded);
+    if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
+  }
+  if (input.environmentObservation) {
+    const content = section("NEW ENVIRONMENT OBSERVATION", truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count));
     if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
   }
   if (input.summary) {
