@@ -23,7 +23,7 @@ describe('AgentRunner lifecycle', () => {
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain the app', trigger: 'Make a change',
-      model, tools: [], maxTurns: 2,
+      model, maxTurns: 2,
     });
 
     expect(result).toEqual({ status: 'turn-limit', turns: 2 });
@@ -78,7 +78,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
     });
 
     expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
@@ -101,7 +101,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, tools: [], maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, maxTurns: 1,
     });
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
@@ -122,7 +122,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
     })).resolves.toEqual({ status: 'turn-limit', turns: 1 });
 
     expect(executor.execute).not.toHaveBeenCalled();
@@ -146,7 +146,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 12,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 12,
     })).rejects.toThrow(/invalid JavaScript 3 times in a row/);
 
     expect(providers.generate).toHaveBeenCalledTimes(3);
@@ -174,7 +174,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 3,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 3,
     });
 
     expect(result).toMatchObject({ status: 'done', turns: 2 });
@@ -195,7 +195,7 @@ describe('AgentRunner lifecycle', () => {
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain the app', trigger: 'Change it',
-      model, tools: [], signal: controller.signal,
+      model, signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(providers.generate).not.toHaveBeenCalled();
     expect(groupEnds).toHaveBeenCalledTimes(2);
@@ -216,7 +216,7 @@ describe('AgentRunner lifecycle', () => {
     await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'A durable detailed specification',
       trigger: 'Build the initial version of this app now.', persistTrigger: false,
-      model, tools: [],
+      model,
     });
 
     expect(entries).not.toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user' })]));
@@ -235,7 +235,7 @@ describe('AgentRunner lifecycle', () => {
 
     await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Add a chart',
-      model, tools: [],
+      model,
     });
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ role: 'user', kind: 'chat', content: 'Add a chart' }));
   });
@@ -251,7 +251,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const run = new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, tools: [], consumeEnvironmentObservations: consume });
+    const run = new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: consume });
     await vi.waitFor(() => expect(providers.generate).toHaveBeenCalledTimes(1));
     queue.push('The user changed tempo to 120.');
     release({ text: 'return "updated";' });
@@ -277,7 +277,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const result = await new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, tools: [], consumeEnvironmentObservations: () => queue.splice(0) });
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: () => queue.splice(0) });
     expect(result).toMatchObject({ status: 'done', turns: 2 });
     expect(providers.generate.mock.calls[1]![0].messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('A final user action arrived.') })]));
   });
