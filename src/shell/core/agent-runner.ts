@@ -319,7 +319,7 @@ function validateExecutableJavaScript(code: string): void {
 
 function generatedCodeObservation(error: GeneratedCodeError): string {
   const label = error.phase === "format" ? "Generated response was not usable JavaScript" : "Generated JavaScript did not parse";
-  return `${label}:\n${error.message}\nReturn exactly one complete executable JavaScript program with no prose or Markdown fences.`;
+  return `${label}:\n${error.message}\nReturn complete executable JavaScript commands wrapped with /* itsalive:command */ and /* itsalive:end */. Do not add prose or Markdown fences.`;
 }
 
 async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true } | { ok: false; reason: string }> {
