@@ -35,10 +35,24 @@ export interface RunOptions {
   consumeEnvironmentObservations?: () => string[];
 }
 
-export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
+export interface RunResult { status: "done" | "turn-limit" | "stalled"; message?: string; turns: number }
 
 const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
-const COMPLETION_INSPECTION = 'return document.body.innerHTML;';
+const PROGRESS_INSPECTION = 'return document.getElementById("itsalive-root")?.outerHTML ?? document.body.innerHTML;';
+const COMPLETION_INSPECTION = `
+const root = document.getElementById("itsalive-root");
+const outsideUiCount = Array.from(document.body.childNodes).filter(node => {
+  if (node === root || node.nodeType === Node.COMMENT_NODE) return false;
+  if (node.nodeType === Node.TEXT_NODE) return Boolean(node.textContent?.trim());
+  if (!(node instanceof Element)) return false;
+  return !node.matches('[data-app-runtime], itsalive-history, script, style, link, template, noscript');
+}).length;
+return {
+  rootHtml: root?.innerHTML ?? null,
+  rootCount: document.querySelectorAll('[id="itsalive-root"]').length,
+  outsideUiCount,
+};
+`;
 
 class GeneratedCodeError extends Error {
   constructor(readonly phase: "format" | "compile", message: string) {
@@ -60,6 +74,8 @@ export class AgentRunner {
     let observation: string | undefined;
     let environmentObservation: string | undefined;
     let consecutiveGenerationFailures = 0;
+    let repeatedLowSignalObservation: string | undefined;
+    let repeatedLowSignalState: string | undefined;
     const startedAt = performance.now();
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
@@ -144,15 +160,14 @@ export class AgentRunner {
               if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
                 throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
               }
+              repeatedLowSignalObservation = undefined;
+              repeatedLowSignalState = undefined;
+              console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
               console.info('Continuing to next turn for streamed command repair');
               continue;
             }
             result = streamedResult!;
             observation = streamedObservation;
-            if (result.error) {
-              console.info('A streamed command failed; continuing to next turn for repair');
-              continue;
-            }
           } else {
             let code: string;
             try {
@@ -174,12 +189,23 @@ export class AgentRunner {
               if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
                 throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
               }
+              repeatedLowSignalObservation = undefined;
+              repeatedLowSignalState = undefined;
+              console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
               console.info('Continuing to next turn for code repair');
               continue;
             }
             const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
             result = executed.result;
             observation = executed.observation;
+          }
+
+          if (result.error) {
+            repeatedLowSignalObservation = undefined;
+            repeatedLowSignalState = undefined;
+            console.info('Turn outcome', { kind: 'runtime-repair' });
+            console.info('A command failed; continuing to next turn for repair');
+            continue;
           }
 
           if (result.done) {
@@ -192,15 +218,45 @@ export class AgentRunner {
             const completion = await verifyCompletion(this.executor, options, controller.signal);
             if (!completion.ok) {
               observation = JSON.stringify({ completionCheck: { ok: false, reason: completion.reason } });
+              repeatedLowSignalObservation = undefined;
+              repeatedLowSignalState = undefined;
               console.warn('Completion check rejected', sanitizeDiagnostic(completion));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              console.info('Turn outcome', { kind: 'verification-repair' });
               console.info('Continuing to next turn after incomplete done()');
               continue;
             }
             if (result.message) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: result.message });
+            console.info('Turn outcome', { kind: 'done' });
             console.info('Run done', sanitizeDiagnostic({ turn, message: result.message }));
             return { status: "done", message: result.message, turns: turn };
           }
+
+          const rawObservation = observation;
+          if (rawObservation && isLowSignalObservation(rawObservation)) {
+            if (rawObservation === repeatedLowSignalObservation) {
+              const runtimeState = await inspectRuntimeProgress(this.executor, options, controller.signal);
+              if (runtimeState && repeatedLowSignalState && runtimeState === repeatedLowSignalState) {
+                const message = 'Repeated verification produced the same low-signal result without changing #itsalive-root. The run stopped early to avoid burning the remaining turn budget.';
+                observation = `${rawObservation}\n\nPlatform diagnostic: ${message}`;
+                await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+                console.warn('Verification stalled', { turn, kind: 'verification-stall' });
+                return { status: "stalled", message, turns: turn };
+              }
+              repeatedLowSignalState = runtimeState;
+              const diagnostic = 'Platform diagnostic: this verification returned the same low-signal result again. Do not repeat the same probe. Inspect #itsalive-root or use a different selector/diagnostic before continuing.';
+              observation = `${rawObservation}\n\n${diagnostic}`;
+              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              console.warn('Repeated low-signal verification', { turn, kind: 'verification-repair' });
+            } else {
+              repeatedLowSignalObservation = rawObservation;
+              repeatedLowSignalState = undefined;
+            }
+          } else {
+            repeatedLowSignalObservation = undefined;
+            repeatedLowSignalState = undefined;
+          }
+          console.info('Turn outcome', { kind: 'construction' });
           console.info('Continuing to next turn');
         } finally {
           console.groupEnd();
@@ -321,18 +377,68 @@ function generatedCodeObservation(error: GeneratedCodeError): string {
   return `${label}:\n${error.message}\nReturn complete executable JavaScript commands wrapped with /* itsalive:command */ and /* itsalive:end */. Do not add prose or Markdown fences.`;
 }
 
+async function inspectRuntimeProgress(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<string | undefined> {
+  try {
+    const inspection = await executor.execute(options.appId, PROGRESS_INSPECTION, {
+      signal,
+      timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
+    });
+    return !inspection.error && typeof inspection.value === "string" ? inspection.value : undefined;
+  } catch (error) {
+    console.warn('Progress inspection failed; continuing without stall detection', diagnosticError(error));
+    return undefined;
+  }
+}
+
 async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
     const inspection = await executor.execute(options.appId, COMPLETION_INSPECTION, {
       signal,
       timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
     });
-    if (inspection.error || typeof inspection.value !== "string") return { ok: true };
-    return assessCompletionTree(inspection.value);
+    if (inspection.error) return { ok: true };
+    if (isCompletionSnapshot(inspection.value)) {
+      if (inspection.value.rootCount !== 1 || inspection.value.rootHtml === null) {
+        return { ok: false, reason: "the app must preserve exactly one canonical #itsalive-root" };
+      }
+      if (inspection.value.outsideUiCount > 0) {
+        return { ok: false, reason: "user-visible UI exists outside the canonical #itsalive-root" };
+      }
+      return assessCompletionTree(inspection.value.rootHtml);
+    }
+    if (typeof inspection.value === "string") return assessCompletionTree(inspection.value);
+    return { ok: true };
   } catch (error) {
     console.warn('Completion inspection failed; accepting done()', diagnosticError(error));
     return { ok: true };
   }
+}
+
+function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number } {
+  if (!value || typeof value !== "object") return false;
+  const candidate = value as Record<string, unknown>;
+  return (typeof candidate.rootHtml === "string" || candidate.rootHtml === null)
+    && typeof candidate.rootCount === "number"
+    && typeof candidate.outsideUiCount === "number";
+}
+
+function isLowSignalObservation(observation: string): boolean {
+  try {
+    const parsed = JSON.parse(observation) as unknown;
+    if (!parsed || typeof parsed !== "object") return false;
+    const candidate = parsed as Record<string, unknown>;
+    return Object.prototype.hasOwnProperty.call(candidate, "value") && isLowSignalValue(candidate.value);
+  } catch {
+    return false;
+  }
+}
+
+function isLowSignalValue(value: unknown): boolean {
+  if (value === null || value === undefined || value === false || value === "") return true;
+  if (Array.isArray(value)) return value.length === 0;
+  if (!value || typeof value !== "object") return false;
+  const values = Object.values(value as Record<string, unknown>);
+  return values.length > 0 && values.every(isLowSignalValue);
 }
 
 function assessCompletionTree(html: string): { ok: true } | { ok: false; reason: string } {

@@ -104,6 +104,23 @@ describe("app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
   });
 
+  it("rejects UI appended beside the canonical app root and removes the duplicate surface", async () => {
+    const root = document.getElementById("itsalive-root");
+    expect(root).toBeTruthy();
+    window.dispatchEvent(new MessageEvent("message", { data: {
+      type: "execute",
+      code: "document.body.insertAdjacentHTML('beforeend', '<main data-duplicate-app>Duplicate</main>'); return 'added';",
+      requestId: "duplicate-root",
+    } }));
+    await nextTask();
+
+    const response = state.posts.find(({ requestId }) => requestId === "duplicate-root");
+    expect(response?.payload.type).toBe("execution.error");
+    expect(JSON.stringify(response?.payload)).toContain("#itsalive-root");
+    expect(document.querySelector("[data-duplicate-app]")).toBeNull();
+    expect(document.getElementById("itsalive-root")).toBe(root);
+  });
+
   it("keeps screenshot verification failures non-fatal", async () => {
     state.screenshotError = new Error("canvas export blocked");
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot-failure" } }));
