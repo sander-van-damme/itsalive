@@ -99,6 +99,18 @@ describe("app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
   });
 
+  it("keeps screenshot verification failures non-fatal", async () => {
+    state.screenshotError = new Error("canvas export blocked");
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot-failure" } }));
+    await nextTask();
+    state.screenshotError = undefined;
+
+    const response = state.posts.find(({ requestId }) => requestId === "screenshot-failure");
+    expect(response?.payload.type).toBe("result");
+    expect(String(response?.payload.result)).toContain("[screenshot unavailable:");
+    expect(state.posts.some(({ requestId, payload }) => requestId === "screenshot-failure" && payload.type === "execution.error")).toBe(false);
+  });
+
   it("returns only the current execution error instead of recursively embedding prior logs", async () => {
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'throw new Error("first failure");', requestId: "error-one" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'throw new Error("second failure");', requestId: "error-two" } }));
