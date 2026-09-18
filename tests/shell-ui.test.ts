@@ -84,17 +84,31 @@ describe('ShellUI workspace', () => {
     expect(callbacks.designApp).toHaveBeenCalledWith('Help plan meals');
   });
 
-  it('offers DeepSeek as a first-class provider', () => {
-    mounted();
+  it('shows only OpenRouter API key configuration', async () => {
+    const { callbacks } = mounted();
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
-    expect([...document.querySelectorAll<HTMLOptionElement>('#provider option')].map(option => option.value)).toContain('deepseek');
+
+    expect(document.querySelector('h2')?.textContent).toBe('OpenRouter');
+    expect(document.querySelector('#provider')).toBeNull();
+    expect(document.querySelector('#model')).toBeNull();
+    expect(document.querySelector('#endpoint')).toBeNull();
+    expect(document.querySelector('#contextTokens')).toBeNull();
+    expect(document.querySelector('#outputTokens')).toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('button[type=submit]')?.textContent).toBe('Save');
+
+    const apiKey = document.querySelector<HTMLInputElement>('#apiKey')!;
+    apiKey.value = 'sk-or-v1-test';
+    document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
+
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'sk-or-v1-test' }));
+    expect(document.querySelector('[data-result]')?.textContent).toContain('OpenRouter connection works');
   });
 
   it('routes creation to Settings until an LLM is configured', () => {
     mounted(false);
     document.querySelector<HTMLButtonElement>('[data-create]')!.click();
     expect(document.querySelector('h1')?.textContent).toBe('Settings');
-    expect(document.querySelector('.panel-heading p')?.textContent).toContain('Configure and test a model');
+    expect(document.querySelector('.panel-heading p')?.textContent).toContain('Add and test your OpenRouter API key');
   });
 
   it('renames from the app menu without changing app identity', () => {

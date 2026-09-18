@@ -2,7 +2,7 @@ import { createIcons, icons } from 'lucide';
 
 export interface AppSummary { id: string; name: string; prompt: string; createdAt: number; updatedAt: number }
 export interface ChatLine { id: string; role: 'user' | 'assistant' | 'system'; content: string; timestamp: number }
-export interface SettingsValue { provider: string; model: string; endpoint: string; apiKey: string; maxContextTokens: number; maxOutputTokens: number }
+export interface SettingsValue { apiKey: string }
 export type RuntimeViewState = 'loading' | 'ready' | 'working' | 'problem';
 type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
@@ -19,11 +19,6 @@ export interface ShellActions {
   reloadApp(): void;
 }
 
-const PROVIDERS = [
-  ['openai', 'OpenAI'], ['anthropic', 'Anthropic'], ['google', 'Google Gemini'],
-  ['deepseek', 'DeepSeek'], ['openrouter', 'OpenRouter'], ['compatible', 'OpenAI-compatible / Custom'],
-] as const;
-
 const esc = (value: string) => value.replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase() || 'IA';
 export function friendlyError(error: unknown, appName = 'This app'): string {
@@ -39,7 +34,7 @@ export class ShellUI {
   private apps: AppSummary[] = [];
   private active?: AppSummary;
   private messages: ChatLine[] = [];
-  private settings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
+  private settings: SettingsValue = { apiKey: '' };
   private busy = false;
   private runtimeState: RuntimeViewState = 'ready';
   private runtimeDetail = '';
@@ -292,43 +287,28 @@ export class ShellUI {
   }
 
   private renderSettings(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>${esc(this.settingsNotice || 'Your API key stays in this browser.')}</p></div></header>
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>${esc(this.settingsNotice || 'Add your OpenRouter API key.')}</p></div></header>
       <form class="scroll settings-form" data-settings-form>
-        <section class="settings-section" aria-labelledby="model-heading"><h2 id="model-heading">Model</h2>
-          <div class="field"><label for="provider">Provider</label><select id="provider">${PROVIDERS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>
-          <div class="field"><label for="model">Model</label><input id="model" required value="${esc(this.settings.model)}" placeholder="gpt-5-mini"></div>
-          <div class="field"><label for="apiKey">API key</label><input id="apiKey" type="password" value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Paste your API key"></div>
-          <button class="action primary full-width" type="submit">Save &amp; test</button><div class="settings-result" data-result role="status"></div>
+        <section class="settings-section" aria-labelledby="openrouter-heading"><h2 id="openrouter-heading">OpenRouter</h2>
+          <p>All AI requests use OpenRouter Auto.</p>
+          <div class="field"><label for="apiKey">OpenRouter API key</label><input id="apiKey" type="password" required value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Paste your OpenRouter API key"></div>
+          <p class="security-note">The key is stored by this site in your browser and is never shared with generated apps. Avoid saving a key on a shared device.</p>
+          <button class="action primary full-width" type="submit">Save</button><div class="settings-result" data-result role="status"></div>
         </section>
-        <details class="settings-section advanced" ${this.settings.provider === 'compatible' ? 'open' : ''}><summary>Advanced</summary>
-          <div class="advanced-content"><div class="field endpoint-field"><label for="endpoint">Custom endpoint</label><input id="endpoint" type="url" value="${esc(this.settings.endpoint)}" placeholder="https://api.example.com/v1"><p>Optional for known providers; required for custom providers.</p></div>
-          <div class="token-grid"><div class="field"><label for="contextTokens">Context limit</label><input id="contextTokens" type="number" min="1" value="${this.settings.maxContextTokens}"></div><div class="field"><label for="outputTokens">Output limit</label><input id="outputTokens" type="number" min="1" value="${this.settings.maxOutputTokens}"></div></div>
-          <p class="security-note">Keys are stored by this site in your browser and are never shared with generated apps. Avoid saving a key on a shared device.</p></div>
-        </details>
         <section class="settings-section diagnostics"><h2>Diagnostics</h2><p>Download technical session details for troubleshooting.</p><button class="action" type="button" data-export><i data-lucide="download" aria-hidden="true"></i>Export session logs</button></section>
       </form>`;
-    const provider = panel.querySelector<HTMLSelectElement>('#provider')!; provider.value = this.settings.provider;
-    const endpointField = panel.querySelector<HTMLElement>('.endpoint-field')!;
-    const updateEndpoint = () => endpointField.classList.toggle('prominent', provider.value === 'compatible'); updateEndpoint(); provider.onchange = updateEndpoint;
     panel.querySelector<HTMLButtonElement>('[data-close-settings]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
     panel.querySelector<HTMLButtonElement>('[data-export]')!.onclick = () => void this.actions.exportLogs();
-    panel.querySelector<HTMLFormElement>('[data-settings-form]')!.onsubmit = event => { event.preventDefault(); void this.handleSaveSettings(panel, provider); };
+    panel.querySelector<HTMLFormElement>('[data-settings-form]')!.onsubmit = event => { event.preventDefault(); void this.handleSaveSettings(panel); };
   }
 
-  private async handleSaveSettings(panel: HTMLElement, provider: HTMLSelectElement): Promise<void> {
+  private async handleSaveSettings(panel: HTMLElement): Promise<void> {
     const result = panel.querySelector<HTMLElement>('[data-result]')!;
     const button = panel.querySelector<HTMLButtonElement>('button[type=submit]')!;
     result.className = 'settings-result pending'; result.textContent = 'Testing…'; button.disabled = true;
-    const value: SettingsValue = {
-      provider: provider.value,
-      model: panel.querySelector<HTMLInputElement>('#model')!.value.trim(),
-      apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value,
-      endpoint: panel.querySelector<HTMLInputElement>('#endpoint')!.value.trim(),
-      maxContextTokens: Number(panel.querySelector<HTMLInputElement>('#contextTokens')!.value),
-      maxOutputTokens: Number(panel.querySelector<HTMLInputElement>('#outputTokens')!.value),
-    };
-    try { await this.actions.saveSettings(value); this.settingsNotice = ''; result.className = 'settings-result success'; result.textContent = 'Settings saved. Connection works. You can now create an app.'; }
-    catch { result.className = 'settings-result failure'; result.textContent = 'We couldn’t connect. Check these settings and try again.'; }
+    const value: SettingsValue = { apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim() };
+    try { await this.actions.saveSettings(value); this.settings = value; this.settingsNotice = ''; result.className = 'settings-result success'; result.textContent = 'API key saved. OpenRouter connection works. You can now create an app.'; }
+    catch { result.className = 'settings-result failure'; result.textContent = 'We couldn’t connect to OpenRouter. Check your API key and try again.'; }
     finally { button.disabled = false; }
   }
 
@@ -340,9 +320,8 @@ export class ShellUI {
   }
 
   private beginCreation(): void {
-    const usable = Boolean(this.settings.model.trim()) && (Boolean(this.settings.apiKey.trim()) || (this.settings.provider === 'compatible' && Boolean(this.settings.endpoint.trim())));
-    if (!usable) {
-      this.settingsNotice = 'Configure and test a model before creating an app.';
+    if (!this.settings.apiKey.trim()) {
+      this.settingsNotice = 'Add and test your OpenRouter API key before creating an app.';
       this.view = 'settings'; this.collapsed = false; this.renderRail(); return;
     }
     this.view = 'creation'; this.renderRail();

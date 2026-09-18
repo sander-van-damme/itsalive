@@ -106,9 +106,6 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
 
 export function createDefaultRegistry(): ProviderRegistry {
   return new ProviderRegistry()
-    .register(createHttpAdapter({ id: "openai", endpoint: "https://api.openai.com/v1/chat/completions" }))
-    .register(createHttpAdapter({ id: "anthropic", endpoint: "https://api.anthropic.com/v1/messages", format: "anthropic", headers: { "anthropic-version": "2023-06-01", "anthropic-dangerous-direct-browser-access": "true" } }))
-    .register(createHttpAdapter({ id: "deepseek", endpoint: "https://api.deepseek.com/chat/completions" }))
     .register(createHttpAdapter({ id: "openrouter", endpoint: "https://openrouter.ai/api/v1/chat/completions" }));
 }
 

@@ -20,7 +20,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Persistent app HTML with debounced autosave, live form-control normalization, restore, and script re-execution.
 - JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, and repair turns.
 - Context budgeting that always retains the immutable system prompt, app prompt, current trigger, and complete compact tool inventory.
-- Provider registry for OpenAI, Anthropic, Google, DeepSeek, OpenRouter, and OpenAI-compatible endpoints.
+- OpenRouter-only provider registry for the product runtime, backed by a generic HTTP adapter that can support additional providers later.
 - Compact DOM inspection with temporary references, literal history search, in-frame screenshots, and app log retrieval.
 - Durable app database helpers and agent-created custom tools.
 - App-to-shell LLM requests and agent wake-ups.
@@ -54,9 +54,9 @@ npm run lint         # ESLint
 
 ## Provider configuration
 
-Open **Settings** in the shell and select a provider, model, API credential, and context/output limits. A custom endpoint can override a built-in endpoint. For an OpenAI-compatible provider, enter the API base URL; the shell appends `/chat/completions`.
+Open **Settings** in the shell, add your OpenRouter API key, and press **Save**. The shell tests the key before saving it. All product LLM requests use OpenRouter's `openrouter/auto` model; provider, model, endpoint, and token-limit controls are intentionally not user-configurable.
 
-Provider requests happen directly from root-origin browser JavaScript. The provider must allow browser CORS requests. Credentials are saved only in root-origin `localStorage`; use the runtime only on a trusted device and origin.
+OpenRouter requests happen directly from root-origin browser JavaScript. Credentials are saved only in root-origin `localStorage`; use the runtime only on a trusted device and origin.
 
 ## Cloudflare Workers Static Assets
 
