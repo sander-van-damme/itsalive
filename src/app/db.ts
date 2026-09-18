@@ -1,6 +1,6 @@
 const DB_NAME = "itsalive-app-v2";
-const DB_VERSION = 1;
-export const STORES = { document: "document", tools: "tools" } as const;
+const DB_VERSION = 2;
+export const STORES = { document: "document" } as const;
 export type AppStore = typeof STORES[keyof typeof STORES];
 
 let database: Promise<IDBDatabase> | undefined;
@@ -25,7 +25,8 @@ export function openAppDatabase(): Promise<IDBDatabase> {
   database = new Promise((resolve, reject) => {
     const opening = indexedDB.open(DB_NAME, DB_VERSION);
     opening.onupgradeneeded = () => {
-      for (const name of Object.values(STORES)) opening.result.createObjectStore(name);
+      if (!opening.result.objectStoreNames.contains(STORES.document)) opening.result.createObjectStore(STORES.document);
+      if (opening.result.objectStoreNames.contains("tools")) opening.result.deleteObjectStore("tools");
     };
     opening.onsuccess = () => resolve(opening.result);
     opening.onerror = () => reject(opening.error ?? new Error("Unable to open app database"));
