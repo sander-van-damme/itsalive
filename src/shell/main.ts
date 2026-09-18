@@ -295,8 +295,15 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   const apiKey = candidate.apiKey.trim();
   if (!apiKey) throw new Error('OpenRouter API key is required');
   const testRegistry = createDefaultRegistry();
-  const model = { id: 'connection-test', provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS };
-  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: 8 }, { id: 'connection-test', type: 'api-key', value: apiKey });
+  const model: ModelConfig = {
+    id: 'connection-test',
+    provider: OPENROUTER_PROVIDER,
+    model: OPENROUTER_MODEL,
+    maxContextTokens: MODEL_CONTEXT_TOKENS,
+    maxOutputTokens: MODEL_OUTPUT_TOKENS,
+    options: { reasoning: { enabled: false } },
+  };
+  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: MODEL_OUTPUT_TOKENS }, { id: 'connection-test', type: 'api-key', value: apiKey });
   return { apiKey };
 }
 
