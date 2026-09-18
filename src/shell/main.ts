@@ -1,7 +1,7 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
 import { AgentRunner, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
-import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, normalizeAppSlug, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
+import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -9,10 +9,11 @@ if (!root) throw new Error('Shell mount point is missing');
 const db = new ShellDatabase();
 const registry = createDefaultRegistry();
 let apps: AppRecord[] = [];
-let activeSlug: string | undefined;
+let activeId: string | undefined;
 let running = false;
 let activeRun: AbortController | undefined;
 let connectionTimer: number | undefined;
+let pendingInitialAppId: string | undefined;
 
 const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
 const stored = localStorage.getItem('itsalive.settings');
@@ -24,15 +25,24 @@ if (stored) {
 
 const ui = new ShellUI(root, {
   createApp: async input => {
-    const slug = normalizeAppSlug(input.slug);
-    if (await db.apps.get(slug)) throw new Error(`An app named “${slug}” already exists.`);
+    const id = crypto.randomUUID();
     const now = Date.now();
-    await db.apps.put({ ...input, slug, summary: '', createdAt: now, updatedAt: now });
-    await refreshApps(slug);
+    await db.apps.put({ ...input, id, summary: '', createdAt: now, updatedAt: now });
+    pendingInitialAppId = id;
+    ui.setBusy(true);
+    ui.setConnectionStatus('Preparing your app…', 'working');
+    await refreshApps(id);
   },
-  selectApp: async slug => { await selectApp(slug); },
-  deleteApp: async slug => { await db.apps.delete(slug); if (activeSlug === slug) disposeFrame(); await refreshApps(apps.find(a => a.slug !== slug)?.slug); },
+  selectApp: async id => { await selectApp(id); },
+  deleteApp: async id => { await db.apps.delete(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id); },
   sendMessage: async content => { await runAgent(content); },
+  renameApp: async name => {
+    const app = currentApp(); if (!app) return;
+    const updated = renameAppRecord(app, name); await db.apps.put(updated);
+    apps = apps.map(item => item.id === updated.id ? updated : item); ui.setApps(apps as AppSummary[], updated.id);
+    document.title = `${updated.name} · itsalive`;
+    await log('info', `agent:${app.id}`, 'App renamed', { previousName: app.name, name: updated.name }, app.id);
+  },
   saveSettings: async value => {
     const candidate = await testModelConnection(value);
     settings = candidate;
@@ -41,21 +51,21 @@ const ui = new ShellUI(root, {
   },
   designApp: async goal => {
     configureRegistry();
-    const system = `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name and a DNS-safe lowercase slug. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY one complete JSON object with string fields "name", "slug", and "prompt". Do not use markdown.`;
+    const system = `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY one complete JSON object with string fields "name" and "prompt". Do not use markdown.`;
     const parsed = await generateAppProposal(goal, system);
-    return { name: parsed.name.trim().slice(0, 60), slug: normalizeAppSlug(parsed.slug), prompt: parsed.prompt.trim() };
+    return { name: parsed.name.trim().slice(0, 60), prompt: parsed.prompt.trim() };
   },
   exportLogs: async () => {
     const logs = await db.logs.all();
-    const selected = activeSlug ? logs.filter(item => !item.appSlug || item.appSlug === activeSlug) : logs;
+    const selected = activeId ? logs.filter(item => !item.appId || item.appId === activeId) : logs;
     const contents = selected.sort((a, b) => a.timestamp - b.timestamp).map(item => `${new Date(item.timestamp).toISOString()} [${item.level.toUpperCase()}] [${item.source}] ${item.message}${item.details === undefined ? '' : ` ${safeStringify(item.details)}`}`).join('\n');
     downloadText(`itsalive-logs-${Date.now()}.log`, contents || 'No log entries recorded.');
   },
   reloadApp: () => {
-    if (!activeSlug || !runtime.frame?.contentWindow) return;
+    if (!activeId || !runtime.frame?.contentWindow) return;
     runtime.setState('loading');
     ui.setConnectionStatus('Reloading app…', 'working');
-    runtime.frame?.contentWindow?.postMessage(createBridgeMessage(activeSlug, createRequestId(), { type: 'reload' }), currentOrigin());
+    runtime.frame?.contentWindow?.postMessage(createBridgeMessage(activeId, createRequestId(), { type: 'reload' }), currentOrigin());
   }
 });
 const runtime = new RuntimeSession(frame => ui.mountFrame(frame));
@@ -66,17 +76,17 @@ window.addEventListener('unhandledrejection', event => { void log('error', 'shel
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
 
-async function generateAppProposal(goal: string, system: string): Promise<{ name: string; slug: string; prompt: string }> {
+async function generateAppProposal(goal: string, system: string): Promise<{ name: string; prompt: string }> {
   let failure = 'invalid JSON';
   for (let attempt = 1; attempt <= 3; attempt++) {
     const repair = attempt === 1 ? goal : `${goal}\n\nYour previous response could not be parsed (${failure}). Return the complete JSON object again. Do not abbreviate or add commentary.`;
     const result = await registry.generate({ model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(settings.maxOutputTokens, 2000) }, credential());
     try {
-      const parsed = parseJsonObject(result.text) as { name?: unknown; slug?: unknown; prompt?: unknown };
-      if (typeof parsed.name !== 'string' || typeof parsed.slug !== 'string' || typeof parsed.prompt !== 'string') throw new Error('required string fields are missing');
-      if (!parsed.name.trim() || !parsed.slug.trim() || !parsed.prompt.trim()) throw new Error('required fields are empty');
+      const parsed = parseJsonObject(result.text) as { name?: unknown; prompt?: unknown };
+      if (typeof parsed.name !== 'string' || typeof parsed.prompt !== 'string') throw new Error('required string fields are missing');
+      if (!parsed.name.trim() || !parsed.prompt.trim()) throw new Error('required fields are empty');
       if (attempt > 1) await log('info', 'app-designer', `Recovered valid proposal on attempt ${attempt}`);
-      return parsed as { name: string; slug: string; prompt: string };
+      return parsed as { name: string; prompt: string };
     } catch (error) {
       failure = error instanceof Error ? error.message : String(error);
       await log('warn', 'app-designer', `Invalid model JSON on attempt ${attempt}/3: ${failure}`, { response: result.text.slice(0, 2_000) });
@@ -99,22 +109,22 @@ function parseJsonObject(text: string): unknown {
 async function refreshApps(select?: string): Promise<void> {
   apps = (await db.apps.list()).sort((a,b) => b.updatedAt - a.updatedAt);
   if (select) await selectApp(select); else {
-    if (activeSlug && !apps.some(a => a.slug === activeSlug)) activeSlug = undefined;
-    ui.setApps(apps as AppSummary[], activeSlug);
+    if (activeId && !apps.some(a => a.id === activeId)) activeId = undefined;
+    ui.setApps(apps as AppSummary[], activeId);
     await refreshMessages();
   }
 }
 
-async function selectApp(slug: string): Promise<void> {
-  if (!apps.some(a => a.slug === slug)) return;
-  if (activeSlug !== slug) stopActiveRun('App selection changed');
-  activeSlug = slug;
-  const url = new URL(location.href); url.searchParams.set('app', slug); history.replaceState(null, '', url);
+async function selectApp(id: string): Promise<void> {
+  if (!apps.some(a => a.id === id)) return;
+  if (activeId !== id) stopActiveRun('App selection changed');
+  activeId = id;
+  const url = new URL(location.href); url.searchParams.set('app', id); history.replaceState(null, '', url);
   disposeFrame();
   ui.setConnectionStatus('Connecting…', 'working');
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setConnectionStatus('App unavailable', 'error'); }, 10_000);
-  ui.setApps(apps as AppSummary[], slug);
-  const frame = runtime.switchTo(slug, currentOrigin());
+  ui.setApps(apps as AppSummary[], id);
+  const frame = runtime.switchTo(id, currentOrigin());
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); runtime.setState('error'); ui.setConnectionStatus('Connection failed', 'error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('Starting app…', 'working'); });
   await refreshMessages();
@@ -122,12 +132,12 @@ async function selectApp(slug: string): Promise<void> {
 
 function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); }
 function disposeFrame(): void { stopActiveRun('App runtime disposed'); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
-function currentApp(): AppRecord | undefined { return apps.find(a => a.slug === activeSlug); }
-function currentOrigin(): string { if (!activeSlug) throw new Error('No active app'); return appOrigin(activeSlug, ROOT_DOMAIN, 'https:'); }
+function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
+function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
 
 async function refreshMessages(): Promise<void> {
-  if (!activeSlug) return ui.setMessages([]);
-  const entries = (await db.history.forApp(activeSlug)).filter(e => e.kind === 'chat' && (e.role === 'user' || e.role === 'assistant'));
+  if (!activeId) return ui.setMessages([]);
+  const entries = (await db.history.forApp(activeId)).filter(e => e.kind === 'chat' && (e.role === 'user' || e.role === 'assistant'));
   ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map((e,i) => ({ id: String(e.id ?? i), role: e.role as ChatLine['role'], content: e.content, timestamp: e.timestamp })));
 }
 
@@ -154,18 +164,18 @@ async function runAgent(trigger: string): Promise<void> {
   running = true;
   ui.setBusy(true);
   try {
-    await log('info', `agent:${app.slug}`, 'Agent run started', { trigger }, app.slug);
+    await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
     await refreshMessages();
     configureRegistry();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
-    const result = await runner.run({ appSlug: app.slug, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
-    await log('info', `agent:${app.slug}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.slug);
-    if (result.status === 'turn-limit') await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
+    const result = await runner.run({ appId: app.id, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
+    await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
+    if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    await log('error', `agent:${app.slug}`, message, error, app.slug);
-    await db.history.add({ appSlug: app.slug, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: `Agent stopped: ${message}` });
+    await log('error', `agent:${app.id}`, message, error, app.id);
+    await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: `Agent stopped: ${message}` });
   } finally {
     if (activeRun === runController) activeRun = undefined;
     running = false;
@@ -177,18 +187,18 @@ async function runAgent(trigger: string): Promise<void> {
 }
 
 async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void> {
-  if (!activeSlug || !runtime.frame?.contentWindow) return;
-  const message = validateMessageEvent(event, { expectedOrigin: currentOrigin(), expectedAppSlug: activeSlug, expectedSource: runtime.frame.contentWindow, direction: 'to-shell' });
+  if (!activeId || !runtime.frame?.contentWindow) return;
+  const message = validateMessageEvent(event, { expectedOrigin: currentOrigin(), expectedAppId: activeId, expectedSource: runtime.frame.contentWindow, direction: 'to-shell' });
   if (!message || !isAppToShellMessage(message)) return;
   switch (message.type) {
-    case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeSlug); break;
-    case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeSlug, message.query, message.limit) }); break;
-    case 'logs.request': { const all = await db.logs.forApp(activeSlug); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
+    case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
+    case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
+    case 'logs.request': { const all = await db.logs.forApp(activeId); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
     case 'llm.request': await handleLlmRequest(message); break;
     case 'app.meta.update': await handleMetadataUpdate(message); break;
     case 'cron.register': {
-      const id = `${activeSlug}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
-      await db.schedules.put({ id, appSlug: activeSlug, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
+      const id = `${activeId}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
+      await db.schedules.put({ id, appId: activeId, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
       break;
     }
     case 'wake': if (!running) void runAgent(message.reason || 'The app requested an agent wake-up.'); break;
@@ -196,6 +206,10 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
       runtime.setState(message.status === 'ready' ? 'ready' : message.status === 'error' ? 'error' : 'loading');
       if (message.status === 'ready' && connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
       ui.setConnectionStatus(message.status === 'ready' ? 'Ready' : (message.detail || message.status), message.status === 'ready' ? 'connected' : (message.status === 'error' ? 'error' : 'working'));
+      if (message.status === 'ready' && pendingInitialAppId === activeId) {
+        const initial = currentApp(); pendingInitialAppId = undefined;
+        if (initial) { ui.setConnectionStatus('Building your first version…', 'working'); void runAgent(initial.prompt); }
+      }
       break;
   }
 }
@@ -203,17 +217,17 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
 async function handleMetadataUpdate(message: BridgeMessage & { type: 'app.meta.update'; metadata: { name: string } }): Promise<void> {
   try {
     const app = currentApp();
-    if (!app || app.slug !== message.appSlug) throw new Error('The selected app changed');
+    if (!app || app.id !== message.appId) throw new Error('The selected app changed');
     const updated = renameAppRecord(app, message.metadata.name);
     const name = updated.name;
     await db.apps.put(updated);
-    apps = apps.map(item => item.slug === updated.slug ? updated : item);
-    ui.setApps(apps as AppSummary[], updated.slug);
+    apps = apps.map(item => item.id === updated.id ? updated : item);
+    ui.setApps(apps as AppSummary[], updated.id);
     document.title = `${name} · itsalive`;
     respond(message, { type: 'app.meta.response', metadata: { name } });
-    await log('info', `agent:${app.slug}`, 'App renamed', { previousName: app.name, name }, app.slug);
+    await log('info', `agent:${app.id}`, 'App renamed', { previousName: app.name, name }, app.id);
   } catch (error) {
-    await log('error', 'app-metadata', error instanceof Error ? error.message : String(error), error, message.appSlug);
+    await log('error', 'app-metadata', error instanceof Error ? error.message : String(error), error, message.appId);
     respond(message, { type: 'app.meta.response', error: serializeError(error) });
   }
 }
@@ -221,9 +235,9 @@ async function handleMetadataUpdate(message: BridgeMessage & { type: 'app.meta.u
 async function fireDueSchedules(): Promise<void> {
   const now = Date.now();
   for (const schedule of await db.schedules.list()) {
-    if (!schedule.nextRun || schedule.nextRun > now || schedule.appSlug !== activeSlug || runtime.state !== 'ready' || !runtime.frame?.contentWindow) continue;
-    const callbackId = schedule.id.slice(schedule.appSlug.length + 1);
-    runtime.frame.contentWindow.postMessage(createBridgeMessage(schedule.appSlug, createRequestId(), { type: 'cron.fire', callbackId }), currentOrigin());
+    if (!schedule.nextRun || schedule.nextRun > now || schedule.appId !== activeId || runtime.state !== 'ready' || !runtime.frame?.contentWindow) continue;
+    const callbackId = schedule.id.slice(schedule.appId.length + 1);
+    runtime.frame.contentWindow.postMessage(createBridgeMessage(schedule.appId, createRequestId(), { type: 'cron.fire', callbackId }), currentOrigin());
     await db.schedules.put({ ...schedule, lastFired: now, nextRun: nextCronRun(schedule.expression, now) });
   }
 }
@@ -233,14 +247,14 @@ async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; 
   catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
-function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appSlug, message.requestId, payload), currentOrigin()); }
+function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appId, message.requestId, payload), currentOrigin()); }
 function toProtocolLog(item: LogEntry) { return { timestamp: item.timestamp, level: item.level, source: item.source, message: item.message, details: item.details }; }
-async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appSlug?: string) {
+async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appId?: string) {
   const method = level === 'debug' ? 'debug' : level;
   const safeMessage = String(sanitizeDiagnostic(message));
   const safeDetails = sanitizeDiagnostic(serializableDetails(details));
   console[method](`[itsalive:${source}] ${safeMessage}`, ...(safeDetails === undefined ? [] : [safeDetails]));
-  await db.logs.add({ timestamp: Date.now(), level, source, message: safeMessage, details: safeDetails, appSlug });
+  await db.logs.add({ timestamp: Date.now(), level, source, message: safeMessage, details: safeDetails, appId });
 }
 
 function serializableDetails(value: unknown): unknown {
@@ -250,14 +264,14 @@ function serializableDetails(value: unknown): unknown {
 
 async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>[2], timeoutMs = 10_000): Promise<T> {
   const frame = runtime.frame;
-  const requestSlug = activeSlug;
+  const requestAppId = activeId;
   const requestOrigin = runtime.origin;
-  if (!frame?.contentWindow || !requestSlug || !requestOrigin || runtime.state !== 'ready') throw new Error('App is not connected');
+  if (!frame?.contentWindow || !requestAppId || !requestOrigin || runtime.state !== 'ready') throw new Error('App is not connected');
   const requestId = createRequestId();
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(() => { window.removeEventListener('message', listener); reject(new Error('Runtime request timed out')); }, timeoutMs);
-    const listener = (event: MessageEvent) => { const msg = validateMessageEvent(event, { expectedOrigin: requestOrigin, expectedAppSlug: requestSlug, expectedSource: frame.contentWindow, direction: 'to-shell' }); if (!msg || msg.requestId !== requestId || msg.type !== 'result') return; clearTimeout(timer); window.removeEventListener('message', listener); resolve(msg.result as T); };
-    window.addEventListener('message', listener); frame.contentWindow!.postMessage(createBridgeMessage(requestSlug, requestId, payload), requestOrigin);
+    const listener = (event: MessageEvent) => { const msg = validateMessageEvent(event, { expectedOrigin: requestOrigin, expectedAppId: requestAppId, expectedSource: frame.contentWindow, direction: 'to-shell' }); if (!msg || msg.requestId !== requestId || msg.type !== 'result') return; clearTimeout(timer); window.removeEventListener('message', listener); resolve(msg.result as T); };
+    window.addEventListener('message', listener); frame.contentWindow!.postMessage(createBridgeMessage(requestAppId, requestId, payload), requestOrigin);
   });
 }
 

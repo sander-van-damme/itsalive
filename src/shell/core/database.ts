@@ -1,7 +1,27 @@
 import type { AppRecord, Credential, HistoryEntry, LogEntry, ModelConfig, ScheduleRecord } from "./types";
 
 const DB_NAME = "itsalive-shell";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
+
+type LegacyApp = Omit<AppRecord, "id"> & { slug: string };
+type LegacyAssociated = Record<string, unknown> & { appSlug?: string; appId?: string; id?: IDBValidKey };
+
+export function migrateLegacyRecords(apps: LegacyApp[], associated: LegacyAssociated[][]): { apps: AppRecord[]; associated: LegacyAssociated[][] } {
+  const ids = new Map(apps.map(app => [app.slug, crypto.randomUUID()]));
+  return {
+    apps: apps.map(({ slug, ...app }) => ({ ...app, id: ids.get(slug)! })),
+    associated: associated.map(rows => rows.map(row => {
+      const legacy = row.appSlug ?? row.appId;
+      const appId = legacy && ids.get(legacy);
+      const rest = { ...row };
+      delete rest.appSlug;
+      if (!appId) return rest;
+      const migrated = { ...rest, appId };
+      if (typeof migrated.id === "string" && migrated.id.startsWith(`${legacy}:`)) migrated.id = `${appId}:${migrated.id.slice(legacy!.length + 1)}`;
+      return migrated;
+    })),
+  };
+}
 
 type Store = "apps" | "history" | "credentials" | "models" | "logs" | "schedules";
 
@@ -31,24 +51,45 @@ export class ShellDatabase {
       const open = indexedDB.open(this.name, DB_VERSION);
       open.onerror = () => reject(open.error ?? new Error("Could not open shell database"));
       open.onblocked = () => reject(new Error("Shell database upgrade is blocked by another tab"));
-      open.onupgradeneeded = () => {
+      open.onupgradeneeded = event => {
         const db = open.result;
-        if (!db.objectStoreNames.contains("apps")) db.createObjectStore("apps", { keyPath: "slug" });
+        if (event.oldVersion === 1) {
+          const names = ["apps", "history", "logs", "schedules"] as const;
+          const reads = names.map(name => open.transaction!.objectStore(name).getAll());
+          let complete = 0;
+          for (const read of reads) read.onsuccess = () => {
+            if (++complete !== reads.length) return;
+            const migrated = migrateLegacyRecords(reads[0]!.result as LegacyApp[], [reads[1]!.result, reads[2]!.result, reads[3]!.result]);
+            for (const name of names) db.deleteObjectStore(name);
+            const appStore = db.createObjectStore("apps", { keyPath: "id" });
+            const historyStore = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
+            historyStore.createIndex("appTimestamp", ["appId", "timestamp"]); historyStore.createIndex("appId", "appId");
+            const logsStore = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
+            logsStore.createIndex("timestamp", "timestamp"); logsStore.createIndex("appId", "appId");
+            const schedulesStore = db.createObjectStore("schedules", { keyPath: "id" }); schedulesStore.createIndex("appId", "appId");
+            migrated.apps.forEach(row => appStore.put(row));
+            migrated.associated[0]!.forEach(row => historyStore.put(row));
+            migrated.associated[1]!.forEach(row => logsStore.put(row));
+            migrated.associated[2]!.forEach(row => schedulesStore.put(row));
+          };
+          return;
+        }
+        if (!db.objectStoreNames.contains("apps")) db.createObjectStore("apps", { keyPath: "id" });
         if (!db.objectStoreNames.contains("credentials")) db.createObjectStore("credentials", { keyPath: "id" });
         if (!db.objectStoreNames.contains("models")) db.createObjectStore("models", { keyPath: "id" });
         if (!db.objectStoreNames.contains("schedules")) {
           const store = db.createObjectStore("schedules", { keyPath: "id" });
-          store.createIndex("appSlug", "appSlug");
+          store.createIndex("appId", "appId");
         }
         if (!db.objectStoreNames.contains("history")) {
           const store = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
-          store.createIndex("appTimestamp", ["appSlug", "timestamp"]);
-          store.createIndex("appSlug", "appSlug");
+          store.createIndex("appTimestamp", ["appId", "timestamp"]);
+          store.createIndex("appId", "appId");
         }
         if (!db.objectStoreNames.contains("logs")) {
           const store = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
           store.createIndex("timestamp", "timestamp");
-          store.createIndex("appSlug", "appSlug");
+          store.createIndex("appId", "appId");
         }
       };
       open.onsuccess = () => {
@@ -91,9 +132,9 @@ export class ShellDatabase {
 
   apps = {
     list: () => this.all<AppRecord>("apps"),
-    get: (slug: string) => this.get<AppRecord>("apps", slug),
+    get: (id: string) => this.get<AppRecord>("apps", id),
     put: (app: AppRecord) => this.put("apps", app),
-    delete: (slug: string) => this.delete("apps", slug),
+    delete: (id: string) => this.delete("apps", id),
   };
   credentials = {
     list: () => this.all<Credential>("credentials"),
@@ -109,16 +150,16 @@ export class ShellDatabase {
   };
   history = {
     add: async (entry: HistoryEntry) => Number(await this.put("history", entry)),
-    forApp: (slug: string) => this.byIndex<HistoryEntry>("history", "appSlug", slug),
+    forApp: (id: string) => this.byIndex<HistoryEntry>("history", "appId", id),
   };
   logs = {
     add: async (entry: LogEntry) => Number(await this.put("logs", entry)),
     all: () => this.all<LogEntry>("logs"),
-    forApp: (slug: string) => this.byIndex<LogEntry>("logs", "appSlug", slug),
+    forApp: (id: string) => this.byIndex<LogEntry>("logs", "appId", id),
   };
   schedules = {
     list: () => this.all<ScheduleRecord>("schedules"),
-    forApp: (slug: string) => this.byIndex<ScheduleRecord>("schedules", "appSlug", slug),
+    forApp: (id: string) => this.byIndex<ScheduleRecord>("schedules", "appId", id),
     put: (item: ScheduleRecord) => this.put("schedules", item),
     delete: (id: string) => this.delete("schedules", id),
   };

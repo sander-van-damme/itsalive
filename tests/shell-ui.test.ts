@@ -2,14 +2,15 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShellUI, friendlyError, type AppSummary, type ShellActions } from '../src/shell/ui';
 
-const app: AppSummary = { slug: 'fiddlemate-secret-slug', name: 'FiddleMate', prompt: 'Build music tools', createdAt: 1, updatedAt: 1 };
-const other: AppSummary = { slug: 'budget-pal-secret-slug', name: 'Budget Pal', prompt: 'Budgeting', createdAt: 2, updatedAt: 2 };
+const app: AppSummary = { id: 'fiddlemate-secret-id', name: 'FiddleMate', prompt: 'Build music tools', createdAt: 1, updatedAt: 1 };
+const other: AppSummary = { id: 'budget-pal-secret-id', name: 'Budget Pal', prompt: 'Budgeting', createdAt: 2, updatedAt: 2 };
 
 function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
-    designApp: vi.fn().mockResolvedValue({ name: 'Recipe Buddy', slug: 'recipe-buddy-secret', prompt: 'Plan friendly meals' }),
+    renameApp: vi.fn().mockResolvedValue(undefined),
+    designApp: vi.fn().mockResolvedValue({ name: 'Recipe Buddy', prompt: 'Plan friendly meals' }),
     exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
 }
@@ -20,7 +21,7 @@ describe('ShellUI workspace', () => {
   function mounted(selected = true) {
     const callbacks = actions();
     const ui = new ShellUI(document.querySelector('#app')!, callbacks);
-    ui.setApps([app, other], selected ? app.slug : undefined);
+    ui.setApps([app, other], selected ? app.id : undefined);
     const frame = document.createElement('iframe');
     if (selected) ui.mountFrame(frame);
     return { ui, frame, callbacks };
@@ -38,9 +39,9 @@ describe('ShellUI workspace', () => {
     document.querySelector<HTMLButtonElement>('[data-switcher]')!.click();
     const switcher = document.querySelector('.app-switcher')!;
     expect(switcher.textContent).toContain('Budget Pal');
-    expect(switcher.textContent).not.toContain(other.slug);
-    document.querySelector<HTMLButtonElement>(`[data-select-app="${other.slug}"]`)!.click();
-    expect(callbacks.selectApp).toHaveBeenCalledWith(other.slug);
+    expect(switcher.textContent).not.toContain(other.id);
+    document.querySelector<HTMLButtonElement>(`[data-select-app="${other.id}"]`)!.click();
+    expect(callbacks.selectApp).toHaveBeenCalledWith(other.id);
   });
 
   it('does not destroy the iframe during ordinary sidebar interactions', () => {
@@ -67,11 +68,12 @@ describe('ShellUI workspace', () => {
     expect(callbacks.reloadApp).toHaveBeenCalledOnce();
     document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
     document.querySelector<HTMLButtonElement>('[data-delete]')!.click();
-    expect(callbacks.deleteApp).toHaveBeenCalledWith(app.slug);
+    expect(callbacks.deleteApp).toHaveBeenCalledWith(app.id);
   });
 
-  it('does not expose the generated slug in a creation proposal', async () => {
-    const { callbacks } = mounted(false);
+  it('does not expose the generated id in a creation proposal', async () => {
+    const { callbacks, ui } = mounted(false);
+    ui.setSettings({ apiKey: 'configured' });
     document.querySelector<HTMLButtonElement>('[data-create]')!.click();
     const goal = document.querySelector<HTMLTextAreaElement>('#goal')!;
     goal.value = 'Help plan meals';
@@ -86,6 +88,23 @@ describe('ShellUI workspace', () => {
     mounted();
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
     expect([...document.querySelectorAll<HTMLOptionElement>('#provider option')].map(option => option.value)).toContain('deepseek');
+  });
+
+  it('routes creation to Settings until an LLM is configured', () => {
+    mounted(false);
+    document.querySelector<HTMLButtonElement>('[data-create]')!.click();
+    expect(document.querySelector('h1')?.textContent).toBe('Settings');
+    expect(document.querySelector('.panel-heading p')?.textContent).toContain('Configure and test a model');
+  });
+
+  it('renames from the app menu without changing app identity', () => {
+    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('New Fiddle Name');
+    const { callbacks } = mounted();
+    document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-rename]')!.click();
+    expect(prompt).toHaveBeenCalledWith('Rename app', app.name);
+    expect(callbacks.renameApp).toHaveBeenCalledWith('New Fiddle Name');
+    expect(callbacks.selectApp).not.toHaveBeenCalled();
   });
 
   it('keeps agent busy state independent from runtime connection state', () => {

@@ -1,4 +1,4 @@
-import { isValidAppSlug } from "./domain";
+import { isValidAppId } from "./domain";
 import { isValidId } from "./ids";
 import type { SerializedError } from "./serialization";
 
@@ -43,7 +43,7 @@ export type BridgePayload = ShellToAppPayload | AppToShellPayload;
 export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   protocol: typeof BRIDGE_PROTOCOL;
   version: typeof BRIDGE_VERSION;
-  appSlug: string;
+  appId: string;
   requestId: string;
 };
 
@@ -56,7 +56,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => value !==
 /** Structural validation at the untrusted postMessage boundary. */
 export function isBridgeMessage(value: unknown): value is BridgeMessage {
   if (!isObject(value) || value.protocol !== BRIDGE_PROTOCOL || value.version !== BRIDGE_VERSION ||
-      !isValidAppSlug(value.appSlug) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
+      !isValidAppId(value.appId) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
   switch (value.type) {
     case "execute": return typeof value.code === "string";
     case "llm.request": return typeof value.prompt === "string";
@@ -88,25 +88,25 @@ export function isLogRecord(value: unknown): value is LogRecord {
     ["debug", "info", "warn", "error"].includes(String(value.level)) && typeof value.source === "string" && typeof value.message === "string";
 }
 
-export function createBridgeMessage<P extends BridgePayload>(appSlug: string, requestId: string, payload: P): BridgeMessage<P> {
-  if (!isValidAppSlug(appSlug)) throw new Error("Invalid app slug");
+export function createBridgeMessage<P extends BridgePayload>(appId: string, requestId: string, payload: P): BridgeMessage<P> {
+  if (!isValidAppId(appId)) throw new Error("Invalid app id");
   if (!isValidId(requestId)) throw new Error("Invalid request ID");
-  return { protocol: BRIDGE_PROTOCOL, version: BRIDGE_VERSION, appSlug, requestId, ...payload } as BridgeMessage<P>;
+  return { protocol: BRIDGE_PROTOCOL, version: BRIDGE_VERSION, appId, requestId, ...payload } as BridgeMessage<P>;
 }
 
 export interface MessageValidationOptions {
   expectedOrigin: string;
-  expectedAppSlug: string;
+  expectedAppId: string;
   expectedSource?: MessageEventSource | null;
   direction: "to-app" | "to-shell";
 }
 
-/** Validates origin, source window, slug, envelope, direction and correlation ID together. */
+/** Validates origin, source window, id, envelope, direction and correlation ID together. */
 export function validateMessageEvent(event: MessageEvent<unknown>, options: MessageValidationOptions): BridgeMessage | null {
   let expectedOrigin: string;
   try { expectedOrigin = new URL(options.expectedOrigin).origin; } catch { return null; }
   if (event.origin !== expectedOrigin || (options.expectedSource !== undefined && event.source !== options.expectedSource)) return null;
-  if (!isBridgeMessage(event.data) || event.data.appSlug !== options.expectedAppSlug) return null;
+  if (!isBridgeMessage(event.data) || event.data.appId !== options.expectedAppId) return null;
   const validDirection = options.direction === "to-app"
     ? SHELL_TYPES.has(event.data.type as ShellToAppPayload["type"])
     : APP_TYPES.has(event.data.type as AppToShellPayload["type"]);

@@ -9,7 +9,7 @@ const state = vi.hoisted(() => ({
 }));
 
 vi.mock("../src/app/bridge", () => ({
-  slugFromHostname: () => "test-app",
+  idFromHostname: () => "test-app",
   AppBridge: class {
     post(payload: Record<string, unknown>, requestId?: string) { state.posts.push({ payload, requestId }); }
     validate(event: MessageEvent) { return event.data; }
@@ -58,7 +58,7 @@ describe("app runtime namespace", () => {
   beforeAll(async () => {
     state.posts.length = 0;
     const { startAppRuntime } = await import("../src/app/runtime");
-    await startAppRuntime({ rootOrigin: "https://itsalive.test", appSlug: "test-app" });
+    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "test-app" });
   });
 
   it("installs one immutable, versioned facade without replacing native history", () => {

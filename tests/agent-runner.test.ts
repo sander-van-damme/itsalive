@@ -19,7 +19,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appSlug: 'test-app', appPrompt: 'Maintain the app', trigger: 'Make a change',
+      appId: 'test-app', appPrompt: 'Maintain the app', trigger: 'Make a change',
       model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 },
       tools: [], maxTurns: 2,
     });
@@ -45,7 +45,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appSlug: 'test-app', appPrompt: 'Maintain the app', trigger: 'Change it',
+      appId: 'test-app', appPrompt: 'Maintain the app', trigger: 'Change it',
       model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 },
       tools: [], signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });

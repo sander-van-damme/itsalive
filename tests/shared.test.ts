@@ -2,16 +2,16 @@ import { describe, expect, it } from "vitest";
 import {
   ROOT_DOMAIN,
   appOrigin,
-  appSlugFromUrl,
+  appIdFromUrl,
   createBridgeMessage,
   createRequestId,
   isAppToShellMessage,
   isBridgeMessage,
   isExpectedAppOrigin,
   isShellToAppMessage,
-  isValidAppSlug,
+  isValidAppId,
   isValidId,
-  normalizeAppSlug,
+  normalizeAppId,
   parseRootDomain,
   safeStringify,
   serializeError,
@@ -20,29 +20,31 @@ import {
   validateMessageEvent,
 } from "../src/shared";
 
+const APP_ID = "550e8400-e29b-41d4-a716-446655440000";
+
 describe("domain helpers", () => {
   it("uses the canonical itsalive.org root domain", () => {
     expect(ROOT_DOMAIN).toBe("itsalive.org");
   });
 
   it("normalizes valid DNS labels and rejects invalid labels", () => {
-    expect(normalizeAppSlug("  My-App  ")).toBe("my-app");
-    expect(isValidAppSlug("my-app-2")).toBe(true);
+    expect(normalizeAppId(`  ${APP_ID.toUpperCase()}  `)).toBe(APP_ID);
+    expect(isValidAppId(APP_ID)).toBe(true);
     for (const invalid of ["", "two.parts", "-start", "end-", "white space", "a".repeat(64)]) {
-      expect(isValidAppSlug(invalid)).toBe(false);
-      expect(() => normalizeAppSlug(invalid)).toThrow();
+      expect(isValidAppId(invalid)).toBe(false);
+      expect(() => normalizeAppId(invalid)).toThrow();
     }
   });
 
   it("constructs exact root and immediate app origins including development ports", () => {
     expect(parseRootDomain("example.com").origin).toBe("https://example.com");
     expect(parseRootDomain("http://localhost:5173").origin).toBe("http://localhost:5173");
-    expect(appOrigin("Violin", "https://Example.COM:8443")).toBe("https://violin.example.com:8443");
-    expect(appSlugFromUrl("https://violin.example.com/path", "example.com")).toBe("violin");
-    expect(appSlugFromUrl("https://nested.violin.example.com", "example.com")).toBeNull();
-    expect(appSlugFromUrl("https://evil-example.com", "example.com")).toBeNull();
-    expect(isExpectedAppOrigin("https://violin.example.com", "violin", "example.com")).toBe(true);
-    expect(isExpectedAppOrigin("https://evil.example.com", "violin", "example.com")).toBe(false);
+    expect(appOrigin(APP_ID, "https://Example.COM:8443")).toBe(`https://${APP_ID}.example.com:8443`);
+    expect(appIdFromUrl(`https://${APP_ID}.example.com/path`, "example.com")).toBe(APP_ID);
+    expect(appIdFromUrl(`https://nested.${APP_ID}.example.com`, "example.com")).toBeNull();
+    expect(appIdFromUrl("https://evil-example.com", "example.com")).toBeNull();
+    expect(isExpectedAppOrigin(`https://${APP_ID}.example.com`, APP_ID, "example.com")).toBe(true);
+    expect(isExpectedAppOrigin("https://evil.example.com", APP_ID, "example.com")).toBe(false);
   });
 });
 
@@ -50,8 +52,8 @@ describe("bridge protocol", () => {
   it("builds and recognizes messages by direction", () => {
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
-    const execute = createBridgeMessage("violin", requestId, { type: "execute", code: "return 1" });
-    const result = createBridgeMessage("violin", requestId, { type: "result", result: 1 });
+    const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
+    const result = createBridgeMessage(APP_ID, requestId, { type: "result", result: 1 });
     expect(isBridgeMessage(execute)).toBe(true);
     expect(isShellToAppMessage(execute)).toBe(true);
     expect(isAppToShellMessage(execute)).toBe(false);
@@ -59,8 +61,8 @@ describe("bridge protocol", () => {
   });
 
   it("uses the LLM request and response protocol without legacy AI message aliases", () => {
-    const request = createBridgeMessage("violin", "req_llm123", { type: "llm.request", prompt: "compose" });
-    const response = createBridgeMessage("violin", "req_llm123", { type: "llm.response", result: "done" });
+    const request = createBridgeMessage(APP_ID, "req_llm123", { type: "llm.request", prompt: "compose" });
+    const response = createBridgeMessage(APP_ID, "req_llm123", { type: "llm.response", result: "done" });
     expect(isAppToShellMessage(request)).toBe(true);
     expect(isShellToAppMessage(response)).toBe(true);
     expect(isBridgeMessage({ ...request, type: "ai.request" })).toBe(false);
@@ -68,15 +70,15 @@ describe("bridge protocol", () => {
   });
 
   it("rejects malformed, unknown, and mismatched messages", () => {
-    const valid = createBridgeMessage("math", "req_1234", { type: "execute", code: "return 2" });
+    const valid = createBridgeMessage(APP_ID, "req_1234", { type: "execute", code: "return 2" });
     expect(isBridgeMessage({ ...valid, type: "unknown" })).toBe(false);
-    expect(isBridgeMessage({ ...valid, appSlug: "not.valid" })).toBe(false);
+    expect(isBridgeMessage({ ...valid, appId: "not.valid" })).toBe(false);
     expect(isBridgeMessage({ ...valid, requestId: "?" })).toBe(false);
     expect(isBridgeMessage({ ...valid, code: 42 })).toBe(false);
   });
 
   it("supports validated shell-to-app cron callback delivery", () => {
-    const fire = createBridgeMessage("math", "req_cron123", { type: "cron.fire", callbackId: "daily-review" });
+    const fire = createBridgeMessage(APP_ID, "req_cron123", { type: "cron.fire", callbackId: "daily-review" });
     expect(isShellToAppMessage(fire)).toBe(true);
     expect(isAppToShellMessage(fire)).toBe(false);
     expect(isBridgeMessage({ ...fire, callbackId: "" })).toBe(false);
@@ -84,26 +86,26 @@ describe("bridge protocol", () => {
   });
 
   it("validates the complete MessageEvent trust boundary", () => {
-    const data = createBridgeMessage("math", "req_1234", { type: "result", result: 2 });
+    const data = createBridgeMessage(APP_ID, "req_1234", { type: "result", result: 2 });
     const source = {} as MessageEventSource;
-    const event = { data, origin: "https://math.example.com", source } as MessageEvent<unknown>;
+    const event = { data, origin: `https://${APP_ID}.example.com`, source } as MessageEvent<unknown>;
     expect(validateMessageEvent(event, {
-      expectedOrigin: "https://math.example.com/path",
-      expectedAppSlug: "math",
+      expectedOrigin: `https://${APP_ID}.example.com/path`,
+      expectedAppId: APP_ID,
       expectedSource: source,
       direction: "to-shell",
     })).toEqual(data);
     expect(validateMessageEvent({ ...event, origin: "https://evil.example" } as MessageEvent, {
-      expectedOrigin: "https://math.example.com", expectedAppSlug: "math", expectedSource: source,
+      expectedOrigin: `https://${APP_ID}.example.com`, expectedAppId: APP_ID, expectedSource: source,
       direction: "to-shell",
     })).toBeNull();
     const staleSource = {} as MessageEventSource;
     expect(validateMessageEvent({ ...event, source: staleSource } as MessageEvent, {
-      expectedOrigin: "https://math.example.com", expectedAppSlug: "math", expectedSource: source,
+      expectedOrigin: `https://${APP_ID}.example.com`, expectedAppId: APP_ID, expectedSource: source,
       direction: "to-shell",
     })).toBeNull();
-    expect(validateMessageEvent({ ...event, data: { ...data, appSlug: "old-app" } } as MessageEvent, {
-      expectedOrigin: "https://math.example.com", expectedAppSlug: "math", expectedSource: source,
+    expect(validateMessageEvent({ ...event, data: { ...data, appId: "old-app" } } as MessageEvent, {
+      expectedOrigin: `https://${APP_ID}.example.com`, expectedAppId: APP_ID, expectedSource: source,
       direction: "to-shell",
     })).toBeNull();
   });

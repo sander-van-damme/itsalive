@@ -14,11 +14,11 @@ export interface ExecutionResult {
 }
 
 export interface AppExecutor {
-  execute(appSlug: string, code: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult>;
+  execute(appId: string, code: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult>;
 }
 
 export interface RunOptions {
-  appSlug: string;
+  appId: string;
   appPrompt: string;
   trigger: string;
   model: ModelConfig;
@@ -47,15 +47,15 @@ export class AgentRunner {
     const maxTurns = options.maxTurns ?? 12;
     let observation: string | undefined;
     const startedAt = performance.now();
-    console.groupCollapsed(`[itsalive:agent] Run · ${options.appSlug}`);
+    console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
     try {
-      await appendHistory(this.db, { appSlug: options.appSlug, role: "user", kind: "chat", content: options.trigger });
+      await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
       for (let turn = 1; turn <= maxTurns; turn++) {
         console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
         try {
           if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
-          const history = await this.db.history.forApp(options.appSlug);
+          const history = await this.db.history.forApp(options.appId);
           const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, history, countTokens: options.countTokens });
           console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, toolCount: options.tools.length, hasObservation: Boolean(observation) });
           const requestStartedAt = performance.now();
@@ -70,11 +70,11 @@ export class AgentRunner {
           console.info(`Model response (${Math.round(performance.now() - requestStartedAt)}ms)`, sanitizeDiagnostic({ text: generated.text, usage: generated.usage, raw: generated.raw }));
           const code = stripAccidentalFence(generated.text);
           console.info('Executable JavaScript', sanitizeDiagnostic(code));
-          await appendHistory(this.db, { appSlug: options.appSlug, role: "agent", kind: "javascript", content: code });
+          await appendHistory(this.db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
           const executionStartedAt = performance.now();
           let result;
           try {
-            result = await this.executor.execute(options.appSlug, code, { signal: controller.signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
+            result = await this.executor.execute(options.appId, code, { signal: controller.signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
           } catch (error) {
             console.error(`Runtime execution failed (${Math.round(performance.now() - executionStartedAt)}ms)`, diagnosticError(error));
             throw error;
@@ -83,9 +83,9 @@ export class AgentRunner {
           if (result.error) console.error('Runtime execution error', sanitizeDiagnostic(result.error));
           observation = boundObservation(result, options.maxObservationCharacters ?? 16_000);
           console.info('Observation', sanitizeDiagnostic(observation));
-          await appendHistory(this.db, { appSlug: options.appSlug, role: "observation", kind: result.error ? "error" : "execution", content: observation });
+          await appendHistory(this.db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
           if (result.done) {
-            if (result.message) await appendHistory(this.db, { appSlug: options.appSlug, role: "assistant", kind: "chat", content: result.message });
+            if (result.message) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: result.message });
             console.info('Run done', sanitizeDiagnostic({ turn, message: result.message }));
             return { status: "done", message: result.message, turns: turn };
           }

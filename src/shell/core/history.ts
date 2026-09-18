@@ -3,10 +3,10 @@ import type { HistoryEntry } from "./types";
 
 export interface HistoryMatch { timestamp: number; role: string; snippet: string; id?: number }
 
-export async function searchHistory(db: ShellDatabase, appSlug: string, query: string, limit = 20): Promise<HistoryMatch[]> {
+export async function searchHistory(db: ShellDatabase, appId: string, query: string, limit = 20): Promise<HistoryMatch[]> {
   const needle = query.trim().toLocaleLowerCase();
   if (!needle) return [];
-  const entries = await db.history.forApp(appSlug);
+  const entries = await db.history.forApp(appId);
   return entries
     .filter(entry => entry.content.toLocaleLowerCase().includes(needle))
     .sort((a, b) => b.timestamp - a.timestamp)

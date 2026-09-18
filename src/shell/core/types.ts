@@ -1,7 +1,7 @@
 export type HistoryRole = "user" | "assistant" | "agent" | "observation" | "system";
 
 export interface AppRecord {
-  slug: string;
+  id: string;
   name: string;
   prompt: string;
   summary: string;
@@ -11,7 +11,7 @@ export interface AppRecord {
 
 export interface HistoryEntry {
   id?: number;
-  appSlug: string;
+  appId: string;
   timestamp: number;
   role: HistoryRole;
   content: string;
@@ -66,12 +66,12 @@ export interface LogEntry {
   level: "debug" | "info" | "warn" | "error";
   message: string;
   details?: unknown;
-  appSlug?: string;
+  appId?: string;
 }
 
 export interface ScheduleRecord {
   id: string;
-  appSlug: string;
+  appId: string;
   expression: string;
   registeredAt: number;
   lastFired?: number;

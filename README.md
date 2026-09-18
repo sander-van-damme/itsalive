@@ -11,7 +11,7 @@ This repository produces two independent static builds:
 | Root shell | `dist-root/` | `itsalive.org` | Apps, Chat, Settings, histories, provider calls, agent loop |
 | App runtime | `dist-app/` | `*.itsalive.org` | Persistent document, execution bridge, tools, database, screenshots |
 
-The only connection between the two origins is a versioned `postMessage` protocol. Every message is checked for its exact origin, source window, app slug, direction, request ID, and payload shape. Provider credentials remain in root-origin storage and are never sent into app frames.
+The only connection between the two origins is a versioned `postMessage` protocol. Every message is checked for its exact origin, source window, immutable app UUID, direction, request ID, and payload shape. Each app UUID is also its permanent wildcard subdomain; display names can be changed independently. Provider credentials remain in root-origin storage and are never sent into app frames.
 
 ## Included capabilities
 
@@ -67,7 +67,7 @@ npx wrangler deploy
 npx wrangler deploy --config wrangler.app.toml
 ```
 
-Configure the first Worker route/custom domain for the exact root host and the second for the wildcard host. Configure DNS and certificates for both. The generated assets use SPA fallback so app-slug subdomains serve the same runtime bootstrap.
+Configure the first Worker route/custom domain for the exact root host and the second for the wildcard host. Configure DNS and certificates for both. The generated assets use SPA fallback so UUID app subdomains serve the same runtime bootstrap.
 
 ## Runtime API
 

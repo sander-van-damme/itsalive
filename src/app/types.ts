@@ -3,14 +3,14 @@ export type BridgeRequestType = "execute" | "ready" | "metadata" | "reload";
 export interface BridgeEnvelope<T = unknown> {
   type: string;
   id?: string;
-  appSlug?: string;
+  appId?: string;
   payload?: T;
   code?: string;
 }
 
 export interface RuntimeOptions {
   rootOrigin: string;
-  appSlug?: string;
+  appId?: string;
   autosaveDelay?: number;
   maxResultBytes?: number;
   screenshot?: (element: HTMLElement) => Promise<string>;

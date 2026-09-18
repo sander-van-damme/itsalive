@@ -1,6 +1,6 @@
 import { createIcons, icons } from 'lucide';
 
-export interface AppSummary { slug: string; name: string; prompt: string; createdAt: number; updatedAt: number }
+export interface AppSummary { id: string; name: string; prompt: string; createdAt: number; updatedAt: number }
 export interface ChatLine { id: string; role: 'user' | 'assistant' | 'system'; content: string; timestamp: number }
 export interface SettingsValue { provider: string; model: string; endpoint: string; apiKey: string; maxContextTokens: number; maxOutputTokens: number }
 export type RuntimeViewState = 'loading' | 'ready' | 'working' | 'problem';
@@ -8,12 +8,13 @@ type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
 
 export interface ShellActions {
-  createApp(input: { name: string; slug: string; prompt: string }): Promise<void>;
-  selectApp(slug: string): Promise<void>;
-  deleteApp(slug: string): Promise<void>;
+  createApp(input: { name: string; prompt: string }): Promise<void>;
+  selectApp(id: string): Promise<void>;
+  deleteApp(id: string): Promise<void>;
   sendMessage(content: string): Promise<void>;
+  renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
-  designApp(goal: string): Promise<{ name: string; slug: string; prompt: string }>;
+  designApp(goal: string): Promise<{ name: string; prompt: string }>;
   exportLogs(): Promise<void>;
   reloadApp(): void;
 }
@@ -47,19 +48,20 @@ export class ShellUI {
   private switcherOpen = false;
   private actionsOpen = false;
   private chatNearBottom = true;
+  private settingsNotice = '';
 
   constructor(private readonly mount: HTMLElement, private readonly actions: ShellActions) {
     this.renderShell();
     document.addEventListener('keydown', this.handleDocumentKeydown);
   }
 
-  setApps(apps: AppSummary[], activeSlug?: string): void {
-    const previousSlug = this.active?.slug;
+  setApps(apps: AppSummary[], activeId?: string): void {
+    const previousId = this.active?.id;
     this.apps = apps;
-    this.active = apps.find(app => app.slug === activeSlug);
+    this.active = apps.find(app => app.id === activeId);
     if (this.active) this.view = 'workspace';
     else if (this.view === 'workspace') this.view = 'launcher';
-    if (previousSlug !== this.active?.slug) {
+    if (previousId !== this.active?.id) {
       this.switcherOpen = false;
       this.actionsOpen = false;
       this.mobileView = 'chat';
@@ -173,13 +175,14 @@ export class ShellUI {
 
   private renderAppSwitcher(): string {
     return `<div class="popover app-switcher" role="menu" aria-label="Switch app">
-      <div class="menu-list">${this.apps.map(app => `<button type="button" role="menuitem" class="menu-item" data-select-app="${esc(app.slug)}" ${app.slug === this.active?.slug ? 'aria-current="true"' : ''}><span class="app-icon small">${esc(initials(app.name))}</span><span>${esc(app.name)}</span>${app.slug === this.active?.slug ? '<i data-lucide="check" aria-hidden="true"></i>' : ''}</button>`).join('')}</div>
+      <div class="menu-list">${this.apps.map(app => `<button type="button" role="menuitem" class="menu-item" data-select-app="${esc(app.id)}" ${app.id === this.active?.id ? 'aria-current="true"' : ''}><span class="app-icon small">${esc(initials(app.name))}</span><span>${esc(app.name)}</span>${app.id === this.active?.id ? '<i data-lucide="check" aria-hidden="true"></i>' : ''}</button>`).join('')}</div>
       <button type="button" role="menuitem" class="menu-item new-app" data-new><i data-lucide="plus" aria-hidden="true"></i><span>New app</span></button>
     </div>`;
   }
 
   private renderAppMenu(): string {
     return `<div class="popover app-menu" role="menu" aria-label="App actions">
+      <button class="menu-item" role="menuitem" type="button" data-rename><i data-lucide="pencil" aria-hidden="true"></i><span>Rename app</span></button>
       <button class="menu-item" role="menuitem" type="button" data-reload><i data-lucide="refresh-cw" aria-hidden="true"></i><span>Reload app</span></button>
       <button class="menu-item danger" role="menuitem" type="button" data-delete><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete app</span></button>
     </div>`;
@@ -211,7 +214,8 @@ export class ShellUI {
     rail.querySelector<HTMLButtonElement>('[data-mobile-app]')!.onclick = () => { this.mobileView = 'app'; this.renderRail(); };
     this.mount.querySelector<HTMLButtonElement>('[data-mobile-chat]')!.onclick = () => { this.mobileView = 'chat'; this.renderRail(); };
     rail.querySelectorAll<HTMLButtonElement>('[data-select-app]').forEach(button => button.onclick = () => { this.switcherOpen = false; this.view = 'workspace'; void this.actions.selectApp(button.dataset.selectApp ?? ''); });
-    rail.querySelector<HTMLButtonElement>('[data-new]')?.addEventListener('click', () => { this.switcherOpen = false; this.view = 'creation'; this.renderRail(); });
+    rail.querySelector<HTMLButtonElement>('[data-new]')?.addEventListener('click', () => { this.switcherOpen = false; this.beginCreation(); });
+    rail.querySelector<HTMLButtonElement>('[data-rename]')?.addEventListener('click', () => this.handleRename());
     rail.querySelector<HTMLButtonElement>('[data-reload]')?.addEventListener('click', () => { this.actionsOpen = false; this.actions.reloadApp(); this.renderRail(); });
     rail.querySelector<HTMLButtonElement>('[data-delete]')?.addEventListener('click', () => this.handleDelete());
   }
@@ -229,11 +233,11 @@ export class ShellUI {
   private renderLauncher(panel: HTMLElement): void {
     panel.innerHTML = `<header class="panel-heading"><p class="eyebrow">Workspace</p><h1>Your apps</h1><p>Choose an app or start something new.</p></header>
       <div class="scroll launcher-content">
-        <div class="launcher-list">${this.apps.map(app => `<button class="launcher-item" data-launch-app="${esc(app.slug)}" type="button"><span class="app-icon">${esc(initials(app.name))}</span><strong>${esc(app.name)}</strong><i data-lucide="arrow-right" aria-hidden="true"></i></button>`).join('')}</div>
+        <div class="launcher-list">${this.apps.map(app => `<button class="launcher-item" data-launch-app="${esc(app.id)}" type="button"><span class="app-icon">${esc(initials(app.name))}</span><strong>${esc(app.name)}</strong><i data-lucide="arrow-right" aria-hidden="true"></i></button>`).join('')}</div>
         <button class="action primary full-width" data-create type="button"><i data-lucide="plus" aria-hidden="true"></i>Create new app</button>
       </div>`;
     panel.querySelectorAll<HTMLButtonElement>('[data-launch-app]').forEach(button => button.onclick = () => void this.actions.selectApp(button.dataset.launchApp ?? ''));
-    panel.querySelector<HTMLButtonElement>('[data-create]')!.onclick = () => { this.view = 'creation'; this.renderRail(); };
+    panel.querySelector<HTMLButtonElement>('[data-create]')!.onclick = () => this.beginCreation();
   }
 
   private renderChat(panel: HTMLElement): void {
@@ -288,7 +292,7 @@ export class ShellUI {
   }
 
   private renderSettings(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>Your API key stays in this browser.</p></div></header>
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>${esc(this.settingsNotice || 'Your API key stays in this browser.')}</p></div></header>
       <form class="scroll settings-form" data-settings-form>
         <section class="settings-section" aria-labelledby="model-heading"><h2 id="model-heading">Model</h2>
           <div class="field"><label for="provider">Provider</label><select id="provider">${PROVIDERS.map(([value, label]) => `<option value="${value}">${label}</option>`).join('')}</select></div>
@@ -323,7 +327,7 @@ export class ShellUI {
       maxContextTokens: Number(panel.querySelector<HTMLInputElement>('#contextTokens')!.value),
       maxOutputTokens: Number(panel.querySelector<HTMLInputElement>('#outputTokens')!.value),
     };
-    try { await this.actions.saveSettings(value); result.className = 'settings-result success'; result.textContent = 'Settings saved. Connection works.'; }
+    try { await this.actions.saveSettings(value); this.settingsNotice = ''; result.className = 'settings-result success'; result.textContent = 'Settings saved. Connection works. You can now create an app.'; }
     catch { result.className = 'settings-result failure'; result.textContent = 'We couldn’t connect. Check these settings and try again.'; }
     finally { button.disabled = false; }
   }
@@ -331,7 +335,24 @@ export class ShellUI {
   private handleDelete(): void {
     if (!this.active) return;
     this.actionsOpen = false;
-    if (confirm(`Delete “${this.active.name}”?\n\nThis removes the app and its conversation history.`)) void this.actions.deleteApp(this.active.slug);
+    if (confirm(`Delete “${this.active.name}”?\n\nThis removes the app and its conversation history.`)) void this.actions.deleteApp(this.active.id);
+    else this.renderRail();
+  }
+
+  private beginCreation(): void {
+    const usable = Boolean(this.settings.model.trim()) && (Boolean(this.settings.apiKey.trim()) || (this.settings.provider === 'compatible' && Boolean(this.settings.endpoint.trim())));
+    if (!usable) {
+      this.settingsNotice = 'Configure and test a model before creating an app.';
+      this.view = 'settings'; this.collapsed = false; this.renderRail(); return;
+    }
+    this.view = 'creation'; this.renderRail();
+  }
+
+  private handleRename(): void {
+    if (!this.active) return;
+    this.actionsOpen = false;
+    const name = prompt('Rename app', this.active.name);
+    if (name !== null && name.trim() && name.trim() !== this.active.name) void this.actions.renameApp(name);
     else this.renderRail();
   }
 

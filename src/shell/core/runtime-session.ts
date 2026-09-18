@@ -14,22 +14,22 @@ export class RuntimeSession {
   frame: HTMLIFrameElement | undefined;
   executor: PostMessageExecutor | undefined;
   state: RuntimeState = 'disposed';
-  appSlug: string | undefined;
+  appId: string | undefined;
   origin: string | undefined;
 
   constructor(private readonly mount: (frame: HTMLIFrameElement) => void) {}
 
-  switchTo(appSlug: string, origin: string): HTMLIFrameElement {
+  switchTo(appId: string, origin: string): HTMLIFrameElement {
     this.dispose();
     const frame = document.createElement('iframe');
     frame.allow = 'camera; microphone; geolocation; clipboard-read; clipboard-write';
     frame.referrerPolicy = 'strict-origin';
     frame.src = origin;
     this.frame = frame;
-    this.appSlug = appSlug;
+    this.appId = appId;
     this.origin = origin;
     this.state = 'loading';
-    this.executor = new PostMessageExecutor(frame, appSlug, origin);
+    this.executor = new PostMessageExecutor(frame, appId, origin);
     this.mount(frame);
     return frame;
   }
@@ -49,7 +49,7 @@ export class RuntimeSession {
     this.frame?.remove();
     this.executor = undefined;
     this.frame = undefined;
-    this.appSlug = undefined;
+    this.appId = undefined;
     this.origin = undefined;
     this.state = 'disposed';
   }
