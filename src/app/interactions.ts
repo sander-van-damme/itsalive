@@ -25,18 +25,58 @@ function describe(element: Element): InteractionSnapshot["target"] {
   return { tag: element.localName.slice(0, 100), ...(element.id ? { id: (redactAttribute("id", element.id) ?? "").slice(0, 200) } : {}), ...(value !== undefined ? { value } : {}), ...(Object.keys(state).length ? { state } : {}) };
 }
 
-function readRecord(node: Element): InteractionSnapshot {
-  return { seq: Number(node.getAttribute("seq")), at: node.getAttribute("at") ?? "", type: node.getAttribute("type") ?? "", target: { tag: node.getAttribute("target") ?? "unknown", ...(node.getAttribute("target-id") ? { id: node.getAttribute("target-id")! } : {}) }, actualTarget: { tag: node.getAttribute("actual-target") ?? node.getAttribute("target") ?? "unknown", ...(node.hasAttribute("value") ? { value: node.getAttribute("value")! } : {}) } };
+function readTarget(node: Element | null, fallback: InteractionSnapshot["target"]): InteractionSnapshot["target"] {
+  if (!node) return fallback;
+  let state: Record<string, string | boolean> | undefined;
+  try {
+    const parsed: unknown = JSON.parse(node.getAttribute("state") ?? "null");
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) state = parsed as Record<string, string | boolean>;
+  } catch { /* A malformed persisted field must not break interaction handling. */ }
+  return { tag: node.getAttribute("tag") ?? fallback.tag, ...(node.hasAttribute("id") ? { id: node.getAttribute("id")! } : {}), ...(node.hasAttribute("value") ? { value: node.getAttribute("value")! } : {}), ...(state ? { state } : {}) };
+}
+
+/** Reads both the rich current record format and the legacy attribute-only format. */
+export function readInteractionRecord(node: Element): InteractionSnapshot {
+  const legacyTarget = { tag: node.getAttribute("target") ?? "unknown", ...(node.getAttribute("target-id") ? { id: node.getAttribute("target-id")! } : {}) };
+  const legacyActual = { tag: node.getAttribute("actual-target") ?? legacyTarget.tag, ...(node.hasAttribute("value") ? { value: node.getAttribute("value")! } : {}) };
+  return { seq: Number(node.getAttribute("seq")), at: node.getAttribute("at") ?? "", type: node.getAttribute("type") ?? "", target: readTarget(node.querySelector(":scope > itsalive-target"), legacyTarget), actualTarget: readTarget(node.querySelector(":scope > itsalive-actual-target"), legacyActual), ...(node.hasAttribute("key") ? { key: node.getAttribute("key")! } : {}) };
+}
+
+function writeTarget(name: "itsalive-target" | "itsalive-actual-target", value: InteractionSnapshot["target"]): Element {
+  const node = document.createElement(name);
+  node.setAttribute("tag", value.tag);
+  if (value.id !== undefined) node.setAttribute("id", value.id);
+  if (value.value !== undefined) node.setAttribute("value", value.value);
+  if (value.state && Object.keys(value.state).length) node.setAttribute("state", JSON.stringify(value.state));
+  return node;
 }
 
 export function installInteractionObserver(bridge: AppBridge, options: ObserverOptions = {}) {
+  const ownerDocument = document;
   let sequence = Math.max(0, ...Array.from(document.querySelectorAll("itsalive-interaction")).map(node => Number(node.getAttribute("seq")) || 0));
   let destroyed = false, inFlight = 0;
   let pending: { state: Parameters<typeof send>[0]; element: Element } | undefined;
   let compacting = false;
+  let preserving = false;
   const maxInFlight = Math.max(1, Math.min(options.maxInFlight ?? 2, 8));
   const rawLimit = Math.max(RECENT_LIMIT, options.historyRawLimit ?? DEFAULT_HISTORY_RAW_LIMIT);
   const maxHistoryCharacters = Math.max(8_000, options.maxHistoryCharacters ?? 32_000);
+  const existingHistories = [...ownerDocument.querySelectorAll("itsalive-history")];
+  const history = existingHistories.shift() ?? ownerDocument.body.appendChild(Object.assign(ownerDocument.createElement("itsalive-history"), { hidden: true }));
+  history.setAttribute("hidden", "");
+  existingHistories.forEach(node => node.remove());
+  const preserveHistory = () => {
+    if (destroyed || preserving) return;
+    preserving = true;
+    try {
+      ownerDocument.querySelectorAll("itsalive-history").forEach(node => { if (node !== history) node.remove(); });
+      if (!history.isConnected && ownerDocument.body) ownerDocument.body.append(history);
+      history.setAttribute("hidden", "");
+    } catch (error) { console.warn("[itsalive:history] Preservation unavailable", error); }
+    finally { preserving = false; }
+  };
+  const historyObserver = new MutationObserver(preserveHistory);
+  historyObserver.observe(ownerDocument.documentElement, { childList: true, subtree: true });
 
   const compact = async (history: Element) => {
     if (compacting) return;
@@ -46,7 +86,7 @@ export function installInteractionObserver(bridge: AppBridge, options: ObserverO
     compacting = true;
     try {
       const existing = history.querySelector(":scope > itsalive-history-summary")?.textContent ?? "";
-      const prompt = `Compact these older interaction records into a concise, readable behavioral summary. Preserve meaningful patterns and outcomes, omit secrets, and return only the summary.\nExisting summary:\n${existing}\nRecords:\n${JSON.stringify(older.map(readRecord))}`;
+      const prompt = `Compact these older interaction records into a concise, readable behavioral summary. Preserve meaningful patterns and outcomes, omit secrets, and return only the summary.\nExisting summary:\n${existing}\nRecords:\n${JSON.stringify(older.map(readInteractionRecord))}`;
       const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "llm.request", prompt }, 30_000);
       if (destroyed || response.type !== "llm.response" || response.error || typeof response.result !== "string" || !response.result.trim()) return;
       let summary = history.querySelector(":scope > itsalive-history-summary");
@@ -75,14 +115,15 @@ export function installInteractionObserver(bridge: AppBridge, options: ObserverO
     if (!event.isTrusted && !options.acceptUntrustedForTest) return;
     try {
       const targets = semanticTarget(event); if (!targets) return;
-      const history = document.querySelector("itsalive-history") ?? document.body.appendChild(Object.assign(document.createElement("itsalive-history"), { hidden: true }));
       const record: InteractionSnapshot = { seq: ++sequence, at: new Date().toISOString(), type: event.type.slice(0, 30), target: describe(targets.semantic), actualTarget: describe(targets.actual) };
       if (event instanceof KeyboardEvent) record.key = safeKey(event, targets.actual);
       const element = document.createElement("itsalive-interaction");
       for (const [name, value] of [["seq", String(record.seq)], ["at", record.at], ["type", record.type], ["target", record.target.tag], ["target-id", record.target.id], ["actual-target", record.actualTarget.tag]] as const) if (value) element.setAttribute(name, value);
       if (record.actualTarget.value !== undefined) element.setAttribute("value", record.actualTarget.value);
+      if (record.key !== undefined) element.setAttribute("key", record.key);
+      element.append(writeTarget("itsalive-target", record.target), writeTarget("itsalive-actual-target", record.actualTarget));
       history.append(element);
-      const recentInteractions = [...history.querySelectorAll(":scope > itsalive-interaction")].slice(-RECENT_LIMIT).map(readRecord);
+      const recentInteractions = [...history.querySelectorAll(":scope > itsalive-interaction")].slice(-RECENT_LIMIT).map(readInteractionRecord);
       const historySummary = history.querySelector(":scope > itsalive-history-summary")?.textContent?.slice(0, 8_000);
       const state = { interaction: record, recentInteractions, ...(historySummary ? { historySummary } : {}), document: serializeSemanticDocument() };
       if (inFlight < maxInFlight) void send(state, element); else pending = { state, element };
@@ -90,5 +131,5 @@ export function installInteractionObserver(bridge: AppBridge, options: ObserverO
     } catch (error) { console.warn("[itsalive:observer] Interaction recording failed", error); }
   };
   for (const type of OBSERVED_EVENTS) document.addEventListener(type, handler, true);
-  return { destroy() { destroyed = true; pending = undefined; for (const type of OBSERVED_EVENTS) document.removeEventListener(type, handler, true); } };
+  return { destroy() { destroyed = true; pending = undefined; historyObserver.disconnect(); for (const type of OBSERVED_EVENTS) document.removeEventListener(type, handler, true); } };
 }
