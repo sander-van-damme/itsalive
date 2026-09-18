@@ -16,18 +16,18 @@ describe("shell context builder", () => {
     }
   });
 
-  it("defines the generated UI and runtime styling contract", () => {
-    expect(SYSTEM_PROMPT).toMatch(/MUST be implemented as native Custom Elements/);
-    expect(SYSTEM_PROMPT).toContain("class TaskList extends HTMLElement");
-    expect(SYSTEM_PROMPT).toContain("customElements.define('task-list'");
-    expect(SYSTEM_PROMPT).toContain('if (this.dataset.enhanced) return');
-    expect(SYSTEM_PROMPT).not.toContain("this.innerHTML = '<section");
-    expect(SYSTEM_PROMPT).toMatch(/Prefer light DOM/);
+  it("defines a streamed multi-command drawing-board contract", () => {
+    expect(SYSTEM_PROMPT).toContain("one model response containing one or more independently executable JavaScript commands");
+    expect(SYSTEM_PROMPT).toContain("/* itsalive:command */");
+    expect(SYSTEM_PROMPT).toContain("/* itsalive:end */");
+    expect(SYSTEM_PROMPT).toContain("executes each command as soon as its closing delimiter arrives");
+    expect(SYSTEM_PROMPT).toContain("Commands later in the same response cannot use the return value of an earlier command");
+    expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
+    expect(SYSTEM_PROMPT).toContain("ordinary semantic HTML and browser DOM APIs by default");
+    expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
+    expect(SYSTEM_PROMPT).not.toMatch(/MUST be implemented as native Custom Elements/);
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
-    expect(SYSTEM_PROMPT).toMatch(/classes the LLM introduces dynamically after load/);
-    expect(SYSTEM_PROMPT).toMatch(/few coherent, verifiable mutations/);
-    expect(SYSTEM_PROMPT).toMatch(/inspect the result before declaring completion/);
   });
 
   it("always includes immutable and mandatory context plus every tool", () => {
