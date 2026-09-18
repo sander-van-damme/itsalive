@@ -86,6 +86,23 @@ describe("continuous interaction observation", () => {
     expect(record).toMatchObject({ key: "Enter", target: { tag: "settings-panel", id: "sound", state: { "aria-label": "Sound settings", "data-state": "editing" } }, actualTarget: { tag: "input", id: "enabled", value: "safe", state: { "aria-label": "Enabled", "data-state": "on", checked: true } } });
     observer.destroy();
   });
+
+  it("normalizes agent-edited persisted interaction metadata before reuse", () => {
+    document.body.innerHTML = `<itsalive-interaction seq="not-a-number" at="${"x".repeat(80)}" type="${"y".repeat(60)}" key="secret-key">
+      <itsalive-target tag="api-key-field" id="${"i".repeat(300)}" value="must-not-survive" state='{"title":"API token","api-token":"must-not-survive","checked":true,"extra":"${"z".repeat(400)}"}'></itsalive-target>
+      <itsalive-actual-target tag="input" value="${"v".repeat(700)}"></itsalive-actual-target>
+    </itsalive-interaction>`;
+    const record = readInteractionRecord(document.querySelector("itsalive-interaction")!);
+    expect(record.seq).toBe(0);
+    expect(record.at).toHaveLength(40);
+    expect(record.type).toHaveLength(30);
+    expect(record.target.id).toHaveLength(200);
+    expect(record.target.value).toBeUndefined();
+    expect(record.key).toBeUndefined();
+    expect(record.target.state?.["api-token"]).toBe("[redacted]");
+    expect(String(record.target.state?.extra).length).toBeLessThanOrEqual(200);
+    expect(record.actualTarget.value?.length).toBeLessThanOrEqual(500);
+  });
 });
 
 describe("semantic document bounds", () => {
