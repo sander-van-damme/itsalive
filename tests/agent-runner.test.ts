@@ -35,6 +35,60 @@ describe('AgentRunner lifecycle', () => {
     expect(groupEnds).toHaveBeenCalledTimes(3);
   });
 
+  it('executes complete commands while the same model response is still streaming', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstExecuted = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const first = '/* itsalive:command */\ndocument.body.dataset.first = "yes";\n/* itsalive:end */\n';
+    const second = '/* itsalive:command */\nreturn itsalive.done("ready");\n/* itsalive:end */';
+    const providers = {
+      generateStreaming: vi.fn(async (_request: unknown, onText: (delta: string) => void) => {
+        events.push('emit:first');
+        onText(first);
+        await firstExecuted;
+        events.push('emit:second');
+        onText(second);
+        return { text: first + second };
+      }),
+      generate: vi.fn(),
+    };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('dom.inspect')) return { value: '@1 body\n└─ @2 main "Ready"' };
+      if (code.includes('dataset.first')) {
+        events.push('execute:first');
+        releaseFirst();
+        return { value: null };
+      }
+      if (code.includes('itsalive.done')) {
+        events.push('execute:done');
+        return { done: true, message: 'ready' };
+      }
+      return { value: null };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 1,
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
+    expect(events.indexOf('execute:first')).toBeGreaterThan(events.indexOf('emit:first'));
+    expect(events.indexOf('execute:first')).toBeLessThan(events.indexOf('emit:second'));
+    expect(events).toEqual(['emit:first', 'execute:first', 'emit:second', 'execute:done']);
+    expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual([
+      'document.body.dataset.first = "yes";',
+      'return itsalive.done("ready");',
+    ]);
+  });
+
   it('extracts a single JavaScript fence even when the model adds prose', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
     const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nconst view = await itsalive.dom.inspect();\nreturn view;\n```' })) };
