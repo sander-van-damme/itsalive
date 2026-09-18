@@ -95,6 +95,7 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('#contextTokens')).toBeNull();
     expect(document.querySelector('#outputTokens')).toBeNull();
     expect(document.querySelector<HTMLButtonElement>('button[type=submit]')?.textContent).toBe('Save');
+    expect(document.querySelector('[data-build-commit]')?.textContent).toBe('development');
 
     const apiKey = document.querySelector<HTMLInputElement>('#apiKey')!;
     apiKey.value = 'sk-or-v1-test';
