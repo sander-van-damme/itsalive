@@ -17,6 +17,9 @@ export interface AppExecutor {
   execute(appId: string, code: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult>;
 }
 
+export type AgentProgressPhase = "generating" | "executing" | "repairing" | "verifying" | "finishing";
+export interface AgentProgress { phase: AgentProgressPhase; turn: number; }
+
 export interface RunOptions {
   appId: string;
   appPrompt: string;
@@ -33,6 +36,8 @@ export interface RunOptions {
   persistTrigger?: boolean;
   /** Consumed automatically immediately before each model turn. */
   consumeEnvironmentObservations?: () => string[];
+  /** Safe lifecycle signal for shell UI. Never contains model reasoning or generated text. */
+  onProgress?: (progress: AgentProgress) => void;
 }
 
 export interface RunResult { status: "done" | "turn-limit" | "stalled"; message?: string; turns: number }
@@ -85,6 +90,7 @@ export class AgentRunner {
         console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
         try {
           if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+          reportProgress(options, "generating", turn);
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
@@ -112,6 +118,7 @@ export class AgentRunner {
                 return;
               }
               try {
+                reportProgress(options, "executing", turn);
                 const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
                 streamedResult = executed.result;
                 streamedObservation = executed.observation;
@@ -162,6 +169,7 @@ export class AgentRunner {
               }
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
+              reportProgress(options, "repairing", turn);
               console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
               console.info('Continuing to next turn for streamed command repair');
               continue;
@@ -191,16 +199,19 @@ export class AgentRunner {
               }
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
+              reportProgress(options, "repairing", turn);
               console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
               console.info('Continuing to next turn for code repair');
               continue;
             }
+            reportProgress(options, "executing", turn);
             const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
             result = executed.result;
             observation = executed.observation;
           }
 
           if (result.error) {
+            reportProgress(options, "repairing", turn);
             repeatedLowSignalObservation = undefined;
             repeatedLowSignalState = undefined;
             console.info('Turn outcome', { kind: 'runtime-repair' });
@@ -209,6 +220,7 @@ export class AgentRunner {
           }
 
           if (result.done) {
+            reportProgress(options, "verifying", turn);
             const arrivedBeforeCompletion = options.consumeEnvironmentObservations?.() ?? [];
             if (arrivedBeforeCompletion.length) {
               environmentObservation = arrivedBeforeCompletion.join("\n\n");
@@ -220,6 +232,7 @@ export class AgentRunner {
               observation = JSON.stringify({ completionCheck: { ok: false, reason: completion.reason } });
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
+              reportProgress(options, "repairing", turn);
               console.warn('Completion check rejected', sanitizeDiagnostic(completion));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
               console.info('Turn outcome', { kind: 'verification-repair' });
@@ -227,6 +240,7 @@ export class AgentRunner {
               continue;
             }
             if (result.message) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: result.message });
+            reportProgress(options, "finishing", turn);
             console.info('Turn outcome', { kind: 'done' });
             console.info('Run done', sanitizeDiagnostic({ turn, message: result.message }));
             return { status: "done", message: result.message, turns: turn };
@@ -274,6 +288,11 @@ export class AgentRunner {
       console.groupEnd();
     }
   }
+}
+
+function reportProgress(options: RunOptions, phase: AgentProgressPhase, turn: number): void {
+  try { options.onProgress?.({ phase, turn }); }
+  catch (error) { console.warn("Agent progress callback failed", diagnosticError(error)); }
 }
 
 const COMMAND_START = "/* itsalive:command */";
