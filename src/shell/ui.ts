@@ -1,5 +1,8 @@
 import { createIcons, icons } from 'lucide';
 
+declare const __ITSALIVE_COMMIT__: string;
+const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMIT__.trim() ? __ITSALIVE_COMMIT__.trim() : 'development';
+
 export interface AppSummary { id: string; name: string; prompt: string; createdAt: number; updatedAt: number }
 export interface ChatLine { id: string; role: 'user' | 'assistant' | 'system'; content: string; timestamp: number }
 export interface SettingsValue { apiKey: string }
@@ -295,6 +298,7 @@ export class ShellUI {
           <p class="security-note">The key is stored by this site in your browser and is never shared with generated apps. Avoid saving a key on a shared device.</p>
           <button class="action primary full-width" type="submit">Save</button><div class="settings-result" data-result role="status"></div>
         </section>
+        <section class="settings-section build-info"><h2>Build</h2><p>Commit <code data-build-commit>${esc(BUILD_COMMIT)}</code></p></section>
         <section class="settings-section diagnostics"><h2>Diagnostics</h2><p>Download technical session details for troubleshooting.</p><button class="action" type="button" data-export><i data-lucide="download" aria-hidden="true"></i>Export session logs</button></section>
       </form>`;
     panel.querySelector<HTMLButtonElement>('[data-close-settings]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
