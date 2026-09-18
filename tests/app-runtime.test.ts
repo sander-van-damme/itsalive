@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   rows: new Map<string, unknown>(),
   restoredWithApi: false,
   requests: [] as Record<string, unknown>[],
+  screenshotError: undefined as Error | undefined,
 }));
 
 vi.mock("../src/app/bridge", () => ({
@@ -52,7 +53,10 @@ describe("app runtime namespace", () => {
   beforeAll(async () => {
     state.posts.length = 0;
     const { startAppRuntime } = await import("../src/app/runtime");
-    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000", screenshot: async element => element.tagName });
+    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000", screenshot: async element => {
+      if (state.screenshotError) throw state.screenshotError;
+      return element.tagName;
+    } });
   });
 
   it("installs one immutable, versioned facade without replacing native history", () => {
@@ -93,6 +97,18 @@ describe("app runtime namespace", () => {
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "fired" }, requestId: "cron" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
+  });
+
+  it("keeps screenshot verification failures non-fatal", async () => {
+    state.screenshotError = new Error("canvas export blocked");
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot-failure" } }));
+    await nextTask();
+    state.screenshotError = undefined;
+
+    const response = state.posts.find(({ requestId }) => requestId === "screenshot-failure");
+    expect(response?.payload.type).toBe("result");
+    expect(String(response?.payload.result)).toContain("[screenshot unavailable:");
+    expect(state.posts.some(({ requestId, payload }) => requestId === "screenshot-failure" && payload.type === "execution.error")).toBe(false);
   });
 
   it("returns only the current execution error instead of recursively embedding prior logs", async () => {

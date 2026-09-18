@@ -12,6 +12,16 @@ describe("OpenRouter Jev adapter", () => {
     expect(fetcher).toHaveBeenCalledWith(OPENROUTER_DECISIONS_URL, expect.objectContaining({ method: "POST", headers: expect.objectContaining({ authorization: "Bearer sk-or-test" }) }));
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body))).toMatchObject({ model: "~typesafe/jev-latest", state, questions: { requires_llm_attention: { type: "noul" } } });
   });
+  it("invokes fetch with the browser global as its receiver", async () => {
+    const receivers: unknown[] = [];
+    const fetcher = vi.fn(function (this: unknown) {
+      receivers.push(this);
+      return Promise.resolve(jsonResponse({ answers: { requires_llm_attention: { type: "noul", noul: .4 } } }));
+    });
+    await new OpenRouterJevAdapter(fetcher as typeof fetch).evaluate({ state }, credential);
+    expect(receivers).toEqual([globalThis]);
+  });
+
   it("rejects malformed responses", async () => {
     const fetcher = vi.fn(async () => jsonResponse({ answers: { requires_llm_attention: { probability: .9 } } }));
     await expect(new OpenRouterJevAdapter(fetcher as typeof fetch).evaluate({ state }, credential)).rejects.toThrow(/malformed Noul/);

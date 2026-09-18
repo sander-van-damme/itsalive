@@ -2,7 +2,7 @@ import { AppBridge, idFromHostname } from "./bridge";
 import { inspectDom, ref } from "./inspect";
 import { installLogging } from "./logs";
 import { installAutosave, loadSavedDocument } from "./persistence";
-import { captureScreenshot } from "./screenshot";
+import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import { createToolsApi } from "./tools";
 import { clearOriginStorage } from "./storage";
 import type { RuntimeOptions } from "./types";
@@ -28,13 +28,17 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const logs = installLogging(bridge);
   const cronCallbacks = new Map<string, () => unknown>();
   const tools = createToolsApi(logs.add);
-  const screenshot = options.screenshot
-    ? async (input: { ref?: string } = {}) => {
-        const target = input.ref ? ref(input.ref) : document.documentElement;
-        if (!(target instanceof HTMLElement)) throw new Error(`Unknown or non-HTML ref: ${input.ref}`);
-        return options.screenshot!(target);
-      }
-    : captureScreenshot;
+  const screenshot = async (input: { ref?: string; scale?: number } = {}) => {
+    const target = input.ref ? ref(input.ref) : document.documentElement;
+    if (!(target instanceof HTMLElement)) throw new Error(input.ref ? `Unknown or non-HTML ref: ${input.ref}` : "No document element");
+    try {
+      return options.screenshot ? await options.screenshot(target) : await captureScreenshot(input);
+    } catch (error) {
+      const unavailable = formatScreenshotUnavailable(error);
+      logs.add("warn", ["Screenshot verification unavailable", unavailable], "agent", error instanceof Error ? error.stack : undefined);
+      return unavailable;
+    }
+  };
 
   const done = (message?: string) => ({ [DONE]: true, message });
   const cron = (id: string, schedule: string, callback: () => unknown) => {
