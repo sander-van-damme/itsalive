@@ -10,6 +10,9 @@ export type RuntimeStatus = "ready";
 
 export interface LogRecord { timestamp: number; level: LogLevel; source: string; message: string; details?: unknown; }
 export interface CronRegistration { callbackId: string; schedule: string; }
+export interface InteractionTarget { tag: string; id?: string; value?: string; state?: Record<string, string | boolean>; }
+export interface InteractionSnapshot { seq: number; at: string; type: string; target: InteractionTarget; actualTarget: InteractionTarget; key?: string; }
+export interface JevState { interaction: InteractionSnapshot; recentInteractions: InteractionSnapshot[]; document: string; }
 
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
@@ -17,6 +20,7 @@ export type ShellToAppPayload =
   | { type: "storage.clear" }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
+  | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError }
   | { type: "cron.fire"; callbackId: string };
 
 export type AppToShellPayload =
@@ -25,6 +29,7 @@ export type AppToShellPayload =
   | { type: "wake"; reason?: string }
   | { type: "llm.request"; prompt: string }
   | { type: "history.request"; query: string; limit?: number }
+  | { type: "jev.request"; state: JevState }
   | { type: "log"; record: LogRecord }
   | { type: "cron.register"; registration: CronRegistration }
   | { type: "status"; status: RuntimeStatus; detail?: string };
@@ -37,8 +42,8 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "storage.clear", "llm.response", "history.response", "cron.fire"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "wake", "llm.request", "history.request", "log", "cron.register", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "storage.clear", "llm.response", "history.response", "jev.response", "cron.fire"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "wake", "llm.request", "history.request", "jev.request", "log", "cron.register", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -51,6 +56,8 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
     case "execute": return typeof value.code === "string";
     case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
     case "history.request": return typeof value.query === "string";
+    case "jev.request": return isJevState(value.state);
+    case "jev.response": return typeof value.probability === "number" && value.probability >= 0 && value.probability <= 1 && typeof value.escalated === "boolean" && (value.error === undefined || isSerializedError(value.error));
     case "cron.fire": return typeof value.callbackId === "string" && value.callbackId.length > 0 && value.callbackId.length <= 200;
     case "execution.error": return isSerializedError(value.error);
     case "log": return isLogRecord(value.record);
@@ -59,6 +66,10 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
     default: return true;
   }
 }
+
+function isInteractionTarget(value: unknown): boolean { return isObject(value) && typeof value.tag === "string" && value.tag.length <= 100 && (value.id === undefined || typeof value.id === "string") && (value.value === undefined || typeof value.value === "string" && value.value.length <= 500); }
+function isInteraction(value: unknown): boolean { return isObject(value) && Number.isSafeInteger(value.seq) && typeof value.at === "string" && typeof value.type === "string" && isInteractionTarget(value.target) && isInteractionTarget(value.actualTarget); }
+function isJevState(value: unknown): boolean { return isObject(value) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && typeof value.document === "string" && value.document.length <= 100_000; }
 
 export const isShellToAppMessage = (value: unknown): value is BridgeMessage<ShellToAppPayload> =>
   isBridgeMessage(value) && SHELL_TYPES.has(value.type as ShellToAppPayload["type"]);

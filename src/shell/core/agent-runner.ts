@@ -32,6 +32,8 @@ export interface RunOptions {
   countTokens?: TokenCounter;
   signal?: AbortSignal;
   persistTrigger?: boolean;
+  /** Consumed automatically immediately before each model turn. */
+  consumeEnvironmentObservations?: () => string[];
 }
 
 export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
@@ -57,6 +59,7 @@ export class AgentRunner {
     const deadline = setTimeout(() => controller.abort(new DOMException("Agent run timed out", "TimeoutError")), options.maxDurationMs ?? 120_000);
     const maxTurns = options.maxTurns ?? 12;
     let observation: string | undefined;
+    let environmentObservation: string | undefined;
     let consecutiveGenerationFailures = 0;
     const startedAt = performance.now();
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
@@ -67,8 +70,11 @@ export class AgentRunner {
         console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
         try {
           if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+          const pushed = options.consumeEnvironmentObservations?.() ?? [];
+          if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, history, countTokens: options.countTokens });
+          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
+          environmentObservation = undefined;
           console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, toolCount: options.tools.length, hasObservation: Boolean(observation) });
           let generated;
           try {
@@ -118,6 +124,12 @@ export class AgentRunner {
           console.info('Observation', sanitizeDiagnostic(observation));
           await appendHistory(this.db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
           if (result.done) {
+            const arrivedBeforeCompletion = options.consumeEnvironmentObservations?.() ?? [];
+            if (arrivedBeforeCompletion.length) {
+              environmentObservation = arrivedBeforeCompletion.join("\n\n");
+              console.info("Environmental observation arrived before completion; continuing");
+              continue;
+            }
             const completion = await verifyCompletion(this.executor, options, controller.signal);
             if (!completion.ok) {
               observation = JSON.stringify({ completionCheck: { ok: false, reason: completion.reason } });

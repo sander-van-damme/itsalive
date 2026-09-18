@@ -41,6 +41,14 @@ export class AppBridge {
     pending.resolve(message);
     return true;
   }
+
+  destroy(): void {
+    for (const pending of this.pending.values()) {
+      window.clearTimeout(pending.timer);
+      pending.reject(new Error("Bridge destroyed"));
+    }
+    this.pending.clear();
+  }
 }
 
 export function idFromHostname(rootOrigin: string): string {

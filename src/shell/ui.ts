@@ -2,7 +2,7 @@ import { createIcons, icons } from 'lucide';
 
 export interface AppSummary { id: string; name: string; prompt: string; createdAt: number; updatedAt: number }
 export interface ChatLine { id: string; role: 'user' | 'assistant' | 'system'; content: string; timestamp: number }
-export interface SettingsValue { apiKey: string }
+export interface SettingsValue { apiKey: string; jevAccountId?: string; jevApiToken?: string }
 export type RuntimeViewState = 'loading' | 'ready' | 'working' | 'problem';
 type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
@@ -295,6 +295,12 @@ export class ShellUI {
           <p class="security-note">The key is stored by this site in your browser and is never shared with generated apps. Avoid saving a key on a shared device.</p>
           <button class="action primary full-width" type="submit">Save</button><div class="settings-result" data-result role="status"></div>
         </section>
+        <section class="settings-section" aria-labelledby="jev-heading"><h2 id="jev-heading">Continuous observation (optional)</h2>
+          <p>Cloudflare Workers AI runs the typed Jev attention decision. Without these values, interactions are still recorded and the app continues normally.</p>
+          <div class="field"><label for="jevAccountId">Cloudflare account ID</label><input id="jevAccountId" value="${esc(this.settings.jevAccountId ?? '')}" autocomplete="off"></div>
+          <div class="field"><label for="jevApiToken">Cloudflare API token</label><input id="jevApiToken" type="password" value="${esc(this.settings.jevApiToken ?? '')}" autocomplete="off"></div>
+          <p class="security-note">Credentials stay in the trusted shell origin and are never sent to generated apps.</p>
+        </section>
         <section class="settings-section diagnostics"><h2>Diagnostics</h2><p>Download technical session details for troubleshooting.</p><button class="action" type="button" data-export><i data-lucide="download" aria-hidden="true"></i>Export session logs</button></section>
       </form>`;
     panel.querySelector<HTMLButtonElement>('[data-close-settings]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
@@ -306,7 +312,11 @@ export class ShellUI {
     const result = panel.querySelector<HTMLElement>('[data-result]')!;
     const button = panel.querySelector<HTMLButtonElement>('button[type=submit]')!;
     result.className = 'settings-result pending'; result.textContent = 'Testing…'; button.disabled = true;
-    const value: SettingsValue = { apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim() };
+    const value: SettingsValue = {
+      apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim(),
+      ...(panel.querySelector<HTMLInputElement>('#jevAccountId')!.value.trim() ? { jevAccountId: panel.querySelector<HTMLInputElement>('#jevAccountId')!.value.trim() } : {}),
+      ...(panel.querySelector<HTMLInputElement>('#jevApiToken')!.value.trim() ? { jevApiToken: panel.querySelector<HTMLInputElement>('#jevApiToken')!.value.trim() } : {}),
+    };
     try { await this.actions.saveSettings(value); this.settings = value; this.settingsNotice = ''; result.className = 'settings-result success'; result.textContent = 'API key saved. OpenRouter connection works. You can now create an app.'; }
     catch { result.className = 'settings-result failure'; result.textContent = 'We couldn’t connect to OpenRouter. Check your API key and try again.'; }
     finally { button.disabled = false; }

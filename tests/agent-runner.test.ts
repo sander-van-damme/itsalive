@@ -49,7 +49,7 @@ describe('AgentRunner lifecycle', () => {
     });
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
-    expect(executor.execute.mock.calls[0]?.[1]).toBe('const view = await itsalive.dom.inspect();\nreturn view;');
+    expect((executor.execute.mock.calls as unknown[][])[0]?.[1]).toBe('const view = await itsalive.dom.inspect();\nreturn view;');
   });
 
   it('rejects syntax-invalid generated JavaScript before calling the executor', async () => {
