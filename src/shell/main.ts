@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, InitialBuildIntent, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { AgentRunner, InitialBuildIntent, RuntimeSession, ShellDatabase, createDefaultRegistry, nextCronRun, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
 import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -16,12 +16,23 @@ let connectionTimer: number | undefined;
 const initialBuild = new InitialBuildIntent();
 const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
 
-const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
+const OPENROUTER_PROVIDER = 'openrouter';
+const OPENROUTER_MODEL = 'openrouter/auto';
+const MODEL_CONTEXT_TOKENS = 128_000;
+const MODEL_OUTPUT_TOKENS = 8_192;
+
+const defaultSettings: SettingsValue = { apiKey: '' };
 const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
 if (stored) {
-  try { settings = { ...defaultSettings, ...JSON.parse(stored) as Partial<SettingsValue> }; }
-  catch (error) { console.warn('[itsalive] Ignoring invalid saved settings', error); }
+  try {
+    const parsed = JSON.parse(stored) as { apiKey?: unknown };
+    settings = { apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '' };
+    localStorage.setItem('itsalive.settings', JSON.stringify(settings));
+  } catch (error) {
+    console.warn('[itsalive] Ignoring invalid saved settings', error);
+    localStorage.removeItem('itsalive.settings');
+  }
 }
 
 const ui = new ShellUI(root, {
@@ -50,7 +61,6 @@ const ui = new ShellUI(root, {
     ui.setSettings(candidate);
   },
   designApp: async goal => {
-    configureRegistry();
     const system = `You are the itsalive app designer. Turn the user's goal into a durable app specification. Choose a short, friendly product name. Write precise instructions for an autonomous coding agent, including the user's desired outcome and essential behavior. Return ONLY one complete JSON object with string fields "name" and "prompt". Do not use markdown.`;
     const parsed = await generateAppProposal(goal, system);
     return { name: parsed.name.trim().slice(0, 60), prompt: parsed.prompt.trim() };
@@ -80,7 +90,7 @@ async function generateAppProposal(goal: string, system: string): Promise<{ name
   let failure = 'invalid JSON';
   for (let attempt = 1; attempt <= 3; attempt++) {
     const repair = attempt === 1 ? goal : `${goal}\n\nYour previous response could not be parsed (${failure}). Return the complete JSON object again. Do not abbreviate or add commentary.`;
-    const result = await registry.generate({ purpose: `app design attempt ${attempt}`, model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(settings.maxOutputTokens, 2000) }, credential());
+    const result = await registry.generate({ purpose: `app design attempt ${attempt}`, model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(MODEL_OUTPUT_TOKENS, 2000) }, credential());
     try {
       const parsed = parseJsonObject(result.text) as { name?: unknown; prompt?: unknown };
       if (typeof parsed.name !== 'string' || typeof parsed.prompt !== 'string') throw new Error('required string fields are missing');
@@ -141,16 +151,7 @@ async function refreshMessages(): Promise<void> {
   ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map((e,i) => ({ id: String(e.id ?? i), role: e.role as ChatLine['role'], content: e.content, timestamp: e.timestamp })));
 }
 
-function configureRegistry(): void {
-  if (settings.provider === 'compatible' && settings.endpoint) registry.register(openAiCompatible('compatible', settings.endpoint));
-  if (settings.provider === 'google') {
-    const endpoint = settings.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(settings.model)}:generateContent`;
-    registry.register(createHttpAdapter({ id: 'google', endpoint, format: 'google' }));
-  }
-  if (settings.endpoint && !['compatible','google'].includes(settings.provider)) registry.register(createHttpAdapter({ id: settings.provider, endpoint: settings.endpoint, format: settings.provider === 'anthropic' ? 'anthropic' : 'openai' }));
-}
-
-function modelConfig(): ModelConfig { return { id: 'active', provider: settings.provider, model: settings.model, maxContextTokens: settings.maxContextTokens, maxOutputTokens: settings.maxOutputTokens, credentialId: 'active' }; }
+function modelConfig(): ModelConfig { return { id: 'active', provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS, credentialId: 'active' }; }
 function credential(): Credential | undefined { return settings.apiKey ? { id: 'active', type: 'api-key', value: settings.apiKey } : undefined; }
 
 async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
@@ -166,7 +167,6 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   try {
     await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
     await refreshMessages();
-    configureRegistry();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
     const result = await runner.run({ appId: app.id, appPrompt: app.prompt, trigger, persistTrigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
@@ -256,7 +256,7 @@ async function fireDueSchedules(): Promise<void> {
 }
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
-  try { configureRegistry(); const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: settings.maxOutputTokens }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
+  try { const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: MODEL_OUTPUT_TOKENS }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
   catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
@@ -292,31 +292,12 @@ function safeStringify(value: unknown): string { try { return JSON.stringify(val
 function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
 
 async function testModelConnection(candidate: SettingsValue): Promise<SettingsValue> {
+  const apiKey = candidate.apiKey.trim();
+  if (!apiKey) throw new Error('OpenRouter API key is required');
   const testRegistry = createDefaultRegistry();
-  if (candidate.provider === 'compatible' && candidate.endpoint) testRegistry.register(openAiCompatible('compatible', candidate.endpoint));
-  else if (candidate.provider === 'google') testRegistry.register(createHttpAdapter({ id: 'google', endpoint: candidate.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate.model)}:generateContent`, format: 'google' }));
-  else if (candidate.endpoint) testRegistry.register(createHttpAdapter({ id: candidate.provider, endpoint: candidate.endpoint, format: candidate.provider === 'anthropic' ? 'anthropic' : 'openai' }));
-  const model = { id: 'connection-test', provider: candidate.provider, model: candidate.model, maxContextTokens: candidate.maxContextTokens, maxOutputTokens: candidate.maxOutputTokens };
-  await testRegistry.generate({ purpose: 'model connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: 8 }, candidate.apiKey ? { id: 'connection-test', type: 'api-key', value: candidate.apiKey } : undefined);
-  return { ...candidate, ...await retrieveModelLimits(candidate).catch(() => ({})) };
-}
-
-async function retrieveModelLimits(candidate: SettingsValue): Promise<Partial<SettingsValue>> {
-  let url: string | undefined;
-  const headers: Record<string, string> = {};
-  if (candidate.provider === 'openrouter') url = `https://openrouter.ai/api/v1/models/${encodeURIComponent(candidate.model)}/endpoints`;
-  else if (candidate.provider === 'google') url = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate.model)}?key=${encodeURIComponent(candidate.apiKey)}`;
-  else if (candidate.provider === 'openai') { url = `https://api.openai.com/v1/models/${encodeURIComponent(candidate.model)}`; headers.authorization = `Bearer ${candidate.apiKey}`; }
-  else if (candidate.provider === 'anthropic') { url = `https://api.anthropic.com/v1/models/${encodeURIComponent(candidate.model)}`; headers['x-api-key'] = candidate.apiKey; headers['anthropic-version'] = '2023-06-01'; headers['anthropic-dangerous-direct-browser-access'] = 'true'; }
-  if (!url) return {};
-  const response = await fetch(url, { headers });
-  if (!response.ok) return {};
-  const json = await response.json() as Record<string, unknown>;
-  const record = (typeof json.data === 'object' && json.data !== null ? json.data : json) as Record<string, unknown>;
-  const endpoint = (Array.isArray(record.endpoints) && typeof record.endpoints[0] === 'object' && record.endpoints[0] !== null ? record.endpoints[0] : {}) as Record<string, unknown>;
-  const maxContextTokens = Number(record.context_length ?? record.inputTokenLimit ?? endpoint.context_length);
-  const maxOutputTokens = Number(record.max_completion_tokens ?? record.outputTokenLimit ?? endpoint.max_completion_tokens);
-  return { ...(Number.isFinite(maxContextTokens) && maxContextTokens > 0 ? { maxContextTokens } : {}), ...(Number.isFinite(maxOutputTokens) && maxOutputTokens > 0 ? { maxOutputTokens } : {}) };
+  const model = { id: 'connection-test', provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS };
+  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: 8 }, { id: 'connection-test', type: 'api-key', value: apiKey });
+  return { apiKey };
 }
 
 void refreshApps(new URL(location.href).searchParams.get('app') ?? undefined).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));
