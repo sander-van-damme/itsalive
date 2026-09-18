@@ -19,7 +19,10 @@ export class OpenRouterJevAdapter implements DecisionModel {
   constructor(private readonly fetcher: typeof fetch = fetch) {}
   async evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult> {
     if (!credential?.value) throw new Error("Jev credential is not configured");
-    const response = await this.fetcher(OPENROUTER_DECISIONS_URL, {
+    // Browser-native fetch is a Web IDL method and may throw "Illegal invocation"
+    // when called as an arbitrary object method. Always provide the browser global
+    // as its receiver; test/mocked fetch functions work with the same call shape.
+    const response = await this.fetcher.call(globalThis, OPENROUTER_DECISIONS_URL, {
       method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${credential.value}` },
       body: JSON.stringify({ model: JEV_MODEL, state: request.state, questions: GENERIC_JEV_QUESTION }), signal: request.signal,
     });
