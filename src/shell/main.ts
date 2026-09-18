@@ -172,10 +172,20 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   ui.setBusy(true);
   try {
     await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
-    await refreshMessages();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
-    const result = await runner.run({ appId: app.id, appPrompt: app.prompt, trigger, persistTrigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
+    const result = await runner.run({
+      appId: app.id,
+      appPrompt: app.prompt,
+      trigger,
+      persistTrigger,
+      onTriggerPersisted: persistTrigger ? refreshMessages : undefined,
+      model: modelConfig(),
+      credential: credential(),
+      tools,
+      summary: app.summary,
+      signal: runController.signal,
+    });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
   } catch (error) {
