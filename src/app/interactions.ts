@@ -1,5 +1,5 @@
 import type { AppBridge } from "./bridge";
-import { safeControlValue, safeKey, redactAttribute } from "./redaction";
+import { isSensitiveName, safeControlValue, safeKey, redactAttribute } from "./redaction";
 import { serializeSemanticDocument } from "./semantic-document";
 import type { BridgeMessage, ShellToAppPayload, InteractionSnapshot } from "../shared";
 
@@ -25,21 +25,54 @@ function describe(element: Element): InteractionSnapshot["target"] {
   return { tag: element.localName.slice(0, 100), ...(element.id ? { id: (redactAttribute("id", element.id) ?? "").slice(0, 200) } : {}), ...(value !== undefined ? { value } : {}), ...(Object.keys(state).length ? { state } : {}) };
 }
 
+function normalizePersistedState(value: unknown): Record<string, string | boolean> | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const state: Record<string, string | boolean> = {};
+  for (const [rawKey, rawValue] of Object.entries(value).slice(0, 20)) {
+    const key = rawKey.slice(0, 100);
+    if (typeof rawValue === "boolean") state[key] = rawValue;
+    else if (typeof rawValue === "string") state[key] = (redactAttribute(key, rawValue) ?? "").slice(0, 200);
+  }
+  return Object.keys(state).length ? state : undefined;
+}
+
 function readTarget(node: Element | null, fallback: InteractionSnapshot["target"]): InteractionSnapshot["target"] {
-  if (!node) return fallback;
-  let state: Record<string, string | boolean> | undefined;
-  try {
-    const parsed: unknown = JSON.parse(node.getAttribute("state") ?? "null");
-    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) state = parsed as Record<string, string | boolean>;
-  } catch { /* A malformed persisted field must not break interaction handling. */ }
-  return { tag: node.getAttribute("tag") ?? fallback.tag, ...(node.hasAttribute("id") ? { id: node.getAttribute("id")! } : {}), ...(node.hasAttribute("value") ? { value: node.getAttribute("value")! } : {}), ...(state ? { state } : {}) };
+  let parsedState: unknown = fallback.state;
+  if (node?.hasAttribute("state")) {
+    try { parsedState = JSON.parse(node.getAttribute("state") ?? "null"); }
+    catch { parsedState = undefined; }
+  }
+  const state = normalizePersistedState(parsedState);
+  const tag = (node?.getAttribute("tag") ?? fallback.tag ?? "unknown").slice(0, 100) || "unknown";
+  const rawId = node?.hasAttribute("id") ? node.getAttribute("id") : fallback.id;
+  const id = rawId ? rawId.slice(0, 200) : undefined;
+  const sensitive = [tag, id, ...Object.entries(state ?? {}).flatMap(([key, value]) => [key, typeof value === "string" ? value : undefined])].some(value => typeof value === "string" && isSensitiveName(value));
+  const rawValue = node?.hasAttribute("value") ? node.getAttribute("value") : fallback.value;
+  return {
+    tag,
+    ...(id ? { id } : {}),
+    ...(!sensitive && rawValue !== null && rawValue !== undefined ? { value: rawValue.slice(0, 500) } : {}),
+    ...(state ? { state } : {}),
+  };
 }
 
 /** Reads both the rich current record format and the legacy attribute-only format. */
 export function readInteractionRecord(node: Element): InteractionSnapshot {
-  const legacyTarget = { tag: node.getAttribute("target") ?? "unknown", ...(node.getAttribute("target-id") ? { id: node.getAttribute("target-id")! } : {}) };
-  const legacyActual = { tag: node.getAttribute("actual-target") ?? legacyTarget.tag, ...(node.hasAttribute("value") ? { value: node.getAttribute("value")! } : {}) };
-  return { seq: Number(node.getAttribute("seq")), at: node.getAttribute("at") ?? "", type: node.getAttribute("type") ?? "", target: readTarget(node.querySelector(":scope > itsalive-target"), legacyTarget), actualTarget: readTarget(node.querySelector(":scope > itsalive-actual-target"), legacyActual), ...(node.hasAttribute("key") ? { key: node.getAttribute("key")! } : {}) };
+  const legacyTarget: InteractionSnapshot["target"] = { tag: (node.getAttribute("target") ?? "unknown").slice(0, 100), ...(node.getAttribute("target-id") ? { id: node.getAttribute("target-id")!.slice(0, 200) } : {}) };
+  const legacyActual: InteractionSnapshot["target"] = { tag: (node.getAttribute("actual-target") ?? legacyTarget.tag).slice(0, 100), ...(node.hasAttribute("value") ? { value: node.getAttribute("value")!.slice(0, 500) } : {}) };
+  const target = readTarget(node.querySelector(":scope > itsalive-target"), legacyTarget);
+  const actualTarget = readTarget(node.querySelector(":scope > itsalive-actual-target"), legacyActual);
+  const parsedSeq = Number(node.getAttribute("seq"));
+  const sensitive = [target.tag, target.id, actualTarget.tag, actualTarget.id].some(value => typeof value === "string" && isSensitiveName(value));
+  const rawKey = node.getAttribute("key");
+  return {
+    seq: Number.isSafeInteger(parsedSeq) && parsedSeq >= 0 ? parsedSeq : 0,
+    at: (node.getAttribute("at") ?? "").slice(0, 40),
+    type: (node.getAttribute("type") ?? "unknown").slice(0, 30),
+    target,
+    actualTarget,
+    ...(!sensitive && rawKey ? { key: rawKey.slice(0, 30) } : {}),
+  };
 }
 
 function writeTarget(name: "itsalive-target" | "itsalive-actual-target", value: InteractionSnapshot["target"]): Element {
