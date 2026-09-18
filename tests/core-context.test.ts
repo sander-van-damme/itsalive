@@ -37,7 +37,7 @@ describe("shell context builder", () => {
 
   it("keeps newest fitting history rather than a fixed message count", () => {
     const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, maxOutputTokens: 100, observationHeadroomTokens: 100 };
-    const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "a", timestamp: index, role: "user" as const, content: `message-${index} ${"x".repeat(80)}` }));
+    const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "user" as const, content: `message-${index} ${"x".repeat(80)}` }));
     const result = buildModelContext({ model: tinyModel, appPrompt: "coach", trigger: "go", tools: [], history });
     expect(result.omittedHistoryCount).toBeGreaterThan(0);
     expect(result.includedHistoryIds).toContain(19);

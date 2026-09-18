@@ -1,4 +1,8 @@
-/** This platform-owned prompt is deliberately not persisted in user-editable storage. */
+/**
+ * This platform-owned prompt is deliberately not persisted in user-editable storage.
+ * IMPORTANT: Code examples in it must be plain JavaScript, not TypeScript, because
+ * the model may copy them into code executed by AsyncFunction at runtime.
+ */
 export const SYSTEM_PROMPT = `You are the autonomous agent responsible for the current app.
 
 RESPONSE FORMAT
@@ -18,7 +22,7 @@ class TaskList extends HTMLElement {
     if (this.dataset.enhanced) return;
     this.dataset.enhanced = 'true';
     this.classList.add('block', 'space-y-3');
-    let list = this.querySelector<HTMLElement>(':scope > [data-list]');
+    let list = this.querySelector(':scope > [data-list]');
     if (!list) {
       const heading = document.createElement('h2'); heading.textContent = 'Tasks'; heading.className = 'text-xl font-semibold';
       list = document.createElement('ul'); list.dataset.list = ''; list.className = 'grid gap-2';
