@@ -4,12 +4,12 @@ import type { AppToShellPayload, BridgeMessage, ShellToAppPayload } from "../sha
 export class AppBridge {
   private pending = new Map<string, { resolve: (value: BridgeMessage<ShellToAppPayload>) => void; reject: (error: Error) => void; timer: number }>();
 
-  constructor(readonly rootOrigin: string, readonly appSlug: string) {}
+  constructor(readonly rootOrigin: string, readonly appId: string) {}
 
   validate(event: MessageEvent): BridgeMessage<ShellToAppPayload> | null {
     return validateMessageEvent(event, {
       expectedOrigin: this.rootOrigin,
-      expectedAppSlug: this.appSlug,
+      expectedAppId: this.appId,
       expectedSource: window.parent,
       direction: "to-app",
     }) as BridgeMessage<ShellToAppPayload> | null;
@@ -17,7 +17,7 @@ export class AppBridge {
 
   post(payload: AppToShellPayload, requestId = createRequestId()) {
     if (window.parent === window) return;
-    window.parent.postMessage(createBridgeMessage(this.appSlug, requestId, payload), this.rootOrigin);
+    window.parent.postMessage(createBridgeMessage(this.appId, requestId, payload), this.rootOrigin);
   }
 
   request<T extends BridgeMessage<ShellToAppPayload>>(payload: AppToShellPayload, timeoutMs = 30_000): Promise<T> {
@@ -43,12 +43,12 @@ export class AppBridge {
   }
 }
 
-export function slugFromHostname(rootOrigin: string): string {
+export function idFromHostname(rootOrigin: string): string {
   const root = new URL(rootOrigin).hostname;
   const host = location.hostname;
   const suffix = `.${root}`;
   if (!host.endsWith(suffix) || host === root) throw new Error(`App hostname ${host} is not a subdomain of ${root}`);
-  const slug = host.slice(0, -suffix.length).split(".")[0];
-  if (!slug) throw new Error("Unable to determine app slug");
-  return slug;
+  const id = host.slice(0, -suffix.length).split(".")[0];
+  if (!id) throw new Error("Unable to determine app id");
+  return id;
 }

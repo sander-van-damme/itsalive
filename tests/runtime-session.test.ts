@@ -15,7 +15,7 @@ describe('RuntimeSession', () => {
     expect(first.isConnected).toBe(false);
     expect(second.isConnected).toBe(true);
     expect(session.executor).not.toBe(firstExecutor);
-    expect(session.appSlug).toBe('app-b');
+    expect(session.appId).toBe('app-b');
     expect(session.state).toBe('loading');
   });
 

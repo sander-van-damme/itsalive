@@ -8,6 +8,6 @@ export function validateAppName(value: unknown): string {
   return name;
 }
 
-export function renameAppRecord<T extends { slug: string; name: string; updatedAt: number }>(app: T, value: unknown, now = Date.now()): T {
+export function renameAppRecord<T extends { id: string; name: string; updatedAt: number }>(app: T, value: unknown, now = Date.now()): T {
   return { ...app, name: validateAppName(value), updatedAt: now };
 }

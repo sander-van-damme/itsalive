@@ -3,11 +3,11 @@ import type { ScheduleRecord } from "./types";
 
 export class ScheduleCache {
   constructor(private readonly db: ShellDatabase) {}
-  async register(appSlug: string, callbackId: string, expression: string, nextRun?: number): Promise<ScheduleRecord> {
+  async register(appId: string, callbackId: string, expression: string, nextRun?: number): Promise<ScheduleRecord> {
     if (!callbackId.trim() || !expression.trim()) throw new Error("Schedule callback ID and expression are required");
-    const id = `${appSlug}:${callbackId}`;
+    const id = `${appId}:${callbackId}`;
     const previous = await this.db.get<ScheduleRecord>("schedules", id);
-    const record = { id, appSlug, expression, nextRun, registeredAt: Date.now(), lastFired: previous?.lastFired };
+    const record = { id, appId, expression, nextRun, registeredAt: Date.now(), lastFired: previous?.lastFired };
     await this.db.schedules.put(record);
     return record;
   }

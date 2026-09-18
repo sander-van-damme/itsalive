@@ -7,7 +7,7 @@ interface Pending { resolve(value: ExecutionResult): void; reject(error: Error):
 export class PostMessageExecutor implements AppExecutor {
   private readonly pending = new Map<string, Pending>();
   private readonly onMessage = (event: MessageEvent) => {
-    const message = validateMessageEvent(event, { expectedOrigin: this.appOrigin, expectedAppSlug: this.appSlug, expectedSource: this.frame.contentWindow, direction: "to-shell" });
+    const message = validateMessageEvent(event, { expectedOrigin: this.appOrigin, expectedAppId: this.appId, expectedSource: this.frame.contentWindow, direction: "to-shell" });
     if (!message || (message.type !== "result" && message.type !== "execution.error")) return;
     const pending = this.pending.get(message.requestId);
     if (!pending) return;
@@ -15,12 +15,12 @@ export class PostMessageExecutor implements AppExecutor {
     pending.resolve(message.type === "execution.error" ? { error: message.error } : { value: message.result, done: message.done, message: message.message });
   };
 
-  constructor(private readonly frame: HTMLIFrameElement, private readonly appSlug: string, private readonly appOrigin: string) {
+  constructor(private readonly frame: HTMLIFrameElement, private readonly appId: string, private readonly appOrigin: string) {
     window.addEventListener("message", this.onMessage);
   }
 
-  execute(appSlug: string, code: string, { signal, timeoutMs }: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult> {
-    if (appSlug !== this.appSlug) return Promise.reject(new Error("Executor app slug mismatch"));
+  execute(appId: string, code: string, { signal, timeoutMs }: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult> {
+    if (appId !== this.appId) return Promise.reject(new Error("Executor app id mismatch"));
     if (!this.frame.contentWindow) return Promise.reject(new Error("App iframe is not available"));
     const requestId = createRequestId();
     return new Promise((resolve, reject) => {
@@ -28,7 +28,7 @@ export class PostMessageExecutor implements AppExecutor {
       signal.addEventListener("abort", finishAbort, { once: true });
       const timer = setTimeout(() => { signal.removeEventListener("abort", finishAbort); this.pending.delete(requestId); reject(new Error(`App execution timed out after ${timeoutMs}ms`)); }, timeoutMs);
       this.pending.set(requestId, { resolve: value => { signal.removeEventListener("abort", finishAbort); resolve(value); }, reject, timer });
-      this.frame.contentWindow!.postMessage(createBridgeMessage(appSlug, requestId, { type: "execute", code }), this.appOrigin);
+      this.frame.contentWindow!.postMessage(createBridgeMessage(appId, requestId, { type: "execute", code }), this.appOrigin);
     });
   }
 

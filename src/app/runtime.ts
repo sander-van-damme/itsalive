@@ -1,4 +1,4 @@
-import { AppBridge, slugFromHostname } from "./bridge";
+import { AppBridge, idFromHostname } from "./bridge";
 import { appDatabaseApi } from "./db";
 import { inspectDom, ref } from "./inspect";
 import { installLogging } from "./logs";
@@ -27,8 +27,8 @@ function bounded(value: unknown, maxBytes: number): unknown {
 
 export async function startAppRuntime(options: RuntimeOptions) {
   const rootOrigin = new URL(options.rootOrigin).origin;
-  const appSlug = options.appSlug ?? slugFromHostname(rootOrigin);
-  const bridge = new AppBridge(rootOrigin, appSlug);
+  const appId = options.appId ?? idFromHostname(rootOrigin);
+  const bridge = new AppBridge(rootOrigin, appId);
   const logs = installLogging(bridge);
   const cronCallbacks = new Map<string, () => unknown>();
   const tools = createToolsApi(logs.add);
@@ -126,8 +126,8 @@ export async function startAppRuntime(options: RuntimeOptions) {
 
   await loadSavedDocument();
   const autosave = installAutosave(options.autosaveDelay);
-  bridge.post({ type: "status", status: "ready", detail: appSlug });
-  return { bridge, appSlug, autosave, destroy: () => { removeEventListener("message", listener); autosave.disconnect(); } };
+  bridge.post({ type: "status", status: "ready", detail: appId });
+  return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); autosave.disconnect(); } };
 }
 
 export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {
@@ -144,7 +144,7 @@ export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi
 
 export function redirectStandaloneToShell(rootOrigin: string) {
   if (window.parent !== window) return false;
-  const slug = slugFromHostname(rootOrigin);
-  location.replace(`${new URL(rootOrigin).origin}/?app=${encodeURIComponent(slug)}`);
+  const id = idFromHostname(rootOrigin);
+  location.replace(`${new URL(rootOrigin).origin}/?app=${encodeURIComponent(id)}`);
   return true;
 }
