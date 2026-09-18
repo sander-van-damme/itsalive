@@ -60,7 +60,7 @@ describe('AgentRunner lifecycle', () => {
       generate: vi.fn(),
     };
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('dom.inspect')) return { value: '@1 body\n└─ @2 main "Ready"' };
+      if (code.includes('document.body.innerHTML')) return { value: '<main>Ready</main>' };
       if (code.includes('dataset.first')) {
         events.push('execute:first');
         releaseFirst();
@@ -93,7 +93,7 @@ describe('AgentRunner lifecycle', () => {
 
   it('extracts a single JavaScript fence even when the model adds prose', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
-    const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nconst view = await itsalive.dom.inspect();\nreturn view;\n```' })) };
+    const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nconst view = document.body;\nreturn view;\n```' })) };
     const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ value: 'ok' })) };
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
@@ -105,7 +105,7 @@ describe('AgentRunner lifecycle', () => {
     });
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
-    expect((executor.execute.mock.calls as unknown[][])[0]?.[1]).toBe('const view = await itsalive.dom.inspect();\nreturn view;');
+    expect((executor.execute.mock.calls as unknown[][])[0]?.[1]).toBe('const view = document.body;\nreturn view;');
   });
 
   it('rejects syntax-invalid generated JavaScript before calling the executor', async () => {
@@ -160,7 +160,7 @@ describe('AgentRunner lifecycle', () => {
       .mockResolvedValueOnce({ text: 'return itsalive.done("ready");' }) };
     let inspections = 0;
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('itsalive.dom.inspect')) {
+      if (code.includes('document.body.innerHTML')) {
         inspections++;
         return inspections === 1
           ? { value: '@1 body\n└─ @2 fiddl-app' }
@@ -245,7 +245,7 @@ describe('AgentRunner lifecycle', () => {
     let release!: (value: { text: string }) => void;
     const first = new Promise<{ text: string }>(resolve => { release = resolve; });
     const providers = { generate: vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce({ text: 'return itsalive.done();' }) };
-    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('dom.inspect') ? { value: '@1 body\n└─ @2 main "Ready"' } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('document.body.innerHTML') ? { value: '<main>Ready</main>' } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
     const queue: string[] = [];
     const consume = vi.fn(() => queue.splice(0));
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
@@ -270,7 +270,7 @@ describe('AgentRunner lifecycle', () => {
     const queue: string[] = [];
     let executions = 0;
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('dom.inspect')) return { value: '@1 body\n└─ @2 main "Ready"' };
+      if (code.includes('document.body.innerHTML')) return { value: '<main>Ready</main>' };
       if (++executions === 1) queue.push('A final user action arrived.');
       return { done: true };
     }) };
