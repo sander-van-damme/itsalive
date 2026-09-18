@@ -59,6 +59,7 @@ export interface GenerateResult {
 export interface LlmAdapter {
   id: string;
   generate(request: GenerateRequest, credential?: Credential): Promise<GenerateResult>;
+  stream?(request: GenerateRequest, credential: Credential | undefined, onText: (delta: string) => void): Promise<GenerateResult>;
 }
 
 export interface DecisionRequest { state: unknown; signal?: AbortSignal; }
