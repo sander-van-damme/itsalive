@@ -177,8 +177,10 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .advanced-content { padding-top: 16px; }
 .endpoint-field:not(.prominent) { opacity: .78; }
 .token-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.security-note, .diagnostics p { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.security-note, .diagnostics p, .build-info p { color: var(--muted); font-size: 12px; line-height: 1.55; }
 .diagnostics p { margin: -7px 0 13px; }
+.build-info p { margin: 0; }
+.build-info code { color: var(--text); overflow-wrap: anywhere; }
 
 /* Collapsed state */
 .shell.collapsed { grid-template-columns: minmax(0, 1fr) var(--rail-collapsed-width); }
