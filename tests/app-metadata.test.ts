@@ -25,3 +25,14 @@ describe('deriveAppName', () => {
     expect(deriveAppName('Create a practice timer')).toBe('Practice Timer');
   });
 });
+
+
+describe('deriveAppName', () => {
+  it('removes generic first-run intent instead of naming the app after the sentence prefix', () => {
+    expect(deriveAppName('I want an app that teaches me chords, musical chords, and use the violin as the model instrument.')).toBe('Chords');
+  });
+  it('keeps concise meaningful app descriptions readable', () => {
+    expect(deriveAppName('I want to make a meal planner for my family')).toBe('Meal Planner Family');
+    expect(deriveAppName('Create a practice timer')).toBe('Practice Timer');
+  });
+});
