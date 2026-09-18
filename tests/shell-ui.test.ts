@@ -87,6 +87,17 @@ describe('ShellUI workspace', () => {
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
     expect([...document.querySelectorAll<HTMLOptionElement>('#provider option')].map(option => option.value)).toContain('deepseek');
   });
+
+  it('keeps agent busy state independent from runtime connection state', () => {
+    const { ui } = mounted();
+    ui.setConnectionStatus('App runtime error', 'error');
+    ui.setBusy(true);
+    expect(document.querySelector('.working-state')?.textContent).toContain('Working');
+    expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(false);
+    ui.setBusy(false);
+    expect(document.querySelector('.working-state')).toBeNull();
+    expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(false);
+  });
 });
 
 describe('friendlyError', () => {

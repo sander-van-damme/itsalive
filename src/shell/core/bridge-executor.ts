@@ -26,7 +26,7 @@ export class PostMessageExecutor implements AppExecutor {
     return new Promise((resolve, reject) => {
       const finishAbort = () => { const item = this.pending.get(requestId); if (item) { clearTimeout(item.timer); this.pending.delete(requestId); reject(signal.reason ?? new DOMException("Aborted", "AbortError")); } };
       signal.addEventListener("abort", finishAbort, { once: true });
-      const timer = setTimeout(() => { this.pending.delete(requestId); reject(new Error(`App execution timed out after ${timeoutMs}ms`)); }, timeoutMs);
+      const timer = setTimeout(() => { signal.removeEventListener("abort", finishAbort); this.pending.delete(requestId); reject(new Error(`App execution timed out after ${timeoutMs}ms`)); }, timeoutMs);
       this.pending.set(requestId, { resolve: value => { signal.removeEventListener("abort", finishAbort); resolve(value); }, reject, timer });
       this.frame.contentWindow!.postMessage(createBridgeMessage(appSlug, requestId, { type: "execute", code }), this.appOrigin);
     });
