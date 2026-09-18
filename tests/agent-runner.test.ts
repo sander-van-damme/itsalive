@@ -163,8 +163,8 @@ describe('AgentRunner lifecycle', () => {
       if (code.includes('document.body.innerHTML')) {
         inspections++;
         return inspections === 1
-          ? { value: '@1 body\n└─ @2 fiddl-app' }
-          : { value: '@1 body\n└─ @2 fiddl-app\n   └─ @3 main "Today’s practice"' };
+          ? { value: '<fiddl-app></fiddl-app>' }
+          : { value: '<fiddl-app><main>Today’s practice</main></fiddl-app>' };
       }
       return { done: true, message: 'candidate' };
     }) };
