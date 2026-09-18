@@ -36,6 +36,11 @@ function normalizePersistedState(value: unknown): Record<string, string | boolea
   return Object.keys(state).length ? state : undefined;
 }
 
+function targetLooksSensitive(target: InteractionSnapshot["target"]): boolean {
+  return [target.tag, target.id, ...Object.entries(target.state ?? {}).flatMap(([key, value]) => [key, typeof value === "string" ? value : undefined])]
+    .some(value => typeof value === "string" && isSensitiveName(value));
+}
+
 function readTarget(node: Element | null, fallback: InteractionSnapshot["target"]): InteractionSnapshot["target"] {
   let parsedState: unknown = fallback.state;
   if (node?.hasAttribute("state")) {
@@ -46,14 +51,15 @@ function readTarget(node: Element | null, fallback: InteractionSnapshot["target"
   const tag = (node?.getAttribute("tag") ?? fallback.tag ?? "unknown").slice(0, 100) || "unknown";
   const rawId = node?.hasAttribute("id") ? node.getAttribute("id") : fallback.id;
   const id = rawId ? rawId.slice(0, 200) : undefined;
-  const sensitive = [tag, id, ...Object.entries(state ?? {}).flatMap(([key, value]) => [key, typeof value === "string" ? value : undefined])].some(value => typeof value === "string" && isSensitiveName(value));
   const rawValue = node?.hasAttribute("value") ? node.getAttribute("value") : fallback.value;
-  return {
+  const result: InteractionSnapshot["target"] = {
     tag,
     ...(id ? { id } : {}),
-    ...(!sensitive && rawValue !== null && rawValue !== undefined ? { value: rawValue.slice(0, 500) } : {}),
+    ...(rawValue !== null && rawValue !== undefined ? { value: rawValue.slice(0, 500) } : {}),
     ...(state ? { state } : {}),
   };
+  if (targetLooksSensitive(result)) delete result.value;
+  return result;
 }
 
 /** Reads both the rich current record format and the legacy attribute-only format. */
@@ -63,7 +69,8 @@ export function readInteractionRecord(node: Element): InteractionSnapshot {
   const target = readTarget(node.querySelector(":scope > itsalive-target"), legacyTarget);
   const actualTarget = readTarget(node.querySelector(":scope > itsalive-actual-target"), legacyActual);
   const parsedSeq = Number(node.getAttribute("seq"));
-  const sensitive = [target.tag, target.id, actualTarget.tag, actualTarget.id].some(value => typeof value === "string" && isSensitiveName(value));
+  const sensitive = targetLooksSensitive(target) || targetLooksSensitive(actualTarget);
+  if (sensitive) { delete target.value; delete actualTarget.value; }
   const rawKey = node.getAttribute("key");
   return {
     seq: Number.isSafeInteger(parsedSeq) && parsedSeq >= 0 ? parsedSeq : 0,
