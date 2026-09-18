@@ -1,7 +1,7 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
 import { AgentRunner, InitialBuildIntent, RuntimeSession, ShellDatabase, createDefaultRegistry, nextCronRun, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
-import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
+import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -129,7 +129,7 @@ async function selectApp(id: string): Promise<void> {
   if (!apps.some(a => a.id === id)) return;
   if (activeId !== id) stopActiveRun('App selection changed');
   activeId = id;
-  const url = new URL(location.href); url.searchParams.set('app', id); history.replaceState(null, '', url);
+  history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
   ui.setConnectionStatus('Connecting…', 'working');
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('App unavailable', 'error'); }, 10_000);
@@ -286,4 +286,4 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   return { apiKey };
 }
 
-void refreshApps(new URL(location.href).searchParams.get('app') ?? undefined).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));
+void refreshApps(appIdFromShellUrl(location.href)).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));

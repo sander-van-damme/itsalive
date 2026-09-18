@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   ROOT_DOMAIN,
+  appIdFromShellUrl,
   appOrigin,
+  shellUrlForApp,
   BRIDGE_VERSION,
   createBridgeMessage,
   createRequestId,
@@ -38,6 +40,14 @@ describe("domain helpers", () => {
     expect(parseRootDomain("example.com").origin).toBe("https://example.com");
     expect(parseRootDomain("http://localhost:5173").origin).toBe("http://localhost:5173");
     expect(appOrigin(APP_ID, "https://Example.COM:8443")).toBe(`https://${APP_ID}.example.com:8443`);
+  });
+
+  it("uses the URL fragment as the canonical client-side app route", () => {
+    const canonical = shellUrlForApp("https://itsalive.org/?app=legacy&mode=full", APP_ID);
+    expect(canonical.href).toBe(`https://itsalive.org/?mode=full#app=${APP_ID}`);
+    expect(appIdFromShellUrl(canonical)).toBe(APP_ID);
+    expect(appIdFromShellUrl(`https://itsalive.org/?app=${APP_ID}`)).toBe(APP_ID);
+    expect(appIdFromShellUrl(`https://itsalive.org/?app=legacy#app=${APP_ID}`)).toBe(APP_ID);
   });
 });
 

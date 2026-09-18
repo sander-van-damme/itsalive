@@ -7,7 +7,7 @@ import { createToolsApi } from "./tools";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
-import { serializeError } from "../shared";
+import { serializeError, shellUrlForApp } from "../shared";
 
 const DONE = Symbol("agent-done");
 
@@ -132,6 +132,6 @@ export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi
 export function redirectStandaloneToShell(rootOrigin: string) {
   if (window.parent !== window) return false;
   const id = idFromHostname(rootOrigin);
-  location.replace(`${new URL(rootOrigin).origin}/?app=${encodeURIComponent(id)}`);
+  location.replace(shellUrlForApp(`${new URL(rootOrigin).origin}/`, id).href);
   return true;
 }

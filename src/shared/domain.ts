@@ -38,6 +38,23 @@ export function rootOrigin(rootDomain: string, protocol?: "http:" | "https:"): s
   return parseRootDomain(rootDomain, protocol).origin;
 }
 
+/** Reads the selected app from the client-side fragment, with legacy query-string fallback. */
+export function appIdFromShellUrl(value: URL | string): string | undefined {
+  const url = value instanceof URL ? value : new URL(value);
+  const fragment = new URLSearchParams(url.hash.slice(1)).get("app");
+  return fragment ?? url.searchParams.get("app") ?? undefined;
+}
+
+/** Builds the canonical client-side shell URL without sending the app ID to the server. */
+export function shellUrlForApp(value: URL | string, id: string): URL {
+  const url = new URL(value.toString());
+  url.searchParams.delete("app");
+  const fragment = new URLSearchParams(url.hash.slice(1));
+  fragment.set("app", normalizeAppId(id));
+  url.hash = fragment.toString();
+  return url;
+}
+
 export function appOrigin(id: string, rootDomain: string, protocol?: "http:" | "https:"): string {
   const root = parseRootDomain(rootDomain, protocol);
   const hostname = `${normalizeAppId(id)}.${root.hostname}`;
