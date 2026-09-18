@@ -18,7 +18,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Per-app origin isolation with no storage namespaces or shared app database.
 - IndexedDB shell repositories for app metadata, full history, schedules, and logs.
 - Persistent app HTML with debounced autosave, live form-control normalization, restore, and script re-execution.
-- JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, and repair turns.
+- JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, repair turns, and intentionally small live DOM changes instead of one-shot app dumps.
 - Context budgeting that always retains the immutable system prompt, app prompt, current trigger, and complete compact tool inventory.
 - OpenRouter-only provider registry for the product runtime, backed by a generic HTTP adapter that can support additional providers later.
 - Compact DOM inspection with temporary references, literal history search, in-frame screenshots, and app log retrieval.
@@ -92,7 +92,7 @@ itsalive.done(message)
 
 The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Custom tools receive the same API object as `env.itsalive` alongside `document`, `window`, and `fetch`.
 
-Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state should use native browser IndexedDB directly; each app has its own browser origin, so that storage is naturally isolated. Runtime-private IndexedDB is used only for platform persistence of saved HTML and custom tools. The system prompt strongly requires meaningful application UI to use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should preserve restored light DOM and normally use it so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply. This is a generation contract rather than runtime output validation.
+Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state should use native browser IndexedDB directly; each app has its own browser origin, so that storage is naturally isolated. Runtime-private IndexedDB is used only for platform persistence of saved HTML and custom tools. The system prompt treats the document as a live drawing board: ordinary semantic HTML and browser DOM APIs are the default, changes are deliberately small and idempotent, and native Custom Elements are optional rather than mandatory. This keeps code generation simple while still allowing reusable components when they genuinely help.
 
 Deleting an app always removes its shell-owned metadata, history, logs, and schedules. If that app is active, the shell also asks its mounted runtime to unregister service workers and clear origin-owned IndexedDB, Web Storage, and Cache Storage before removal. Inactive apps have no mounted cross-origin frame, so their origin-owned browser storage cannot be cleared by this small best-effort path.
 
