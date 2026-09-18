@@ -1,7 +1,7 @@
 import { buildModelContext, type TokenCounter } from "./context";
 import { appendHistory } from "./history";
 import type { ShellDatabase } from "./database";
-import type { Credential, ModelConfig, ToolSummary } from "./types";
+import type { Credential, ModelConfig } from "./types";
 import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
 
@@ -23,7 +23,6 @@ export interface RunOptions {
   trigger: string;
   model: ModelConfig;
   credential?: Credential;
-  tools: ToolSummary[];
   summary?: string;
   maxTurns?: number;
   maxDurationMs?: number;
@@ -39,7 +38,7 @@ export interface RunOptions {
 export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
 
 const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
-const COMPLETION_INSPECTION = 'return await itsalive.dom.inspect({ maxDepth: 4, maxNodes: 80 });';
+const COMPLETION_INSPECTION = 'return document.body.innerHTML;';
 
 class GeneratedCodeError extends Error {
   constructor(readonly phase: "format" | "compile", message: string) {
@@ -73,9 +72,9 @@ export class AgentRunner {
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
+          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
-          console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, toolCount: options.tools.length, hasObservation: Boolean(observation) });
+          console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, hasObservation: Boolean(observation) });
           const commandParser = new StreamedCommandParser();
           let streamedResult: ExecutionResult | undefined;
           let streamedObservation: string | undefined;
@@ -336,19 +335,20 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
   }
 }
 
-function assessCompletionTree(tree: string): { ok: true } | { ok: false; reason: string } {
-  const lines = tree.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-    .filter(line => !/\b(?:script|style)\b/.test(line));
-  const contentLines = lines.slice(1);
-  const text = [...tree.matchAll(/"([^"]+)"/g)].map(match => match[1]!.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-  const hasInteractive = contentLines.some(line => /\b(?:button|input|textarea|select|a)(?:[#.\s"]|$)/i.test(line));
-  const hasVisual = contentLines.some(line => /\b(?:canvas|svg|img|video|audio)(?:[#.\s"]|$)/i.test(line));
+function assessCompletionTree(html: string): { ok: true } | { ok: false; reason: string } {
+  const withoutImplementation = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ");
+  const text = withoutImplementation.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim();
+  const hasInteractive = /<(?:button|input|textarea|select|a)\b/i.test(withoutImplementation);
+  const hasVisual = /<(?:canvas|svg|img|video|audio)\b/i.test(withoutImplementation);
+  const hasStructure = /<(?:main|section|article|header|nav|form|div|ul|ol|table)\b/i.test(withoutImplementation);
   const placeholderOnly = Boolean(text) && /^(?:[\w .'-]+\s+)?(?:loading|starting|initializing|preparing|please wait)[.…! ]*$/i.test(text);
 
   if (placeholderOnly && !hasInteractive && !hasVisual) {
     return { ok: false, reason: "the rendered app still appears to be only a loading/initializing placeholder" };
   }
-  if (!text && !hasInteractive && !hasVisual && contentLines.length < 2) {
+  if (!text && !hasInteractive && !hasVisual && !hasStructure) {
     return { ok: false, reason: "the app contains no meaningful rendered UI yet" };
   }
   return { ok: true };
