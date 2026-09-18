@@ -148,7 +148,7 @@ export class AgentRunner {
               console.info('Continuing to next turn for streamed command repair');
               continue;
             }
-            result = streamedResult;
+            result = streamedResult!;
             observation = streamedObservation;
             if (result.error) {
               console.info('A streamed command failed; continuing to next turn for repair');
