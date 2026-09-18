@@ -104,6 +104,7 @@ export class ShellDatabase {
   };
   history = {
     add: async (entry: HistoryEntry) => Number(await this.put("history", entry)),
+    all: () => this.all<HistoryEntry>("history"),
     forApp: (id: string) => this.byIndex<HistoryEntry>("history", "appId", id),
   };
   logs = {
