@@ -18,8 +18,6 @@ export interface HistoryEntry {
   kind?: "chat" | "javascript" | "execution" | "error" | "compaction";
 }
 
-export interface ToolSummary { name: string; description: string }
-
 export interface ModelConfig {
   id: string;
   provider: string;
