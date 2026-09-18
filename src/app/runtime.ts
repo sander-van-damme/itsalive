@@ -124,7 +124,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   await loadSavedDocument();
   const autosave = installAutosave(options.autosaveDelay);
   bridge.post({ type: "status", status: "ready", detail: appId });
-  return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); autosave.disconnect(); } };
+  return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); autosave.disconnect(); logs.destroy(); } };
 }
 
 export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {

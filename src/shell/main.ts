@@ -1,15 +1,17 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, InitialBuildIntent, RuntimeSession, ShellDatabase, createDefaultRegistry, deleteApp, nextCronRun, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { AgentRunner, DiagnosticLog, InitialBuildIntent, RuntimeSession, ShellDatabase, buildDiagnosticExport, createDefaultRegistry, deleteApp, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
 
 const db = new ShellDatabase();
+let activeId: string | undefined;
+const diagnostics = new DiagnosticLog(db, () => activeId);
+diagnostics.installConsoleCapture();
 const registry = createDefaultRegistry();
 let apps: AppRecord[] = [];
-let activeId: string | undefined;
 let running = false;
 let activeRun: AbortController | undefined;
 let connectionTimer: number | undefined;
@@ -70,9 +72,9 @@ const ui = new ShellUI(root, {
     return { name: parsed.name.trim().slice(0, 60), prompt: parsed.prompt.trim() };
   },
   exportLogs: async () => {
-    const logs = await db.logs.all();
-    const selected = activeId ? logs.filter(item => !item.appId || item.appId === activeId) : logs;
-    const contents = selected.sort((a, b) => a.timestamp - b.timestamp).map(item => `${new Date(item.timestamp).toISOString()} [${item.level.toUpperCase()}] [${item.source}] ${item.message}${item.details === undefined ? '' : ` ${safeStringify(item.details)}`}`).join('\n');
+    await diagnostics.flush();
+    const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
+    const contents = buildDiagnosticExport(logs, history, activeId);
     downloadText(`itsalive-logs-${Date.now()}.log`, contents || 'No log entries recorded.');
   },
   reloadApp: () => {
@@ -246,16 +248,7 @@ async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; 
 
 function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appId, message.requestId, payload), currentOrigin()); }
 async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appId?: string) {
-  const method = level === 'debug' ? 'debug' : level;
-  const safeMessage = String(sanitizeDiagnostic(message));
-  const safeDetails = sanitizeDiagnostic(serializableDetails(details));
-  console[method](`[itsalive:${source}] ${safeMessage}`, ...(safeDetails === undefined ? [] : [safeDetails]));
-  await db.logs.add({ timestamp: Date.now(), level, source, message: safeMessage, details: safeDetails, appId });
-}
-
-function serializableDetails(value: unknown): unknown {
-  if (value instanceof Error) return { name: value.name, message: value.message, stack: value.stack };
-  try { return value === undefined ? undefined : JSON.parse(JSON.stringify(value)); } catch { return String(value); }
+  await diagnostics.write(level, source, message, details, appId);
 }
 
 async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>[2], timeoutMs = 10_000): Promise<T> {
@@ -271,7 +264,6 @@ async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>
   });
 }
 
-function safeStringify(value: unknown): string { try { return JSON.stringify(value); } catch { return String(value); } }
 function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
 
 async function testModelConnection(candidate: SettingsValue): Promise<SettingsValue> {
