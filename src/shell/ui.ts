@@ -38,6 +38,8 @@ export class ShellUI {
   private messages: ChatLine[] = [];
   private settings: SettingsValue = { apiKey: '' };
   private busy = false;
+  private agentProgress = '';
+  private appUpdating = false;
   private runtimeState: RuntimeViewState = 'ready';
   private runtimeDetail = '';
   private collapsed = localStorage.getItem('itsalive.sidebar') === 'collapsed';
@@ -77,7 +79,16 @@ export class ShellUI {
 
   setBusy(busy: boolean): void {
     this.busy = busy;
+    if (!busy) { this.agentProgress = ''; this.appUpdating = false; }
+    this.renderStageState();
     this.renderRail();
+  }
+
+  setAgentProgress(message: string, appUpdating = false): void {
+    this.agentProgress = message.trim() || 'Working…';
+    this.appUpdating = appUpdating;
+    this.renderStageState();
+    if (this.view === 'workspace') this.renderPanel();
   }
 
   setConnectionStatus(status: string, tone: 'idle' | 'working' | 'connected' | 'error'): void {
@@ -124,8 +135,12 @@ export class ShellUI {
     const node = this.mount.querySelector<HTMLElement>('[data-stage-state]');
     if (!node) return;
     const isProblem = Boolean(this.active) && this.runtimeState === 'problem';
-    node.hidden = !isProblem;
+    const isUpdating = Boolean(this.active) && this.busy && this.appUpdating && !isProblem;
+    node.className = isUpdating ? 'stage-state updating' : 'stage-state';
+    node.hidden = !isProblem && !isUpdating;
     if (isProblem) node.innerHTML = `<strong>${esc(this.active!.name)} couldn't load.</strong><p>Try reloading the app.</p><button class="action" data-stage-retry type="button">Try again</button>`;
+    else if (isUpdating) node.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(this.agentProgress || 'Updating the app…')}</span>`;
+    else node.replaceChildren();
     node.querySelector<HTMLButtonElement>('[data-stage-retry]')?.addEventListener('click', () => this.actions.reloadApp());
   }
 
@@ -240,9 +255,9 @@ export class ShellUI {
   private renderChat(panel: HTMLElement): void {
     const messages = this.messages.length
       ? this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')
-      : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>Make ${esc(this.active!.name)} yours</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
-    panel.innerHTML = `${this.busy ? '<div class="working-state"><span class="spinner" aria-hidden="true"></span>Working…</div>' : ''}
-      <div class="chat-stream" data-stream aria-live="polite">${messages}${this.busy ? '<div class="thinking" aria-label="AI is thinking"><i></i><i></i><i></i></div>' : ''}</div>
+      : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>What should we change?</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
+    panel.innerHTML = `${this.busy ? `<div class="working-state" role="status"><span class="spinner" aria-hidden="true"></span>${esc(this.agentProgress || 'Working…')}</div>` : ''}
+      <div class="chat-stream" data-stream aria-live="polite">${messages}</div>
       <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" rows="1" placeholder="Ask me to change anything…" ${this.busy ? 'disabled' : ''}></textarea><button class="send" type="submit" aria-label="Send message" ${this.busy ? 'disabled' : ''}><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
     const stream = panel.querySelector<HTMLElement>('[data-stream]')!;
     if (this.chatNearBottom) stream.scrollTop = stream.scrollHeight;
@@ -308,9 +323,16 @@ export class ShellUI {
     const button = panel.querySelector<HTMLButtonElement>('button[type=submit]')!;
     result.className = 'settings-result pending'; result.textContent = 'Testing…'; button.disabled = true;
     const value: SettingsValue = { apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim() };
-    try { await this.actions.saveSettings(value); this.settings = value; this.settingsNotice = ''; result.className = 'settings-result success'; result.textContent = 'API key saved. OpenRouter connection works. You can now create an app.'; }
+    try {
+      await this.actions.saveSettings(value);
+      this.settings = value;
+      this.settingsNotice = '';
+      result.className = 'settings-result success';
+      result.textContent = 'API key saved. OpenRouter connection works.';
+      if (!this.apps.length && !this.active) { this.view = 'creation'; this.renderRail(); return; }
+    }
     catch { result.className = 'settings-result failure'; result.textContent = 'We couldn’t connect to OpenRouter. Check your API key and try again.'; }
-    finally { button.disabled = false; }
+    finally { if (button.isConnected) button.disabled = false; }
   }
 
   private handleDelete(): void {
