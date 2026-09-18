@@ -94,7 +94,7 @@ The platform uses one branded browser global because persisted generated scripts
 
 Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state should use native browser IndexedDB directly; each app has its own browser origin, so that storage is naturally isolated. Runtime-private IndexedDB is used only for platform persistence of saved HTML and custom tools. The system prompt strongly requires meaningful application UI to use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should preserve restored light DOM and normally use it so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply. This is a generation contract rather than runtime output validation.
 
-Deleting an app always removes its shell-owned metadata, history, logs, and schedules. If that app is active, the shell also asks its mounted runtime to clear origin-owned IndexedDB, Web Storage, and Cache Storage before removal. Inactive apps have no mounted cross-origin frame, so their origin-owned browser storage cannot be cleared by this small best-effort path.
+Deleting an app always removes its shell-owned metadata, history, logs, and schedules. If that app is active, the shell also asks its mounted runtime to unregister service workers and clear origin-owned IndexedDB, Web Storage, and Cache Storage before removal. Inactive apps have no mounted cross-origin frame, so their origin-owned browser storage cannot be cleared by this small best-effort path.
 
 ## Security notes
 

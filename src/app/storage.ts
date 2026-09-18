@@ -13,6 +13,15 @@ function deleteDatabase(name: string): Promise<void> {
 export async function clearOriginStorage(): Promise<void> {
   const failures: unknown[] = [];
   try { await closeAppDatabase(); } catch (error) { failures.push(error); }
+  if (typeof navigator !== "undefined" && "serviceWorker" in navigator && typeof navigator.serviceWorker?.getRegistrations === "function") {
+    try {
+      const registrations = await navigator.serviceWorker.getRegistrations();
+      const result = await Promise.allSettled(registrations.map(async registration => {
+        if (!await registration.unregister()) throw new Error(`Unable to unregister service worker ${registration.scope}`);
+      }));
+      failures.push(...result.filter(item => item.status === "rejected").map(item => item.reason));
+    } catch (error) { failures.push(error); }
+  }
   try { localStorage.clear(); } catch (error) { failures.push(error); }
   try { sessionStorage.clear(); } catch (error) { failures.push(error); }
   if (typeof caches !== "undefined") {
