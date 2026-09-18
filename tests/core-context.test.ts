@@ -6,12 +6,12 @@ const model = { id: "test", provider: "test", model: "test", maxContextTokens: 4
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
-    for (const current of ["itsalive.done", "itsalive.tools", "itsalive.history", "itsalive.dom", "itsalive.llm"]) {
+    for (const current of ["itsalive.done", "itsalive.history", "itsalive.dom.screenshot", "itsalive.llm"]) {
       expect(SYSTEM_PROMPT).toContain(current);
     }
     expect(SYSTEM_PROMPT).toContain("native browser IndexedDB");
     expect(SYSTEM_PROMPT).toContain("own browser origin");
-    for (const obsolete of [/itsalive\.db/, /itsalive\.reload/, /return\s+done\(/, /itsalive\.ai/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
+    for (const obsolete of [/itsalive\.tools/, /itsalive\.dom\.inspect/, /itsalive\.dom\.ref/, /itsalive\.db/, /itsalive\.reload/, /return\s+done\(/, /itsalive\.ai/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
       expect(SYSTEM_PROMPT).not.toMatch(obsolete);
     }
   });
@@ -30,13 +30,12 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
 
-  it("always includes immutable and mandatory context plus every tool", () => {
-    const result = buildModelContext({ model, appPrompt: "A violin coach", trigger: "Help me", tools: [{ name: "tally", description: "Add totals" }, { name: "find", description: "Find notes" }], history: [] });
+  it("always includes immutable app context and the current trigger", () => {
+    const result = buildModelContext({ model, appPrompt: "A violin coach", trigger: "Help me", history: [] });
     expect(result.system).toBe(SYSTEM_PROMPT);
     expect(result.messages.at(-1)?.content).toContain("A violin coach");
-    expect(result.messages.at(-1)?.content).toContain("tally — Add totals");
-    expect(result.messages.at(-1)?.content).toContain("find — Find notes");
     expect(result.messages.at(-1)?.content).toContain("Help me");
+    expect(result.messages.at(-1)?.content).not.toContain("CUSTOM TOOLS");
   });
 
   it("includes the current trigger and latest observation only once", () => {
@@ -47,7 +46,7 @@ describe("shell context builder", () => {
       { id: 2, appId: "app", timestamp: 2, role: "agent" as const, kind: "javascript" as const, content: "return 1;" },
       { id: 3, appId: "app", timestamp: 3, role: "observation" as const, kind: "error" as const, content: observation },
     ];
-    const result = buildModelContext({ model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger, observation, tools: [], history });
+    const result = buildModelContext({ model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger, observation, history });
     const joined = result.messages.map(message => message.content).join("\n");
 
     expect(joined.split(trigger)).toHaveLength(2);
@@ -59,7 +58,7 @@ describe("shell context builder", () => {
   it("keeps newest fitting history rather than a fixed message count", () => {
     const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, maxOutputTokens: 100, observationHeadroomTokens: 100 };
     const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "user" as const, content: `message-${index} ${"x".repeat(80)}` }));
-    const result = buildModelContext({ model: tinyModel, appPrompt: "coach", trigger: "go", tools: [], history });
+    const result = buildModelContext({ model: tinyModel, appPrompt: "coach", trigger: "go", history });
     expect(result.omittedHistoryCount).toBeGreaterThan(0);
     expect(result.includedHistoryIds).toContain(19);
     expect(result.includedHistoryIds).not.toContain(0);
@@ -78,7 +77,6 @@ describe("shell context builder", () => {
       model: { ...model, maxContextTokens: 128_000, maxOutputTokens: 8_192 },
       appPrompt: "coach",
       trigger: "tiny follow-up",
-      tools: [],
       history,
     });
 
@@ -87,6 +85,6 @@ describe("shell context builder", () => {
   });
 
   it("rejects mandatory context that cannot fit rather than truncating system prompt", () => {
-    expect(() => buildModelContext({ model: { ...model, maxContextTokens: 50 }, appPrompt: "app", trigger: "go", tools: [], history: [] })).toThrow(/Mandatory context/);
+    expect(() => buildModelContext({ model: { ...model, maxContextTokens: 50 }, appPrompt: "app", trigger: "go", history: [] })).toThrow(/Mandatory context/);
   });
 });
