@@ -91,7 +91,7 @@ describe("app runtime namespace", () => {
 
     document.body.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return itsalive.apiVersion;", requestId: "version" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector(\'main[data-native-dom]\');", requestId: "native-dom" } }));
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector('main[data-native-dom]');", requestId: "native-dom" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'return itsalive.done("ok");', requestId: "done" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "cron.fire", callbackId: "daily", requestId: "cron" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" } }));
