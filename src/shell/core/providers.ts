@@ -205,6 +205,7 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
     try { json = JSON.parse(data) as Json; }
     catch { return false; }
     last = json;
+    if (json.error) throw new ProviderResponseError("Provider stream returned an error", sanitizeDiagnostic(json));
     const delta = json.choices?.[0]?.delta?.content;
     if (typeof delta === "string" && delta) {
       text += delta;
