@@ -158,7 +158,6 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       await refreshMessages();
     }
     await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
-    const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
     const result = await runner.run({
       appId: app.id,
@@ -167,7 +166,6 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       persistTrigger: false,
       model: modelConfig(),
       credential: credential(),
-      tools,
       summary: app.summary,
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
