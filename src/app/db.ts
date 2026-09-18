@@ -34,6 +34,12 @@ export function openAppDatabase(): Promise<IDBDatabase> {
   return database;
 }
 
+export async function closeAppDatabase(): Promise<void> {
+  if (!database) return;
+  (await database).close();
+  database = undefined;
+}
+
 export async function dbGet<T>(store: AppStore, key: IDBValidKey): Promise<T | undefined> {
   const db = await openAppDatabase();
   return request(db.transaction(store).objectStore(store).get(key)) as Promise<T | undefined>;
@@ -56,20 +62,7 @@ export async function dbDelete(store: AppStore, key: IDBValidKey): Promise<void>
   await completed;
 }
 
-export async function dbQuery<T>(store: AppStore, options: { prefix?: string; limit?: number } = {}) {
+export async function dbAll<T>(store: AppStore): Promise<T[]> {
   const db = await openAppDatabase();
-  const source = db.transaction(store).objectStore(store);
-  const output: Array<{ key: IDBValidKey; value: T }> = [];
-  const limit = Math.max(0, Math.min(options.limit ?? 100, 1000));
-  await new Promise<void>((resolve, reject) => {
-    const cursor = source.openCursor();
-    cursor.onerror = () => reject(cursor.error);
-    cursor.onsuccess = () => {
-      const row = cursor.result;
-      if (!row || output.length >= limit) return resolve();
-      if (!options.prefix || String(row.key).startsWith(options.prefix)) output.push({ key: row.key, value: row.value });
-      row.continue();
-    };
-  });
-  return output;
+  return request(db.transaction(store).objectStore(store).getAll());
 }

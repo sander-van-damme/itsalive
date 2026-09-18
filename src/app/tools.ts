@@ -1,4 +1,4 @@
-import { dbDelete, dbGet, dbQuery, dbSet, STORES } from "./db";
+import { dbAll, dbDelete, dbGet, dbSet, STORES } from "./db";
 import type { LogEntry, ToolRecord } from "./types";
 
 const validName = /^[a-zA-Z][a-zA-Z0-9_-]{0,63}$/;
@@ -19,8 +19,8 @@ export function createToolsApi(log: (level: LogEntry["level"], args: unknown[], 
     async get(name: string) { return dbGet<ToolRecord>(STORES.tools, name); },
     async search(query = "") {
       const needle = query.toLocaleLowerCase();
-      const rows = await dbQuery<ToolRecord>(STORES.tools, { limit: 1000 });
-      return rows.map(row => row.value).filter(tool => `${tool.name} ${tool.description}`.toLocaleLowerCase().includes(needle))
+      const rows = await dbAll<ToolRecord>(STORES.tools);
+      return rows.filter(tool => `${tool.name} ${tool.description}`.toLocaleLowerCase().includes(needle))
         .map(({ name, description, parameters }) => ({ name, description, parameters }));
     },
     async call(name: string, args: unknown = {}) {

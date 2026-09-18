@@ -4,6 +4,7 @@ import { installLogging } from "./logs";
 import { installAutosave, loadSavedDocument } from "./persistence";
 import { captureScreenshot } from "./screenshot";
 import { createToolsApi } from "./tools";
+import { clearOriginStorage } from "./storage";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
@@ -47,8 +48,8 @@ export async function startAppRuntime(options: RuntimeOptions) {
     bridge.post({ type: "cron.register", registration: { callbackId: id, schedule } });
     return { id, schedule };
   };
-  const llm = Object.freeze({ ask: async <T = unknown>(prompt: unknown, settings?: unknown) => {
-      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "llm.request", prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt), options: settings && typeof settings === "object" ? settings as Record<string, unknown> : undefined }, 120_000);
+  const llm = Object.freeze({ ask: async <T = unknown>(prompt: unknown) => {
+      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "llm.request", prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt) }, 120_000);
       if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
       if (response.error) throw new Error(response.error.message);
       return response.result as T;
@@ -98,6 +99,15 @@ export async function startAppRuntime(options: RuntimeOptions) {
     } else if (message.type === "reload") {
       bridge.post({ type: "result", result: { reloading: true } }, message.requestId);
       location.reload();
+    } else if (message.type === "storage.clear") {
+      autosave.suspend();
+      autosave.disconnect();
+      try {
+        await clearOriginStorage();
+        bridge.post({ type: "result", result: { cleared: true } }, message.requestId);
+      } catch (error) {
+        bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
+      }
     } else if (message.type === "cron.fire") {
       const id = message.callbackId;
       const callback = id && cronCallbacks.get(id);

@@ -3,7 +3,7 @@ import type { captureScreenshot } from "./screenshot";
 import type { createToolsApi } from "./tools";
 
 export interface LlmApi {
-  ask<T = unknown>(prompt: unknown, settings?: unknown): Promise<T>;
+  ask<T = unknown>(prompt: unknown): Promise<T>;
 }
 
 export interface ItsaliveRuntimeApi {

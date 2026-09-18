@@ -71,6 +71,14 @@ describe("bridge protocol", () => {
     expect(isShellToAppMessage(response)).toBe(true);
     expect(isBridgeMessage({ ...request, type: "ai.request" })).toBe(false);
     expect(isBridgeMessage({ ...response, type: "ai.response" })).toBe(false);
+    expect(isBridgeMessage({ ...request, options: { temperature: 1 } })).toBe(false);
+  });
+
+  it("rejects unused cron fields and runtime statuses", () => {
+    const envelope = { protocol: "itsalive", version: 2, appId: APP_ID, requestId: "req_fields" };
+    expect(isBridgeMessage({ ...envelope, type: "cron.register", registration: { callbackId: "daily", schedule: "0 8 * * *", description: "unused" } })).toBe(false);
+    for (const status of ["booting", "busy", "saving"]) expect(isBridgeMessage({ ...envelope, type: "status", status })).toBe(false);
+    expect(isBridgeMessage({ ...envelope, type: "status", status: "ready" })).toBe(true);
   });
 
   it("rejects removed legacy message types", () => {
