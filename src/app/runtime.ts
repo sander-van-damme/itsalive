@@ -13,7 +13,7 @@ const DONE = Symbol("agent-done");
 
 function stringifyExecutionValue(value: unknown): string {
   const seen = new WeakSet<object>();
-  return JSON.stringify(value, (_key, current: unknown) => {
+  const serialized = JSON.stringify(value, (_key, current: unknown) => {
     if (current instanceof Document) return `<!doctype html>\n${current.documentElement.outerHTML}`;
     if (current instanceof Element) return current.outerHTML;
     if (current instanceof NodeList || current instanceof HTMLCollection) return Array.from(current);
@@ -24,6 +24,7 @@ function stringifyExecutionValue(value: unknown): string {
     }
     return current;
   });
+  return serialized ?? "null";
 }
 
 function bounded(value: unknown, maxBytes: number): unknown {
