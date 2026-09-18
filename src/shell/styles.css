@@ -69,6 +69,8 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .stage-state[hidden] { display: none; }
 .stage-state strong { font-size: 20px; }
 .stage-state p { margin: 7px 0 18px; color: var(--muted); }
+.stage-state.updating { inset: 14px auto auto 14px; display: inline-flex; place-content: initial; justify-items: initial; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--panel) 92%, transparent); box-shadow: var(--shadow); backdrop-filter: blur(8px); color: var(--muted); font-size: 12px; pointer-events: none; }
+.stage-state.updating .spinner { width: 10px; height: 10px; }
 .mobile-view-button { display: none; }
 
 /* Rail and workspace header */
@@ -142,10 +144,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .empty-chat svg { width: 25px; }
 .empty-chat strong { display: block; margin: 11px 0 4px; color: var(--text); font-size: 18px; letter-spacing: -.02em; }
 .empty-chat p { margin: 0; font-size: 14px; line-height: 1.5; }
-.thinking { display: flex; gap: 5px; padding: 7px 2px; }
-.thinking i { width: 6px; height: 6px; border-radius: 50%; background: var(--muted); animation: pulse 1.2s infinite; }
-.thinking i:nth-child(2) { animation-delay: .15s; }
-.thinking i:nth-child(3) { animation-delay: .3s; }
 .composer { flex: 0 0 auto; padding: 12px 14px 14px; border-top: 1px solid var(--border); background: var(--panel); }
 .composer-box { min-height: 52px; padding: 8px 8px 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-md); display: flex; align-items: flex-end; gap: 8px; background: var(--surface); }
 .composer-box:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }

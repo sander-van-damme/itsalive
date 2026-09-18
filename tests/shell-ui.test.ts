@@ -30,7 +30,7 @@ describe('ShellUI workspace', () => {
     mounted();
     expect(document.querySelector('[data-composer]')).not.toBeNull();
     expect(document.querySelector('.tabs')).toBeNull();
-    expect(document.querySelector('.empty-chat')?.textContent).toContain('Make FiddleMate yours');
+    expect(document.querySelector('.empty-chat')?.textContent).toContain('What should we change?');
   });
 
   it('switches apps from the header and shows names without technical identifiers', () => {
@@ -84,6 +84,19 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('[data-create-status]')?.textContent).toContain('Starting your app');
   });
 
+  it('advances first-time provider setup directly into app creation', async () => {
+    const callbacks = actions();
+    const ui = new ShellUI(document.querySelector('#app')!, callbacks);
+    ui.setApps([]);
+    document.querySelector<HTMLButtonElement>('[data-create]')!.click();
+    const apiKey = document.querySelector<HTMLInputElement>('#apiKey')!;
+    apiKey.value = 'test-key';
+    document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
+
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'test-key' }));
+    await vi.waitFor(() => expect(document.querySelector('h1')?.textContent).toBe('What do you want to make?'));
+  });
+
   it('shows only OpenRouter API key configuration', async () => {
     const { callbacks } = mounted();
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
@@ -102,6 +115,7 @@ describe('ShellUI workspace', () => {
     document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
 
     await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'sk-or-v1-test' }));
+    expect(document.querySelector('h1')?.textContent).toBe('Settings');
     expect(document.querySelector('[data-result]')?.textContent).toContain('OpenRouter connection works');
   });
 
@@ -122,14 +136,31 @@ describe('ShellUI workspace', () => {
     expect(callbacks.selectApp).not.toHaveBeenCalled();
   });
 
-  it('keeps agent busy state independent from runtime connection state', () => {
+  it('shows one primary busy status plus a subtle app-update badge', () => {
+    const { ui } = mounted();
+    ui.setBusy(true);
+    ui.setAgentProgress('Updating the app…', true);
+
+    expect(document.querySelectorAll('.working-state')).toHaveLength(1);
+    expect(document.querySelector('.working-state')?.textContent).toContain('Updating the app');
+    expect(document.querySelector('.thinking')).toBeNull();
+    expect(document.querySelector('[data-stage-state]')?.textContent).toContain('Updating the app');
+    expect(document.querySelector('[data-stage-state]')?.classList.contains('updating')).toBe(true);
+
+    ui.setBusy(false);
+    expect(document.querySelector('.working-state')).toBeNull();
+    expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(true);
+  });
+
+  it('keeps runtime problems visible even while agent busy state changes', () => {
     const { ui } = mounted();
     ui.setConnectionStatus('App runtime error', 'error');
     ui.setBusy(true);
-    expect(document.querySelector('.working-state')?.textContent).toContain('Working');
-    expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(false);
+    ui.setAgentProgress('Updating the app…', true);
+
+    expect(document.querySelector('[data-stage-state]')?.textContent).toContain("couldn't load");
+    expect(document.querySelector('[data-stage-state]')?.classList.contains('updating')).toBe(false);
     ui.setBusy(false);
-    expect(document.querySelector('.working-state')).toBeNull();
     expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(false);
   });
 });

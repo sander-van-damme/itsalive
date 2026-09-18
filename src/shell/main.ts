@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, CONNECTION_TEST_OUTPUT_TOKENS, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, runtimePresentation, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -48,8 +48,7 @@ const ui = new ShellUI(root, {
     const prompt = goal.trim();
     if (!prompt) return;
     const id = crypto.randomUUID();
-    const now = Date.now();
-    await db.apps.put({ name: appNameFromGoal(prompt), prompt, id, summary: '', createdAt: now, updatedAt: now });
+    await persistNewApp(db, id, prompt);
     initialBuild.schedule(id);
     ui.setConnectionStatus('Preparing your app…', 'working');
     await refreshApps(id);
@@ -95,13 +94,12 @@ window.addEventListener('unhandledrejection', event => { void log('error', 'shel
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
 
-function appNameFromGoal(goal: string): string {
-  const compact = goal.replace(/\s+/g, ' ').trim()
-    .replace(/^please\s+/i, '')
-    .replace(/^(?:build|make|create|design)\s+(?:me\s+)?(?:an?\s+)?/i, '');
-  const firstThought = compact.split(/[.!?]/, 1)[0]?.trim() || 'New app';
-  const short = firstThought.split(/\s+/).slice(0, 5).join(' ').slice(0, 60).trim() || 'New app';
-  return short.charAt(0).toUpperCase() + short.slice(1);
+function agentProgressLabel(phase: AgentProgressPhase, initialBuild: boolean): string {
+  if (phase === 'executing') return initialBuild ? 'Building the first interface…' : 'Updating the app…';
+  if (phase === 'repairing') return 'Fixing a build error…';
+  if (phase === 'verifying') return 'Checking the result…';
+  if (phase === 'finishing') return 'Finishing up…';
+  return initialBuild ? 'Preparing the first version…' : 'Planning your change…';
 }
 
 async function refreshApps(select?: string): Promise<void> {
@@ -151,7 +149,9 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   const runController = new AbortController();
   activeRun = runController;
   running = true;
+  const isInitialBuild = trigger === INITIAL_BUILD_TRIGGER;
   ui.setBusy(true);
+  ui.setAgentProgress(isInitialBuild ? 'Preparing the first version…' : 'Applying your change…');
   try {
     if (persistTrigger) {
       await appendHistory(db, { appId: app.id, role: 'user', kind: 'chat', content: trigger });
@@ -169,6 +169,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       summary: app.summary,
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
+      onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild), progress.phase === 'executing'),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
@@ -318,15 +319,8 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   const apiKey = candidate.apiKey.trim();
   if (!apiKey) throw new Error('OpenRouter API key is required');
   const testRegistry = createDefaultRegistry();
-  const model: ModelConfig = {
-    id: 'connection-test',
-    provider: OPENROUTER_PROVIDER,
-    model: OPENROUTER_MODEL,
-    maxContextTokens: MODEL_CONTEXT_TOKENS,
-    maxOutputTokens: MODEL_OUTPUT_TOKENS,
-    options: { reasoning: { enabled: true } },
-  };
-  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: MODEL_OUTPUT_TOKENS }, { id: 'connection-test', type: 'api-key', value: apiKey });
+  const model = connectionTestModelConfig(OPENROUTER_PROVIDER, OPENROUTER_MODEL, MODEL_CONTEXT_TOKENS);
+  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: CONNECTION_TEST_OUTPUT_TOKENS }, { id: 'connection-test', type: 'api-key', value: apiKey });
   return { apiKey };
 }
 
