@@ -10,7 +10,6 @@ function actions(): ShellActions {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     renameApp: vi.fn().mockResolvedValue(undefined),
-    designApp: vi.fn().mockResolvedValue({ name: 'Recipe Buddy', prompt: 'Plan friendly meals' }),
     exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
 }
@@ -71,17 +70,18 @@ describe('ShellUI workspace', () => {
     expect(callbacks.deleteApp).toHaveBeenCalledWith(app.id);
   });
 
-  it('does not expose the generated id in a creation proposal', async () => {
+  it('starts creating from the submitted prompt without a confirmation step', async () => {
     const { callbacks, ui } = mounted(false);
     ui.setSettings({ apiKey: 'configured' });
     document.querySelector<HTMLButtonElement>('[data-create]')!.click();
     const goal = document.querySelector<HTMLTextAreaElement>('#goal')!;
     goal.value = 'Help plan meals';
     document.querySelector<HTMLFormElement>('[data-create-form]')!.requestSubmit();
-    await vi.waitFor(() => expect(document.querySelector('.creation-proposal')).not.toBeNull());
-    expect(document.querySelector('.creation-proposal')?.textContent).toContain('Recipe Buddy');
-    expect(document.querySelector('.creation-proposal')?.textContent).not.toContain('recipe-buddy-secret');
-    expect(callbacks.designApp).toHaveBeenCalledWith('Help plan meals');
+
+    await vi.waitFor(() => expect(callbacks.createApp).toHaveBeenCalledWith('Help plan meals'));
+    expect(callbacks.createApp).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('.creation-proposal')).toBeNull();
+    expect(document.querySelector('[data-create-status]')?.textContent).toContain('Starting your app');
   });
 
   it('shows only OpenRouter API key configuration', async () => {
