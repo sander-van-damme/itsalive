@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, CloudflareJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, deleteApp, formatReactionBatch, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, deleteApp, formatReactionBatch, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -8,6 +8,8 @@ if (!root) throw new Error('Shell mount point is missing');
 
 const db = new ShellDatabase();
 let activeId: string | undefined;
+let runtimeEpoch = 0;
+const jevControllers = new Set<AbortController>();
 const diagnostics = new DiagnosticLog(db, () => activeId);
 diagnostics.installConsoleCapture();
 const registry = createDefaultRegistry();
@@ -29,8 +31,8 @@ const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
 if (stored) {
   try {
-    const parsed = JSON.parse(stored) as { apiKey?: unknown; jevAccountId?: unknown; jevApiToken?: unknown };
-    settings = { apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '', ...(typeof parsed.jevAccountId === 'string' ? { jevAccountId: parsed.jevAccountId } : {}), ...(typeof parsed.jevApiToken === 'string' ? { jevApiToken: parsed.jevApiToken } : {}) };
+    const parsed = JSON.parse(stored) as { apiKey?: unknown };
+    settings = { apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '' };
     localStorage.setItem('itsalive.settings', JSON.stringify(settings));
   } catch (error) {
     console.warn('[itsalive] Ignoring invalid saved settings', error);
@@ -151,7 +153,7 @@ async function selectApp(id: string): Promise<void> {
 }
 
 function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); ui.setBusy(false); }
-function disposeFrame(): void { stopActiveRun('App runtime disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
+function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(new DOMException('App runtime disposed', 'AbortError')); jevControllers.clear(); stopActiveRun('App runtime disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
 function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
 
@@ -253,18 +255,28 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
 
 async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; state: JevState }): Promise<void> {
   const startedAt = performance.now();
+  const appId = activeId;
+  const epoch = runtimeEpoch;
+  const controller = new AbortController();
+  jevControllers.add(controller);
+  const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
   try {
-    if (!settings.jevAccountId || !settings.jevApiToken) throw new Error('Jev is not configured');
-    const decisionModel: DecisionModel = new CloudflareJevAdapter(settings.jevAccountId);
-    const result = await decisionModel.evaluate({ state: message.state }, { id: 'jev', type: 'bearer-token', value: settings.jevApiToken });
+    const key = credential();
+    if (!key) throw new Error('OpenRouter is not configured');
+    const decisionModel: DecisionModel = new OpenRouterJevAdapter();
+    const result = await decisionModel.evaluate({ state: message.state, signal: controller.signal }, key);
+    if (!current()) return;
     const escalated = result.probability >= JEV_ESCALATION_THRESHOLD;
-    await log('info', 'jev', 'Interaction decision', { probability: result.probability, threshold: JEV_ESCALATION_THRESHOLD, escalated, durationMs: Math.round(performance.now() - startedAt), snapshotCharacters: message.state.document.length, inputTokens: result.usage?.inputTokens }, activeId);
+    await log('info', 'jev', 'Interaction decision', { probability: result.probability, threshold: JEV_ESCALATION_THRESHOLD, escalated, durationMs: Math.round(performance.now() - startedAt), snapshotCharacters: message.state.document.length, inputTokens: result.usage?.inputTokens }, appId);
+    if (!current()) return;
     respond(message, { type: 'jev.response', probability: result.probability, escalated });
     if (escalated) reactionBatcher.add(message.state);
   } catch (error) {
-    await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message : String(error) }, activeId);
+    if (!current()) return;
+    await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }, appId);
+    if (!current()) return;
     respond(message, { type: 'jev.response', probability: 0, escalated: false, error: serializeError(error) });
-  }
+  } finally { jevControllers.delete(controller); }
 }
 
 async function deliverReactionBatch(batch: ReactionBatch): Promise<void> {
