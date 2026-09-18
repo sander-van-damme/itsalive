@@ -3,40 +3,29 @@ import { isValidId } from "./ids";
 import type { SerializedError } from "./serialization";
 
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 1 as const;
+export const BRIDGE_VERSION = 2 as const;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type RuntimeStatus = "booting" | "ready" | "busy" | "saving" | "error";
 
-export interface AppMetadata { name?: string; title?: string; description?: string; }
 export interface LogRecord { timestamp: number; level: LogLevel; source: string; message: string; details?: unknown; }
 export interface CronRegistration { callbackId: string; schedule: string; description?: string; }
 
 export type ShellToAppPayload =
-  | { type: "ready.request" }
-  | { type: "metadata.request" }
   | { type: "execute"; code: string }
   | { type: "reload" }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
-  | { type: "logs.response"; logs?: LogRecord[]; error?: SerializedError }
-  | { type: "app.meta.response"; metadata?: { name: string }; error?: SerializedError }
-  | { type: "cron.fire"; callbackId: string }
-  | { type: "screenshot.request"; options?: { format?: "png" | "jpeg"; quality?: number } };
+  | { type: "cron.fire"; callbackId: string };
 
 export type AppToShellPayload =
-  | { type: "ready"; metadata?: AppMetadata }
-  | { type: "metadata"; metadata: AppMetadata }
   | { type: "result"; result?: unknown; done?: boolean; message?: string }
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
   | { type: "llm.request"; prompt: string; options?: Record<string, unknown> }
   | { type: "history.request"; query: string; limit?: number }
-  | { type: "logs.request"; level?: LogLevel; limit?: number }
-  | { type: "app.meta.update"; metadata: { name: string } }
   | { type: "log"; record: LogRecord }
   | { type: "cron.register"; registration: CronRegistration }
-  | { type: "screenshot"; dataUrl: string; width: number; height: number }
   | { type: "status"; status: RuntimeStatus; detail?: string };
 
 export type BridgePayload = ShellToAppPayload | AppToShellPayload;
@@ -47,8 +36,8 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["ready.request", "metadata.request", "execute", "reload", "llm.response", "history.response", "logs.response", "app.meta.response", "cron.fire", "screenshot.request"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["ready", "metadata", "result", "execution.error", "wake", "llm.request", "history.request", "logs.request", "app.meta.update", "log", "cron.register", "screenshot", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "llm.response", "history.response", "cron.fire"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "wake", "llm.request", "history.request", "log", "cron.register", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -61,14 +50,10 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
     case "execute": return typeof value.code === "string";
     case "llm.request": return typeof value.prompt === "string";
     case "history.request": return typeof value.query === "string";
-    case "app.meta.update": return isObject(value.metadata) && typeof value.metadata.name === "string" && Object.keys(value.metadata).every(key => key === "name");
-    case "app.meta.response": return (value.metadata === undefined || (isObject(value.metadata) && typeof value.metadata.name === "string" && Object.keys(value.metadata).every(key => key === "name"))) && (value.error === undefined || isSerializedError(value.error));
     case "cron.fire": return typeof value.callbackId === "string" && value.callbackId.length > 0 && value.callbackId.length <= 200;
-    case "metadata": return isObject(value.metadata);
     case "execution.error": return isSerializedError(value.error);
     case "log": return isLogRecord(value.record);
     case "cron.register": return isObject(value.registration) && typeof value.registration.callbackId === "string" && typeof value.registration.schedule === "string";
-    case "screenshot": return typeof value.dataUrl === "string" && typeof value.width === "number" && typeof value.height === "number";
     case "status": return ["booting", "ready", "busy", "saving", "error"].includes(String(value.status));
     default: return true;
   }

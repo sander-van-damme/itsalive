@@ -1,13 +1,3 @@
-export type BridgeRequestType = "execute" | "ready" | "metadata" | "reload";
-
-export interface BridgeEnvelope<T = unknown> {
-  type: string;
-  id?: string;
-  appId?: string;
-  payload?: T;
-  code?: string;
-}
-
 export interface RuntimeOptions {
   rootOrigin: string;
   appId?: string;
@@ -31,9 +21,4 @@ export interface ToolRecord {
   code: string;
   createdAt: string;
   updatedAt: string;
-}
-
-export interface CronRegistration {
-  id: string;
-  schedule: string;
 }

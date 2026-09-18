@@ -1,5 +1,4 @@
 import { AppBridge, idFromHostname } from "./bridge";
-import { appDatabaseApi } from "./db";
 import { inspectDom, ref } from "./inspect";
 import { installLogging } from "./logs";
 import { installAutosave, loadSavedDocument } from "./persistence";
@@ -63,8 +62,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   } });
 
   const runtimeApi: ItsaliveRuntimeApi = Object.freeze({
-    apiVersion: 1,
-    db: Object.freeze(appDatabaseApi),
+    apiVersion: 2,
     llm,
     history,
     tools: Object.freeze(tools),
@@ -72,7 +70,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
     dom: Object.freeze({ inspect: inspectDom, ref, screenshot }),
     logs: Object.freeze({ get: logs.get }),
     cron,
-    reload: () => location.reload(),
     done,
   });
   installRuntimeApi(window, runtimeApi);
@@ -98,10 +95,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
         const details = errorPayload(error, logs.get({ level: "error", limit: 30 }));
         bridge.post({ type: "execution.error", error: { ...serializeError(error), cause: JSON.stringify(details.logs) } }, message.requestId);
       }
-    } else if (message.type === "ready.request") {
-      bridge.post({ type: "ready", metadata: { title: document.title } }, message.requestId);
-    } else if (message.type === "metadata.request") {
-      bridge.post({ type: "metadata", metadata: { title: document.title } }, message.requestId);
     } else if (message.type === "reload") {
       bridge.post({ type: "result", result: { reloading: true } }, message.requestId);
       location.reload();
@@ -114,12 +107,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
         logs.add("error", [`Cron ${id} failed`, error], "cron", error instanceof Error ? error.stack : undefined);
         bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
       }
-    } else if (message.type === "screenshot.request") {
-      try {
-        const dataUrl = await screenshot();
-        const image = new Image(); image.src = dataUrl; await image.decode();
-        bridge.post({ type: "screenshot", dataUrl, width: image.naturalWidth, height: image.naturalHeight }, message.requestId);
-      } catch (error) { bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId); }
     }
   };
   addEventListener("message", listener);

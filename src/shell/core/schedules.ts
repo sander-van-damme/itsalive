@@ -1,26 +1,3 @@
-import { ShellDatabase } from "./database";
-import type { ScheduleRecord } from "./types";
-
-export class ScheduleCache {
-  constructor(private readonly db: ShellDatabase) {}
-  async register(appId: string, callbackId: string, expression: string, nextRun?: number): Promise<ScheduleRecord> {
-    if (!callbackId.trim() || !expression.trim()) throw new Error("Schedule callback ID and expression are required");
-    const id = `${appId}:${callbackId}`;
-    const previous = await this.db.get<ScheduleRecord>("schedules", id);
-    const record = { id, appId, expression, nextRun, registeredAt: Date.now(), lastFired: previous?.lastFired };
-    await this.db.schedules.put(record);
-    return record;
-  }
-  async due(now = Date.now()): Promise<ScheduleRecord[]> {
-    return (await this.db.schedules.list()).filter(x => x.nextRun != null && x.nextRun <= now).sort((a, b) => a.nextRun! - b.nextRun!);
-  }
-  async markFired(id: string, nextRun?: number): Promise<void> {
-    const record = await this.db.get<ScheduleRecord>("schedules", id);
-    if (!record) return;
-    await this.db.schedules.put({ ...record, lastFired: Date.now(), nextRun });
-  }
-}
-
 const FIELDS = [[0, 59], [0, 23], [1, 31], [1, 12], [0, 6]] as const;
 
 /** Returns the next minute matching a conventional five-field UTC cron expression. */

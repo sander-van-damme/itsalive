@@ -7,7 +7,6 @@ export * from "./database";
 export * from "./diagnostics";
 export * from "./history";
 export * from "./initial-build";
-export * from "./logs";
 export * from "./providers";
 export * from "./schedules";
 export * from "./system-prompt";

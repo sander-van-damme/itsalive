@@ -1,9 +1,9 @@
-import type { AppRecord, Credential, HistoryEntry, LogEntry, ModelConfig, ScheduleRecord } from "./types";
+import type { AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
 
-const DB_NAME = "itsalive-shell";
-const DB_VERSION = 2;
+const DB_NAME = "itsalive-shell-v2";
+const DB_VERSION = 1;
 
-type Store = "apps" | "history" | "credentials" | "models" | "logs" | "schedules";
+type Store = "apps" | "history" | "logs" | "schedules";
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -31,38 +31,17 @@ export class ShellDatabase {
       const open = indexedDB.open(this.name, DB_VERSION);
       open.onerror = () => reject(open.error ?? new Error("Could not open shell database"));
       open.onblocked = () => reject(new Error("Shell database upgrade is blocked by another tab"));
-      open.onupgradeneeded = event => {
+      open.onupgradeneeded = () => {
         const db = open.result;
-        if (event.oldVersion === 1) {
-          // Version 1 used slug identities. It is intentionally a clean break: reset
-          // app-owned shell records rather than carrying ambiguous identities forward.
-          for (const name of ["apps", "history", "logs", "schedules"]) {
-            if (db.objectStoreNames.contains(name)) db.deleteObjectStore(name);
-          }
-          db.createObjectStore("apps", { keyPath: "id" });
-          const historyStore = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
-          historyStore.createIndex("appTimestamp", ["appId", "timestamp"]); historyStore.createIndex("appId", "appId");
-          const logsStore = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
-          logsStore.createIndex("timestamp", "timestamp"); logsStore.createIndex("appId", "appId");
-          const schedulesStore = db.createObjectStore("schedules", { keyPath: "id" }); schedulesStore.createIndex("appId", "appId");
-        }
-        if (!db.objectStoreNames.contains("apps")) db.createObjectStore("apps", { keyPath: "id" });
-        if (!db.objectStoreNames.contains("credentials")) db.createObjectStore("credentials", { keyPath: "id" });
-        if (!db.objectStoreNames.contains("models")) db.createObjectStore("models", { keyPath: "id" });
-        if (!db.objectStoreNames.contains("schedules")) {
-          const store = db.createObjectStore("schedules", { keyPath: "id" });
-          store.createIndex("appId", "appId");
-        }
-        if (!db.objectStoreNames.contains("history")) {
-          const store = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
-          store.createIndex("appTimestamp", ["appId", "timestamp"]);
-          store.createIndex("appId", "appId");
-        }
-        if (!db.objectStoreNames.contains("logs")) {
-          const store = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
-          store.createIndex("timestamp", "timestamp");
-          store.createIndex("appId", "appId");
-        }
+        db.createObjectStore("apps", { keyPath: "id" });
+        const history = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
+        history.createIndex("appTimestamp", ["appId", "timestamp"]);
+        history.createIndex("appId", "appId");
+        const logs = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
+        logs.createIndex("timestamp", "timestamp");
+        logs.createIndex("appId", "appId");
+        const schedules = db.createObjectStore("schedules", { keyPath: "id" });
+        schedules.createIndex("appId", "appId");
       };
       open.onsuccess = () => {
         open.result.onversionchange = () => open.result.close();
@@ -80,16 +59,18 @@ export class ShellDatabase {
   async put<T>(store: Store, value: T): Promise<IDBValidKey> {
     const db = await this.open();
     const tx = db.transaction(store, "readwrite");
+    const completed = transactionDone(tx);
     const key = await request(tx.objectStore(store).put(value));
-    await transactionDone(tx);
+    await completed;
     return key;
   }
 
   async delete(store: Store, key: IDBValidKey): Promise<void> {
     const db = await this.open();
     const tx = db.transaction(store, "readwrite");
+    const completed = transactionDone(tx);
     tx.objectStore(store).delete(key);
-    await transactionDone(tx);
+    await completed;
   }
 
   async all<T>(store: Store): Promise<T[]> {
@@ -107,18 +88,6 @@ export class ShellDatabase {
     get: (id: string) => this.get<AppRecord>("apps", id),
     put: (app: AppRecord) => this.put("apps", app),
     delete: (id: string) => this.delete("apps", id),
-  };
-  credentials = {
-    list: () => this.all<Credential>("credentials"),
-    get: (id: string) => this.get<Credential>("credentials", id),
-    put: (item: Credential) => this.put("credentials", item),
-    delete: (id: string) => this.delete("credentials", id),
-  };
-  models = {
-    list: () => this.all<ModelConfig>("models"),
-    get: (id: string) => this.get<ModelConfig>("models", id),
-    put: (item: ModelConfig) => this.put("models", item),
-    delete: (id: string) => this.delete("models", id),
   };
   history = {
     add: async (entry: HistoryEntry) => Number(await this.put("history", entry)),

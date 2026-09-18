@@ -6,10 +6,12 @@ const model = { id: "test", provider: "test", model: "test", maxContextTokens: 4
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
-    for (const current of ["itsalive.done", "itsalive.db", "itsalive.tools", "itsalive.history", "itsalive.dom", "itsalive.llm"]) {
+    for (const current of ["itsalive.done", "itsalive.tools", "itsalive.history", "itsalive.dom", "itsalive.llm"]) {
       expect(SYSTEM_PROMPT).toContain(current);
     }
-    for (const obsolete of [/return\s+done\(/, /itsalive\.ai/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
+    expect(SYSTEM_PROMPT).toContain("native browser IndexedDB");
+    expect(SYSTEM_PROMPT).toContain("own browser origin");
+    for (const obsolete of [/itsalive\.db/, /itsalive\.reload/, /return\s+done\(/, /itsalive\.ai/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
       expect(SYSTEM_PROMPT).not.toMatch(obsolete);
     }
   });
