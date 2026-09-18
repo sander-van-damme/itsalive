@@ -9,7 +9,7 @@ This repository produces two independent static builds:
 | Build | Output | Deployment binding | Responsibility |
 | --- | --- | --- | --- |
 | Root shell | `dist-root/` | `itsalive.org` | Apps, Chat, Settings, histories, provider calls, agent loop |
-| App runtime | `dist-app/` | `*.itsalive.org` | Persistent document, execution bridge, tools, screenshots |
+| App runtime | `dist-app/` | `*.itsalive.org` | Persistent document, execution bridge, interaction observer, screenshots |
 
 The only connection between the two origins is a versioned `postMessage` protocol. Every message is checked for its exact origin, source window, immutable app UUID, direction, request ID, and payload shape. Each app UUID is also its permanent wildcard subdomain; display names can be changed independently. Provider credentials remain in root-origin storage and are never sent into app frames.
 
@@ -19,10 +19,9 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - IndexedDB shell repositories for app metadata, full history, schedules, and logs.
 - Persistent app HTML with debounced autosave, live form-control normalization, restore, and script re-execution.
 - JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, repair turns, and streamed multi-command responses whose completed commands execute immediately while generation continues.
-- Context budgeting that always retains the immutable system prompt, app prompt, current trigger, and complete compact tool inventory.
+- Context budgeting that always retains the immutable system prompt, app prompt, and current trigger.
 - OpenRouter-only provider registry for the product runtime, backed by a generic HTTP adapter that can support additional providers later.
-- Compact DOM inspection with temporary references, literal history search, in-frame screenshots, and app log retrieval.
-- Agent-created custom tools backed by runtime-private persistence.
+- Native DOM inspection through ordinary browser APIs and execution results, plus literal history search, in-frame screenshots, and app log retrieval.
 - App-to-shell LLM requests and agent wake-ups.
 - Stable cron registrations and callback dispatch protocol. Cron callbacks run only while the relevant app runtime and shell are active; this is not server-side or background scheduling.
 - Tailwind's browser runtime and Lucide availability in itsalive apps without imposing a generated framework. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning.
@@ -74,25 +73,18 @@ Configure the first Worker route/custom domain for the exact root host and the s
 Agent JavaScript executes inside the active app and can use ordinary browser APIs plus the single, versioned `itsalive` runtime namespace (`itsalive.apiVersion === 2`):
 
 ```js
-itsalive.dom.inspect({ ref, search, detail })
-itsalive.dom.ref("@12")
-itsalive.dom.screenshot({ ref })
+itsalive.dom.screenshot()
 itsalive.logs.get({ level, limit })
 itsalive.history.search({ query, limit })
-itsalive.tools.search(query)
-itsalive.tools.get(name)
-itsalive.tools.create({ name, description, parameters, code })
-itsalive.tools.call(name, args)
-itsalive.tools.delete(name)
 itsalive.cron(id, expression, callback)
 itsalive.agent.wake(reason)
 itsalive.llm.ask(prompt)
 itsalive.done(message)
 ```
 
-The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Custom tools receive the same API object as `env.itsalive` alongside `document`, `window`, and `fetch`.
+The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
 
-Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state should use native browser IndexedDB directly; each app has its own browser origin, so that storage is naturally isolated. Runtime-private IndexedDB is used only for platform persistence of saved HTML and custom tools. The system prompt treats the document as a live drawing board: ordinary semantic HTML and browser DOM APIs are the default, native Custom Elements are optional rather than mandatory, and substantial work can be emitted as multiple independently executable commands in one streamed response. The shell applies each complete command as soon as its delimiter arrives, so users can see the app take shape before the model finishes generating the response.
+Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state should use native browser IndexedDB directly; each app has its own browser origin, so that storage is naturally isolated. Runtime-private IndexedDB is used only for platform persistence of saved HTML. The system prompt treats the document as a live drawing board: ordinary semantic HTML and browser DOM APIs are the default, native Custom Elements are optional rather than mandatory, and substantial work can be emitted as multiple independently executable commands in one streamed response. The shell applies each complete command as soon as its delimiter arrives, so users can see the app take shape before the model finishes generating the response. Native DOM values returned by generated code are serialized into readable observations, so no custom inspector/ref protocol is needed. Raw interaction events remain ephemeral in memory; only an LLM-rewritten behavioral summary is persisted inside the HTML.
 
 Deleting an app always removes its shell-owned metadata, history, logs, and schedules. If that app is active, the shell also asks its mounted runtime to unregister service workers and clear origin-owned IndexedDB, Web Storage, and Cache Storage before removal. Inactive apps have no mounted cross-origin frame, so their origin-owned browser storage cannot be cleared by this small best-effort path.
 
