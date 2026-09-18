@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShellUI, friendlyError, type AppSummary, type ShellActions } from '../src/shell/ui';
 
 const app: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440003', name: 'FiddleMate', prompt: 'Build music tools', createdAt: 1, updatedAt: 1 };
-const other: AppSummary = { id: 'budget-pal-secret-id', name: 'Budget Pal', prompt: 'Budgeting', createdAt: 2, updatedAt: 2 };
+const other: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440004', name: 'Budget Pal', prompt: 'Budgeting', createdAt: 2, updatedAt: 2 };
 
 function actions(): ShellActions {
   return {

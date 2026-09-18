@@ -2,7 +2,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDefaultRegistry, createHttpAdapter, ProviderRegistry, ProviderResponseError } from "../src/shell/core/providers";
 
 describe("ProviderRegistry", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
   it("exposes only OpenRouter in the default registry", () => {
     expect(createDefaultRegistry().list()).toEqual(["openrouter"]);
   });
@@ -52,5 +55,47 @@ describe("ProviderRegistry", () => {
       metadata: { api_key: '[redacted]' },
     });
     expect(JSON.stringify(error.diagnostic)).not.toContain('must-not-leak');
+  });
+
+  it('preserves HTTP status and a sanitized response body in provider errors', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: 'Invalid request', authorization: 'Bearer response-secret' },
+      apiKey: 'another-response-secret',
+    }), { status: 400, statusText: 'Bad Request', headers: { 'content-type': 'application/json' } })));
+
+    const error = await createHttpAdapter({ id: 'custom', endpoint: 'https://example.test/generate' })
+      .generate({ model: { id: 'm', provider: 'custom', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'system', messages: [], maxOutputTokens: 10 })
+      .catch(value => value);
+
+    expect(error).toBeInstanceOf(ProviderResponseError);
+    expect(error.diagnostic).toEqual({
+      status: 400,
+      statusText: 'Bad Request',
+      body: {
+        error: { message: 'Invalid request', authorization: '[redacted]' },
+        apiKey: '[redacted]',
+      },
+    });
+    expect(JSON.stringify(error.diagnostic)).not.toContain('response-secret');
+  });
+
+  it('includes provider diagnostics in the centralized failure trace', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      error: { message: 'Denied', credential: 'credential-secret' },
+    }), { status: 403, statusText: 'Forbidden', headers: { 'content-type': 'application/json' } })));
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const errorTrace = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    const registry = new ProviderRegistry().register(createHttpAdapter({ id: 'custom', endpoint: 'https://example.test/generate' }));
+
+    await expect(registry.generate({ model: { id: 'm', provider: 'custom', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'system', messages: [], maxOutputTokens: 10 })).rejects.toBeInstanceOf(ProviderResponseError);
+
+    const trace = JSON.stringify(errorTrace.mock.calls);
+    expect(trace).toContain('diagnostic');
+    expect(trace).toContain('403');
+    expect(trace).toContain('Forbidden');
+    expect(trace).toContain('[redacted]');
+    expect(trace).not.toContain('credential-secret');
   });
 });

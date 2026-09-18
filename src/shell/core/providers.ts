@@ -55,7 +55,15 @@ interface HttpAdapterOptions {
 
 async function checkedJson(response: Response): Promise<Json> {
   const body = await response.json().catch(() => ({})) as Json;
-  if (!response.ok) throw new Error(body?.error?.message ?? body?.message ?? `Provider request failed (${response.status})`);
+  if (!response.ok) {
+    const statusText = response.statusText.trim();
+    const diagnostic = sanitizeDiagnostic({
+      status: response.status,
+      ...(statusText ? { statusText } : {}),
+      body,
+    });
+    throw new ProviderResponseError(`Provider request failed (${response.status}${statusText ? ` ${statusText}` : ''})`, diagnostic);
+  }
   return body;
 }
 
@@ -86,7 +94,6 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
         : json.choices?.[0]?.message?.content;
       if (typeof text !== "string") {
         const diagnostic = sanitizeDiagnostic(json);
-        console.error(`[itsalive:provider] ${options.id} returned no text in the expected ${format} response location`, diagnostic);
         throw new ProviderResponseError("Provider returned no text response", diagnostic);
       }
       const usage = format === "anthropic" ? { inputTokens: json.usage?.input_tokens, outputTokens: json.usage?.output_tokens }
