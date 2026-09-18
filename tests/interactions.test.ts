@@ -101,7 +101,7 @@ describe("continuous interaction observation", () => {
     expect(record.key).toBeUndefined();
     expect(record.target.state?.["api-token"]).toBe("[redacted]");
     expect(String(record.target.state?.extra).length).toBeLessThanOrEqual(200);
-    expect(record.actualTarget.value?.length).toBeLessThanOrEqual(500);
+    expect(record.actualTarget.value).toBeUndefined();
   });
 });
 
