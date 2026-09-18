@@ -220,13 +220,10 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
     }
     case 'wake': if (!running) void runAgent(message.reason || 'The app requested an agent wake-up.'); break;
     case 'status':
-      runtime.setState(message.status === 'ready' ? 'ready' : message.status === 'error' ? 'error' : 'loading');
-      if (message.status === 'error') ui.setBusy(false);
-      if (message.status === 'ready' && connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
-      ui.setConnectionStatus(message.status === 'ready' ? 'Ready' : (message.detail || message.status), message.status === 'ready' ? 'connected' : (message.status === 'error' ? 'error' : 'working'));
-      if (message.status === 'ready') {
-        void startPendingInitialBuild();
-      }
+      runtime.setState('ready');
+      if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
+      ui.setConnectionStatus('Ready', 'connected');
+      void startPendingInitialBuild();
       break;
   }
 }

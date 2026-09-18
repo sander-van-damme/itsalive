@@ -52,13 +52,14 @@ describe("domain helpers", () => {
 });
 
 describe("bridge protocol", () => {
-  it("uses bridge version 2 and recognizes messages by direction", () => {
-    expect(BRIDGE_VERSION).toBe(2);
+  it("uses bridge version 3 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(3);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
     const result = createBridgeMessage(APP_ID, requestId, { type: "result", result: 1 });
     expect(isBridgeMessage(execute)).toBe(true);
+    expect(isBridgeMessage({ ...execute, version: 2 })).toBe(false);
     expect(isShellToAppMessage(execute)).toBe(true);
     expect(isAppToShellMessage(execute)).toBe(false);
     expect(isAppToShellMessage(result)).toBe(true);
@@ -75,9 +76,9 @@ describe("bridge protocol", () => {
   });
 
   it("rejects unused cron fields and runtime statuses", () => {
-    const envelope = { protocol: "itsalive", version: 2, appId: APP_ID, requestId: "req_fields" };
+    const envelope = { protocol: "itsalive", version: 3, appId: APP_ID, requestId: "req_fields" };
     expect(isBridgeMessage({ ...envelope, type: "cron.register", registration: { callbackId: "daily", schedule: "0 8 * * *", description: "unused" } })).toBe(false);
-    for (const status of ["booting", "busy", "saving"]) expect(isBridgeMessage({ ...envelope, type: "status", status })).toBe(false);
+    for (const status of ["booting", "busy", "saving", "error"]) expect(isBridgeMessage({ ...envelope, type: "status", status })).toBe(false);
     expect(isBridgeMessage({ ...envelope, type: "status", status: "ready" })).toBe(true);
   });
 

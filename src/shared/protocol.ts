@@ -3,10 +3,10 @@ import { isValidId } from "./ids";
 import type { SerializedError } from "./serialization";
 
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 2 as const;
+export const BRIDGE_VERSION = 3 as const;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type RuntimeStatus = "ready" | "error";
+export type RuntimeStatus = "ready";
 
 export interface LogRecord { timestamp: number; level: LogLevel; source: string; message: string; details?: unknown; }
 export interface CronRegistration { callbackId: string; schedule: string; }
@@ -55,7 +55,7 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
     case "execution.error": return isSerializedError(value.error);
     case "log": return isLogRecord(value.record);
     case "cron.register": return isObject(value.registration) && typeof value.registration.callbackId === "string" && typeof value.registration.schedule === "string" && value.registration.description === undefined;
-    case "status": return ["ready", "error"].includes(String(value.status));
+    case "status": return value.status === "ready";
     default: return true;
   }
 }
