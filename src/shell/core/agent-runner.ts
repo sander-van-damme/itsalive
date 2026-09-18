@@ -36,6 +36,16 @@ export interface RunOptions {
 
 export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
 
+const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
+const COMPLETION_INSPECTION = 'return await itsalive.dom.inspect({ maxDepth: 4, maxNodes: 80 });';
+
+class GeneratedCodeError extends Error {
+  constructor(readonly phase: "format" | "compile", message: string) {
+    super(message);
+    this.name = "GeneratedCodeError";
+  }
+}
+
 export class AgentRunner {
   constructor(private readonly db: ShellDatabase, private readonly providers: ProviderRegistry, private readonly executor: AppExecutor) {}
 
@@ -47,6 +57,7 @@ export class AgentRunner {
     const deadline = setTimeout(() => controller.abort(new DOMException("Agent run timed out", "TimeoutError")), options.maxDurationMs ?? 120_000);
     const maxTurns = options.maxTurns ?? 12;
     let observation: string | undefined;
+    let consecutiveGenerationFailures = 0;
     const startedAt = performance.now();
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
@@ -66,7 +77,31 @@ export class AgentRunner {
             console.error('Model request failed', diagnosticError(error));
             throw error;
           }
-          const code = stripAccidentalFence(generated.text);
+
+          let code: string;
+          try {
+            code = extractExecutableJavaScript(generated.text);
+            validateExecutableJavaScript(code);
+            consecutiveGenerationFailures = 0;
+          } catch (error) {
+            const generatedError = error instanceof GeneratedCodeError
+              ? error
+              : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
+            consecutiveGenerationFailures++;
+            observation = generatedCodeObservation(generatedError);
+            console.warn('Generated code rejected before execution', sanitizeDiagnostic({
+              phase: generatedError.phase,
+              message: generatedError.message,
+              consecutiveFailures: consecutiveGenerationFailures,
+            }));
+            await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+            if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
+              throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+            }
+            console.info('Continuing to next turn for code repair');
+            continue;
+          }
+
           console.info('Executable JavaScript', sanitizeDiagnostic(code));
           await appendHistory(this.db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
           const executionStartedAt = performance.now();
@@ -83,6 +118,14 @@ export class AgentRunner {
           console.info('Observation', sanitizeDiagnostic(observation));
           await appendHistory(this.db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
           if (result.done) {
+            const completion = await verifyCompletion(this.executor, options, controller.signal);
+            if (!completion.ok) {
+              observation = JSON.stringify({ completionCheck: { ok: false, reason: completion.reason } });
+              console.warn('Completion check rejected', sanitizeDiagnostic(completion));
+              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              console.info('Continuing to next turn after incomplete done()');
+              continue;
+            }
             if (result.message) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: result.message });
             console.info('Run done', sanitizeDiagnostic({ turn, message: result.message }));
             return { status: "done", message: result.message, turns: turn };
@@ -106,16 +149,72 @@ export class AgentRunner {
   }
 }
 
+function extractExecutableJavaScript(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) throw new GeneratedCodeError("format", "Model returned an empty response");
+
+  const fences = [...trimmed.matchAll(/```(?:javascript|js)?[ \t]*\r?\n([\s\S]*?)```/gi)];
+  if (fences.length === 1) {
+    const code = fences[0]![1]!.trim();
+    if (!code) throw new GeneratedCodeError("format", "Model returned an empty JavaScript code block");
+    return code;
+  }
+  if (fences.length > 1) throw new GeneratedCodeError("format", "Model returned multiple code blocks; expected one executable JavaScript program");
+  if (trimmed.includes("```")) throw new GeneratedCodeError("format", "Model returned a fenced response that was not a single JavaScript code block");
+  return trimmed;
+}
+
+function validateExecutableJavaScript(code: string): void {
+  const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+  try {
+    new AsyncFunction(`"use strict";\n${code}`);
+  } catch (error) {
+    const message = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    throw new GeneratedCodeError("compile", message);
+  }
+}
+
+function generatedCodeObservation(error: GeneratedCodeError): string {
+  const label = error.phase === "format" ? "Generated response was not usable JavaScript" : "Generated JavaScript did not parse";
+  return `${label}:\n${error.message}\nReturn exactly one complete executable JavaScript program with no prose or Markdown fences.`;
+}
+
+async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const inspection = await executor.execute(options.appId, COMPLETION_INSPECTION, {
+      signal,
+      timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
+    });
+    if (inspection.error || typeof inspection.value !== "string") return { ok: true };
+    return assessCompletionTree(inspection.value);
+  } catch (error) {
+    console.warn('Completion inspection failed; accepting done()', diagnosticError(error));
+    return { ok: true };
+  }
+}
+
+function assessCompletionTree(tree: string): { ok: true } | { ok: false; reason: string } {
+  const lines = tree.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    .filter(line => !/\b(?:script|style)\b/.test(line));
+  const contentLines = lines.slice(1);
+  const text = [...tree.matchAll(/"([^"]+)"/g)].map(match => match[1]!.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
+  const hasInteractive = contentLines.some(line => /\b(?:button|input|textarea|select|a)(?:[#.\s"]|$)/i.test(line));
+  const hasVisual = contentLines.some(line => /\b(?:canvas|svg|img|video|audio)(?:[#.\s"]|$)/i.test(line));
+  const placeholderOnly = Boolean(text) && /^(?:[\w .'-]+\s+)?(?:loading|starting|initializing|preparing|please wait)[.…! ]*$/i.test(text);
+
+  if (placeholderOnly && !hasInteractive && !hasVisual) {
+    return { ok: false, reason: "the rendered app still appears to be only a loading/initializing placeholder" };
+  }
+  if (!text && !hasInteractive && !hasVisual && contentLines.length < 2) {
+    return { ok: false, reason: "the app contains no meaningful rendered UI yet" };
+  }
+  return { ok: true };
+}
+
 function diagnosticError(error: unknown): unknown {
   return sanitizeDiagnostic(error instanceof Error
     ? { name: error.name, message: error.message, stack: error.stack, ...('diagnostic' in error ? { diagnostic: sanitizeDiagnostic(error.diagnostic) } : {}) }
     : error);
-}
-
-function stripAccidentalFence(text: string): string {
-  const trimmed = text.trim();
-  const match = trimmed.match(/^```(?:javascript|js)?\s*([\s\S]*?)\s*```$/i);
-  return match?.[1] ?? trimmed;
 }
 
 function boundObservation(result: ExecutionResult, max: number): string {
