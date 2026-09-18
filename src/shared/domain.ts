@@ -43,24 +43,3 @@ export function appOrigin(id: string, rootDomain: string, protocol?: "http:" | "
   const hostname = `${normalizeAppId(id)}.${root.hostname}`;
   return `${root.protocol}//${hostname}${root.port ? `:${root.port}` : ""}`;
 }
-
-export function appUrl(id: string, rootDomain: string, protocol?: "http:" | "https:"): URL {
-  return new URL(appOrigin(id, rootDomain, protocol));
-}
-
-/** Extracts the app label only when the URL is an immediate subdomain of root. */
-export function appIdFromUrl(input: string | URL, rootDomain: string): string | null {
-  let url: URL;
-  try { url = input instanceof URL ? input : new URL(input); } catch { return null; }
-  const root = parseRootDomain(rootDomain, url.protocol === "http:" ? "http:" : "https:");
-  if (url.protocol !== root.protocol || url.port !== root.port) return null;
-  const suffix = `.${root.hostname}`;
-  if (!url.hostname.endsWith(suffix)) return null;
-  const id = url.hostname.slice(0, -suffix.length);
-  return isValidAppId(id) ? id : null;
-}
-
-export function isExpectedAppOrigin(origin: string, id: string, rootDomain: string): boolean {
-  try { return new URL(origin).origin === appOrigin(id, rootDomain, new URL(origin).protocol as "http:" | "https:"); }
-  catch { return false; }
-}

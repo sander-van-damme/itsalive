@@ -66,8 +66,21 @@ export function installAutosave(delay = 750) {
     timer = window.setTimeout(() => void save(), delay);
   });
   observer.observe(document.documentElement, { attributes: true, childList: true, characterData: true, subtree: true });
-  addEventListener("input", () => { window.clearTimeout(timer); timer = window.setTimeout(() => void save(), delay); }, true);
-  addEventListener("change", () => { window.clearTimeout(timer); timer = window.setTimeout(() => void save(), delay); }, true);
-  addEventListener("pagehide", () => void save());
-  return { save, suspend: () => { suspended = true; }, resume: () => { suspended = false; }, disconnect: () => observer.disconnect() };
+  const scheduleSave = () => { window.clearTimeout(timer); timer = window.setTimeout(() => void save(), delay); };
+  const saveOnPageHide = () => void save();
+  addEventListener("input", scheduleSave, true);
+  addEventListener("change", scheduleSave, true);
+  addEventListener("pagehide", saveOnPageHide);
+  return {
+    save,
+    suspend: () => { suspended = true; },
+    resume: () => { suspended = false; },
+    disconnect: () => {
+      observer.disconnect();
+      window.clearTimeout(timer);
+      removeEventListener("input", scheduleSave, true);
+      removeEventListener("change", scheduleSave, true);
+      removeEventListener("pagehide", saveOnPageHide);
+    },
+  };
 }

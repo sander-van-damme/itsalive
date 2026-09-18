@@ -2,12 +2,11 @@ import { describe, expect, it } from "vitest";
 import {
   ROOT_DOMAIN,
   appOrigin,
-  appIdFromUrl,
+  BRIDGE_VERSION,
   createBridgeMessage,
   createRequestId,
   isAppToShellMessage,
   isBridgeMessage,
-  isExpectedAppOrigin,
   isShellToAppMessage,
   isValidAppId,
   isValidId,
@@ -15,7 +14,6 @@ import {
   parseRootDomain,
   safeStringify,
   serializeError,
-  toBoundedClone,
   truncateText,
   validateMessageEvent,
 } from "../src/shared";
@@ -40,16 +38,12 @@ describe("domain helpers", () => {
     expect(parseRootDomain("example.com").origin).toBe("https://example.com");
     expect(parseRootDomain("http://localhost:5173").origin).toBe("http://localhost:5173");
     expect(appOrigin(APP_ID, "https://Example.COM:8443")).toBe(`https://${APP_ID}.example.com:8443`);
-    expect(appIdFromUrl(`https://${APP_ID}.example.com/path`, "example.com")).toBe(APP_ID);
-    expect(appIdFromUrl(`https://nested.${APP_ID}.example.com`, "example.com")).toBeNull();
-    expect(appIdFromUrl("https://evil-example.com", "example.com")).toBeNull();
-    expect(isExpectedAppOrigin(`https://${APP_ID}.example.com`, APP_ID, "example.com")).toBe(true);
-    expect(isExpectedAppOrigin("https://evil.example.com", APP_ID, "example.com")).toBe(false);
   });
 });
 
 describe("bridge protocol", () => {
-  it("builds and recognizes messages by direction", () => {
+  it("uses bridge version 2 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(2);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
@@ -67,6 +61,13 @@ describe("bridge protocol", () => {
     expect(isShellToAppMessage(response)).toBe(true);
     expect(isBridgeMessage({ ...request, type: "ai.request" })).toBe(false);
     expect(isBridgeMessage({ ...response, type: "ai.response" })).toBe(false);
+  });
+
+  it("rejects removed legacy message types", () => {
+    const envelope = createBridgeMessage(APP_ID, "req_legacy", { type: "execute", code: "" });
+    for (const type of ["ready.request", "ready", "metadata.request", "metadata", "logs.request", "logs.response", "app.meta.update", "app.meta.response", "screenshot.request", "screenshot"]) {
+      expect(isBridgeMessage({ ...envelope, type })).toBe(false);
+    }
   });
 
   it("rejects malformed, unknown, and mismatched messages", () => {
@@ -119,7 +120,6 @@ describe("bounded serialization", () => {
     expect(text).toContain("12n");
     expect(text).toContain("[Circular]");
     expect(text).toContain("nope");
-    expect(toBoundedClone(value)).toMatchObject({ count: "12n", self: "[Circular]" });
   });
 
   it("bounds text and error fields", () => {

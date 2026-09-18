@@ -206,9 +206,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
   switch (message.type) {
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
-    case 'logs.request': { const all = await db.logs.forApp(activeId); const filtered = message.level ? all.filter(x => x.level === message.level) : all; respond(message, { type: 'logs.response', logs: filtered.slice(-(message.limit ?? 30)).map(toProtocolLog) }); break; }
     case 'llm.request': await handleLlmRequest(message); break;
-    case 'app.meta.update': await handleMetadataUpdate(message); break;
     case 'cron.register': {
       const id = `${activeId}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
       await db.schedules.put({ id, appId: activeId, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
@@ -224,24 +222,6 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
         void startPendingInitialBuild();
       }
       break;
-  }
-}
-
-async function handleMetadataUpdate(message: BridgeMessage & { type: 'app.meta.update'; metadata: { name: string } }): Promise<void> {
-  try {
-    const app = currentApp();
-    if (!app || app.id !== message.appId) throw new Error('The selected app changed');
-    const updated = renameAppRecord(app, message.metadata.name);
-    const name = updated.name;
-    await db.apps.put(updated);
-    apps = apps.map(item => item.id === updated.id ? updated : item);
-    ui.setApps(apps as AppSummary[], updated.id);
-    document.title = `${name} · itsalive`;
-    respond(message, { type: 'app.meta.response', metadata: { name } });
-    await log('info', `agent:${app.id}`, 'App renamed', { previousName: app.name, name }, app.id);
-  } catch (error) {
-    await log('error', 'app-metadata', error instanceof Error ? error.message : String(error), error, message.appId);
-    respond(message, { type: 'app.meta.response', error: serializeError(error) });
   }
 }
 
@@ -261,7 +241,6 @@ async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; 
 }
 
 function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appId, message.requestId, payload), currentOrigin()); }
-function toProtocolLog(item: LogEntry) { return { timestamp: item.timestamp, level: item.level, source: item.source, message: item.message, details: item.details }; }
 async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appId?: string) {
   const method = level === 'debug' ? 'debug' : level;
   const safeMessage = String(sanitizeDiagnostic(message));

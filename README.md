@@ -71,7 +71,7 @@ Configure the first Worker route/custom domain for the exact root host and the s
 
 ## Runtime API
 
-Agent JavaScript executes inside the active app and can use ordinary browser APIs plus the single, versioned `itsalive` runtime namespace (`itsalive.apiVersion === 1`):
+Agent JavaScript executes inside the active app and can use ordinary browser APIs plus the single, versioned `itsalive` runtime namespace (`itsalive.apiVersion === 2`):
 
 ```js
 itsalive.dom.inspect({ ref, search, detail })
@@ -86,18 +86,13 @@ itsalive.tools.call(name, args)
 itsalive.tools.delete(name)
 itsalive.cron(id, expression, callback)
 itsalive.agent.wake(reason)
-itsalive.db.get(key)
-itsalive.db.set(key, value)
-itsalive.db.delete(key)
-itsalive.db.query(options)
 itsalive.llm.ask(prompt, options)
-itsalive.reload()
 itsalive.done(message)
 ```
 
 The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Custom tools receive the same API object as `env.itsalive` alongside `document`, `window`, and `fetch`.
 
-Generated apps should keep natural, reasonably sized state in persistent semantic HTML and use `itsalive.db` for large, binary, or query-heavy data. The system prompt strongly requires meaningful application UI to use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should preserve restored light DOM and normally use it so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply. This is a generation contract rather than runtime output validation.
+Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state should use native browser IndexedDB directly; each app has its own browser origin, so that storage is naturally isolated. The system prompt strongly requires meaningful application UI to use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should preserve restored light DOM and normally use it so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply. This is a generation contract rather than runtime output validation.
 
 ## Security notes
 

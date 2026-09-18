@@ -1,4 +1,3 @@
-import type { appDatabaseApi } from "./db";
 import type { inspectDom, ref } from "./inspect";
 import type { captureScreenshot } from "./screenshot";
 import type { createToolsApi } from "./tools";
@@ -8,8 +7,7 @@ export interface LlmApi {
 }
 
 export interface ItsaliveRuntimeApi {
-  readonly apiVersion: 1;
-  readonly db: typeof appDatabaseApi;
+  readonly apiVersion: 2;
   readonly llm: Readonly<LlmApi>;
   readonly history: Readonly<{ search(input: { query: string; limit?: number }): Promise<unknown> }>;
   readonly tools: Readonly<ReturnType<typeof createToolsApi>>;
@@ -23,7 +21,6 @@ export interface ItsaliveRuntimeApi {
     get(input?: { level?: "log" | "info" | "warn" | "error"; limit?: number }): unknown[];
   }>;
   readonly cron: (id: string, schedule: string, callback: () => unknown) => { id: string; schedule: string };
-  readonly reload: () => void;
   readonly done: (message?: string) => unknown;
 }
 

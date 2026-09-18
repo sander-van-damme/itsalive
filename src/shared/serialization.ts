@@ -51,9 +51,3 @@ export function safeStringify(value: unknown, maximum = DEFAULT_MAX_SERIALIZED_B
   }
   return truncateText(output, maximum);
 }
-
-/** Produces data safe to pass through postMessage and bounds unexpectedly large observations. */
-export function toBoundedClone(value: unknown, maximum = DEFAULT_MAX_SERIALIZED_BYTES): unknown {
-  const serialized = safeStringify(value, maximum);
-  try { return JSON.parse(serialized) as unknown; } catch { return serialized; }
-}

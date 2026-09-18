@@ -22,22 +22,13 @@ vi.mock("../src/app/bridge", () => ({
   },
 }));
 
-vi.mock("../src/app/db", () => {
-  const api = {
-    get: async (key: IDBValidKey) => state.rows.get(String(key)),
-    set: async (key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
-    delete: async (key: IDBValidKey) => { state.rows.delete(String(key)); },
-    query: async () => [],
-  };
-  return {
-    appDatabaseApi: api,
-    STORES: { document: "document", data: "data", tools: "tools" },
-    dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
-    dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
-    dbDelete: async (_store: string, key: IDBValidKey) => { state.rows.delete(String(key)); },
-    dbQuery: async () => [...state.rows.values()].map((value, index) => ({ key: index, value })),
-  };
-});
+vi.mock("../src/app/db", () => ({
+  STORES: { document: "document", tools: "tools" },
+  dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
+  dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
+  dbDelete: async (_store: string, key: IDBValidKey) => { state.rows.delete(String(key)); },
+  dbQuery: async () => [...state.rows.values()].map((value, index) => ({ key: index, value })),
+}));
 
 vi.mock("../src/app/logs", () => ({
   installLogging: () => {
@@ -47,7 +38,7 @@ vi.mock("../src/app/logs", () => ({
 }));
 
 vi.mock("../src/app/persistence", () => ({
-  loadSavedDocument: async () => { state.restoredWithApi = window.itsalive?.apiVersion === 1; },
+  loadSavedDocument: async () => { state.restoredWithApi = window.itsalive?.apiVersion === 2; },
   installAutosave: () => ({ disconnect: vi.fn() }),
 }));
 
@@ -58,15 +49,17 @@ describe("app runtime namespace", () => {
   beforeAll(async () => {
     state.posts.length = 0;
     const { startAppRuntime } = await import("../src/app/runtime");
-    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000" });
+    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000", screenshot: async element => element.tagName });
   });
 
   it("installs one immutable, versioned facade without replacing native history", () => {
     expect(window.history).toBe(nativeHistory);
     expect(Object.keys(window.itsalive)).toEqual([
-      "apiVersion", "db", "llm", "history", "tools", "agent", "dom", "logs", "cron", "reload", "done",
+      "apiVersion", "llm", "history", "tools", "agent", "dom", "logs", "cron", "done",
     ]);
-    expect(window.itsalive.apiVersion).toBe(1);
+    expect(window.itsalive.apiVersion).toBe(2);
+    expect(window.itsalive).not.toHaveProperty("db");
+    expect(window.itsalive).not.toHaveProperty("reload");
     expect(Object.isFrozen(window.itsalive)).toBe(true);
     expect(Object.isFrozen(window.itsalive.dom)).toBe(true);
     expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
@@ -89,10 +82,13 @@ describe("app runtime namespace", () => {
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return itsalive.apiVersion;", requestId: "version" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'return itsalive.done("ok");', requestId: "done" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "cron.fire", callbackId: "daily", requestId: "cron" } }));
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" } }));
     await nextTask();
-    expect(state.posts).toContainEqual({ payload: { type: "result", result: 1 }, requestId: "version" });
+    expect(state.posts).toContainEqual({ payload: { type: "result", result: 2 }, requestId: "version" });
     expect(state.posts).toContainEqual({ payload: { type: "result", done: true, message: "ok" }, requestId: "done" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "fired" }, requestId: "cron" });
+    expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
+    expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
   });
 
   it("passes the canonical namespace to custom tools as env.itsalive", async () => {
@@ -101,7 +97,7 @@ describe("app runtime namespace", () => {
       description: "Read the runtime API version",
       code: "return async function(_args, env) { return { version: env.itsalive.apiVersion, legacy: 'app' in env }; }",
     });
-    await expect(window.itsalive.tools.call("runtimeVersion")).resolves.toEqual({ version: 1, legacy: false });
+    await expect(window.itsalive.tools.call("runtimeVersion")).resolves.toEqual({ version: 2, legacy: false });
   });
 
   it("fails clearly instead of overwriting an existing namespace", async () => {
