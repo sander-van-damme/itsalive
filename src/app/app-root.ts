@@ -59,6 +59,6 @@ export function enforceCanonicalAppRootAfterAgentCommand(ownerDocument: Document
   if (!outside.length) return;
 
   const description = outside.map(describeNode).join(", ");
-  for (const node of outside) node.remove();
+  for (const node of outside) node.parentNode?.removeChild(node);
   throw new Error(`Generated command appended user-visible UI outside #itsalive-root (${description}). Those nodes were discarded; repair by editing the existing canonical root.`);
 }
