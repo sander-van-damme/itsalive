@@ -4,6 +4,8 @@ import type { SerializedError } from "./serialization";
 
 export const BRIDGE_PROTOCOL = "itsalive" as const;
 export const BRIDGE_VERSION = 3 as const;
+/** Shared character limit for the semantic HTML projection carried by Jev requests. */
+export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type RuntimeStatus = "ready";
@@ -76,7 +78,7 @@ function isInteractionTarget(value: unknown): boolean {
 function isInteraction(value: unknown): boolean {
   return isObject(value) && hasOnly(value, ["seq", "at", "type", "target", "actualTarget", "key"]) && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0 && typeof value.at === "string" && value.at.length <= 40 && typeof value.type === "string" && value.type.length > 0 && value.type.length <= 30 && (value.key === undefined || typeof value.key === "string" && value.key.length <= 30) && isInteractionTarget(value.target) && isInteractionTarget(value.actualTarget);
 }
-function isJevState(value: unknown): boolean { return isObject(value) && hasOnly(value, ["interaction", "recentInteractions", "historySummary", "document"]) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && (value.historySummary === undefined || typeof value.historySummary === "string" && value.historySummary.length <= 8_000) && typeof value.document === "string" && value.document.length <= 100_000; }
+function isJevState(value: unknown): boolean { return isObject(value) && hasOnly(value, ["interaction", "recentInteractions", "historySummary", "document"]) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && (value.historySummary === undefined || typeof value.historySummary === "string" && value.historySummary.length <= 8_000) && typeof value.document === "string" && value.document.length <= MAX_SEMANTIC_DOCUMENT_CHARACTERS; }
 
 export const isShellToAppMessage = (value: unknown): value is BridgeMessage<ShellToAppPayload> =>
   isBridgeMessage(value) && SHELL_TYPES.has(value.type as ShellToAppPayload["type"]);

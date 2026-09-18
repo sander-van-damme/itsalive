@@ -1,10 +1,10 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installInteractionObserver } from "../src/app/interactions";
+import { installInteractionObserver, readInteractionRecord } from "../src/app/interactions";
 import { serializeSemanticDocument } from "../src/app/semantic-document";
 import { ReactionBatcher, formatReactionBatch } from "../src/shell/core/reactions";
 import { MockDecisionModel } from "../src/shell/core/jev";
-import type { AppToShellPayload, JevState } from "../src/shared";
+import { MAX_SEMANTIC_DOCUMENT_CHARACTERS, type AppToShellPayload, type JevState } from "../src/shared";
 
 const response = (probability: number) => Promise.resolve({ type: "jev.response", probability, escalated: probability >= .7 });
 
@@ -57,6 +57,52 @@ describe("continuous interaction observation", () => {
     observer.destroy(); document.querySelector("button")!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(request).toHaveBeenCalledOnce();
   });
+
+  it("preserves one canonical persisted history across body rewrites until teardown", async () => {
+    document.body.innerHTML = `<itsalive-history hidden><itsalive-interaction seq="4" type="click"></itsalive-interaction></itsalive-history>`;
+    const original = document.querySelector("itsalive-history")!;
+    const observer = installInteractionObserver({ request: vi.fn() } as never, { acceptUntrustedForTest: true });
+    document.body.innerHTML = "<new-app></new-app>";
+    await vi.waitFor(() => expect(document.querySelector("itsalive-history")).toBe(original));
+    expect(original.querySelector("itsalive-interaction")?.getAttribute("seq")).toBe("4");
+    document.body.replaceChildren(document.createElement("other-app"));
+    await vi.waitFor(() => expect(document.querySelector("itsalive-history")).toBe(original));
+    document.body.innerHTML += "<itsalive-history></itsalive-history>";
+    await vi.waitFor(() => expect(document.querySelectorAll("itsalive-history")).toHaveLength(1));
+    expect(document.querySelector("itsalive-history")).toBe(original);
+    observer.destroy();
+    document.body.replaceChildren(document.createElement("final-app"));
+    await Promise.resolve();
+    expect(document.querySelector("itsalive-history")).toBeNull();
+  });
+
+  it("round-trips bounded safe target metadata and keyboard keys", async () => {
+    const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.1); });
+    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true });
+    document.body.insertAdjacentHTML("beforeend", `<settings-panel id="sound" aria-label="Sound settings" data-state="editing"><input id="enabled" aria-label="Enabled" data-state="on" type="checkbox" value="safe" checked></settings-panel>`);
+    document.querySelector("input")!.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true, composed: true }));
+    await Promise.resolve();
+    const record = readInteractionRecord(document.querySelector("itsalive-interaction")!);
+    expect(record).toMatchObject({ key: "Enter", target: { tag: "settings-panel", id: "sound", state: { "aria-label": "Sound settings", "data-state": "editing" } }, actualTarget: { tag: "input", id: "enabled", value: "safe", state: { "aria-label": "Enabled", "data-state": "on", checked: true } } });
+    observer.destroy();
+  });
+});
+
+describe("semantic document bounds", () => {
+  afterEach(() => { document.head.innerHTML = ""; document.body.innerHTML = ""; });
+  it("emits parseable, explicitly truncated HTML within the shared character limit", () => {
+    document.body.innerHTML = `<main><h1>Important early content 🚀</h1>${Array.from({ length: 2_500 }, (_, index) => `<article id="item-${index}">${"界".repeat(100)}</article>`).join("")}</main>`;
+    const result = serializeSemanticDocument();
+    expect(result.length).toBeLessThanOrEqual(MAX_SEMANTIC_DOCUMENT_CHARACTERS);
+    expect(result).toContain("Important early content 🚀");
+    const parsed = new DOMParser().parseFromString(result, "text/html");
+    expect(parsed.documentElement.getAttribute("data-semantic-truncated")).toBe("true");
+    expect(parsed.querySelector("parsererror")).toBeNull();
+  });
+  it("does not mark a small complete projection as truncated", () => {
+    document.body.innerHTML = "<main>Hello</main>";
+    expect(serializeSemanticDocument()).not.toContain("data-semantic-truncated");
+  });
 });
 
 describe("Jev decisions and reaction batching", () => {
@@ -95,6 +141,15 @@ describe("privacy and trust regressions", () => {
     const serialized = JSON.stringify(request.mock.calls[0]?.[0]);
     expect(serialized).not.toContain("super-secret"); expect(serialized).not.toContain('"key":"s"');
     const semantic = serializeSemanticDocument(); expect(semantic).not.toContain("abc123"); expect(semantic).not.toContain("hunter"); expect(semantic).not.toContain("qwerty"); expect(semantic).toContain("%5Bredacted%5D"); observer.destroy();
+  });
+  it("redacts sensitive fragments, inherited control values, and sensitive visible text", () => {
+    document.body.innerHTML = `<api-key-field><input value="sk-child-secret"></api-key-field><api-token-display>sk-visible-secret</api-token-display><a href="/callback#access_token=abc&section=profile">go</a><a href="/page#normal-anchor">normal</a>`;
+    const semantic = serializeSemanticDocument();
+    expect(semantic).not.toContain("sk-child-secret");
+    expect(semantic).not.toContain("sk-visible-secret");
+    expect(semantic).not.toContain("access_token=abc");
+    expect(semantic).toContain("access_token=%5Bredacted%5D");
+    expect(semantic).toContain("#normal-anchor");
   });
 });
 

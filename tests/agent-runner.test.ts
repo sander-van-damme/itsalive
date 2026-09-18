@@ -183,4 +183,46 @@ describe('AgentRunner lifecycle', () => {
     });
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ role: 'user', kind: 'chat', content: 'Add a chart' }));
   });
+
+  it('injects an in-flight environmental observation once into the next turn of the same run', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    let release!: (value: { text: string }) => void;
+    const first = new Promise<{ text: string }>(resolve => { release = resolve; });
+    const providers = { generate: vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce({ text: 'return itsalive.done();' }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('dom.inspect') ? { value: '@1 body\n└─ @2 main "Ready"' } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
+    const queue: string[] = [];
+    const consume = vi.fn(() => queue.splice(0));
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const run = new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, tools: [], consumeEnvironmentObservations: consume });
+    await vi.waitFor(() => expect(providers.generate).toHaveBeenCalledTimes(1));
+    queue.push('The user changed tempo to 120.');
+    release({ text: 'return "updated";' });
+    await expect(run).resolves.toMatchObject({ status: 'done', turns: 2 });
+    const firstMessages = providers.generate.mock.calls[0]![0].messages.map((message: { content: string }) => message.content).join('\n');
+    const secondMessages = providers.generate.mock.calls[1]![0].messages.map((message: { content: string }) => message.content).join('\n');
+    expect(firstMessages).not.toContain('changed tempo');
+    expect(secondMessages.match(/changed tempo/g)).toHaveLength(1);
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+    expect(queue).toHaveLength(0);
+  });
+
+  it('continues instead of accepting done when an environmental observation is pending', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn().mockResolvedValueOnce({ text: 'return itsalive.done();' }).mockResolvedValueOnce({ text: 'return itsalive.done();' }) };
+    const queue: string[] = [];
+    let executions = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('dom.inspect')) return { value: '@1 body\n└─ @2 main "Ready"' };
+      if (++executions === 1) queue.push('A final user action arrived.');
+      return { done: true };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, tools: [], consumeEnvironmentObservations: () => queue.splice(0) });
+    expect(result).toMatchObject({ status: 'done', turns: 2 });
+    expect(providers.generate.mock.calls[1]![0].messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('A final user action arrived.') })]));
+  });
 });
