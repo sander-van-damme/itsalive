@@ -286,7 +286,7 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
     model: OPENROUTER_MODEL,
     maxContextTokens: MODEL_CONTEXT_TOKENS,
     maxOutputTokens: MODEL_OUTPUT_TOKENS,
-    options: { reasoning: { enabled: false } },
+    options: { reasoning: { enabled: true } },
   };
   await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: MODEL_OUTPUT_TOKENS }, { id: 'connection-test', type: 'api-key', value: apiKey });
   return { apiKey };
