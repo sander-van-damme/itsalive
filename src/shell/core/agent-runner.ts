@@ -76,53 +76,113 @@ export class AgentRunner {
           const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
           console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, toolCount: options.tools.length, hasObservation: Boolean(observation) });
+          const commandParser = new StreamedCommandParser();
+          let streamedResult: ExecutionResult | undefined;
+          let streamedObservation: string | undefined;
+          let streamedCodeError: GeneratedCodeError | undefined;
+          let streamedRuntimeError: unknown;
+          let streamedCommands = 0;
+          let executionQueue = Promise.resolve();
+
+          const enqueueCommand = (code: string) => {
+            streamedCommands++;
+            executionQueue = executionQueue.then(async () => {
+              if (streamedCodeError || streamedRuntimeError || streamedResult?.done || streamedResult?.error) return;
+              try {
+                validateExecutableJavaScript(code);
+              } catch (error) {
+                streamedCodeError = error instanceof GeneratedCodeError
+                  ? error
+                  : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
+                return;
+              }
+              try {
+                const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+                streamedResult = executed.result;
+                streamedObservation = executed.observation;
+              } catch (error) {
+                streamedRuntimeError = error;
+              }
+            });
+          };
+
           let generated;
           try {
-            generated = await this.providers.generate({ purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal }, options.credential);
+            generated = await generateWithStreaming(
+              this.providers,
+              { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal },
+              options.credential,
+              delta => {
+                for (const code of commandParser.push(delta)) enqueueCommand(code);
+              },
+            );
+            await executionQueue;
           } catch (error) {
             console.error('Model request failed', diagnosticError(error));
             throw error;
           }
+          if (streamedRuntimeError) throw streamedRuntimeError;
 
-          let code: string;
-          try {
-            code = extractExecutableJavaScript(generated.text);
-            validateExecutableJavaScript(code);
-            consecutiveGenerationFailures = 0;
-          } catch (error) {
-            const generatedError = error instanceof GeneratedCodeError
-              ? error
-              : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
-            consecutiveGenerationFailures++;
-            observation = generatedCodeObservation(generatedError);
-            console.warn('Generated code rejected before execution', sanitizeDiagnostic({
-              phase: generatedError.phase,
-              message: generatedError.message,
-              consecutiveFailures: consecutiveGenerationFailures,
-            }));
-            await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
-            if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
-              throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+          let result: ExecutionResult;
+          if (commandParser.usesProtocol) {
+            try {
+              commandParser.finish();
+              if (streamedCodeError) throw streamedCodeError;
+              if (!streamedCommands || !streamedResult) throw new GeneratedCodeError("format", "Model returned no complete streamed commands");
+              consecutiveGenerationFailures = 0;
+            } catch (error) {
+              const generatedError = error instanceof GeneratedCodeError
+                ? error
+                : new GeneratedCodeError("format", error instanceof Error ? error.message : String(error));
+              consecutiveGenerationFailures++;
+              observation = generatedCodeObservation(generatedError);
+              console.warn('Generated command stream rejected', sanitizeDiagnostic({
+                phase: generatedError.phase,
+                message: generatedError.message,
+                consecutiveFailures: consecutiveGenerationFailures,
+              }));
+              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
+                throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+              }
+              console.info('Continuing to next turn for streamed command repair');
+              continue;
             }
-            console.info('Continuing to next turn for code repair');
-            continue;
+            result = streamedResult!;
+            observation = streamedObservation;
+            if (result.error) {
+              console.info('A streamed command failed; continuing to next turn for repair');
+              continue;
+            }
+          } else {
+            let code: string;
+            try {
+              code = extractExecutableJavaScript(generated.text);
+              validateExecutableJavaScript(code);
+              consecutiveGenerationFailures = 0;
+            } catch (error) {
+              const generatedError = error instanceof GeneratedCodeError
+                ? error
+                : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
+              consecutiveGenerationFailures++;
+              observation = generatedCodeObservation(generatedError);
+              console.warn('Generated code rejected before execution', sanitizeDiagnostic({
+                phase: generatedError.phase,
+                message: generatedError.message,
+                consecutiveFailures: consecutiveGenerationFailures,
+              }));
+              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
+                throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+              }
+              console.info('Continuing to next turn for code repair');
+              continue;
+            }
+            const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+            result = executed.result;
+            observation = executed.observation;
           }
 
-          console.info('Executable JavaScript', sanitizeDiagnostic(code));
-          await appendHistory(this.db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
-          const executionStartedAt = performance.now();
-          let result;
-          try {
-            result = await this.executor.execute(options.appId, code, { signal: controller.signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
-          } catch (error) {
-            console.error(`Runtime execution failed (${Math.round(performance.now() - executionStartedAt)}ms)`, diagnosticError(error));
-            throw error;
-          }
-          console.info(`Runtime result (${Math.round(performance.now() - executionStartedAt)}ms)`, sanitizeDiagnostic(result));
-          if (result.error) console.error('Runtime execution error', sanitizeDiagnostic(result.error));
-          observation = boundObservation(result, options.maxObservationCharacters ?? 16_000);
-          console.info('Observation', sanitizeDiagnostic(observation));
-          await appendHistory(this.db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
           if (result.done) {
             const arrivedBeforeCompletion = options.consumeEnvironmentObservations?.() ?? [];
             if (arrivedBeforeCompletion.length) {
@@ -159,6 +219,77 @@ export class AgentRunner {
       console.groupEnd();
     }
   }
+}
+
+const COMMAND_START = "/* itsalive:command */";
+const COMMAND_END = "/* itsalive:end */";
+
+class StreamedCommandParser {
+  private buffer = "";
+  private protocol = false;
+
+  get usesProtocol(): boolean { return this.protocol; }
+
+  push(delta: string): string[] {
+    this.buffer += delta;
+    const commands: string[] = [];
+    while (true) {
+      const start = this.buffer.indexOf(COMMAND_START);
+      if (start < 0) return commands;
+      this.protocol = true;
+      if (start > 0) this.buffer = this.buffer.slice(start);
+      const end = this.buffer.indexOf(COMMAND_END, COMMAND_START.length);
+      if (end < 0) return commands;
+      const code = this.buffer.slice(COMMAND_START.length, end).trim();
+      this.buffer = this.buffer.slice(end + COMMAND_END.length);
+      if (code) commands.push(code);
+    }
+  }
+
+  finish(): void {
+    if (!this.protocol) return;
+    if (this.buffer.trim()) throw new GeneratedCodeError("format", "Model stream ended with an incomplete command or trailing content");
+  }
+}
+
+async function generateWithStreaming(
+  providers: ProviderRegistry,
+  request: Parameters<ProviderRegistry["generate"]>[0],
+  credential: Credential | undefined,
+  onText: (delta: string) => void,
+) {
+  const streaming = (providers as ProviderRegistry & {
+    generateStreaming?: (request: Parameters<ProviderRegistry["generate"]>[0], onText: (delta: string) => void, credential?: Credential) => ReturnType<ProviderRegistry["generate"]>;
+  }).generateStreaming;
+  if (typeof streaming === "function") return streaming.call(providers, request, onText, credential);
+  const result = await providers.generate(request, credential);
+  if (result.text) onText(result.text);
+  return result;
+}
+
+async function executeGeneratedCommand(
+  db: ShellDatabase,
+  executor: AppExecutor,
+  options: RunOptions,
+  signal: AbortSignal,
+  code: string,
+): Promise<{ result: ExecutionResult; observation: string }> {
+  console.info('Executable JavaScript', sanitizeDiagnostic(code));
+  await appendHistory(db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
+  const executionStartedAt = performance.now();
+  let result: ExecutionResult;
+  try {
+    result = await executor.execute(options.appId, code, { signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
+  } catch (error) {
+    console.error(`Runtime execution failed (${Math.round(performance.now() - executionStartedAt)}ms)`, diagnosticError(error));
+    throw error;
+  }
+  console.info(`Runtime result (${Math.round(performance.now() - executionStartedAt)}ms)`, sanitizeDiagnostic(result));
+  if (result.error) console.error('Runtime execution error', sanitizeDiagnostic(result.error));
+  const observation = boundObservation(result, options.maxObservationCharacters ?? 16_000);
+  console.info('Observation', sanitizeDiagnostic(observation));
+  await appendHistory(db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
+  return { result, observation };
 }
 
 function extractExecutableJavaScript(text: string): string {
