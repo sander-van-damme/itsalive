@@ -1,6 +1,4 @@
-import type { inspectDom, ref } from "./inspect";
 import type { captureScreenshot } from "./screenshot";
-import type { createToolsApi } from "./tools";
 
 export interface LlmApi {
   ask<T = unknown>(prompt: unknown): Promise<T>;
@@ -10,11 +8,8 @@ export interface ItsaliveRuntimeApi {
   readonly apiVersion: 2;
   readonly llm: Readonly<LlmApi>;
   readonly history: Readonly<{ search(input: { query: string; limit?: number }): Promise<unknown> }>;
-  readonly tools: Readonly<ReturnType<typeof createToolsApi>>;
   readonly agent: Readonly<{ wake(prompt: string): Promise<unknown> }>;
   readonly dom: Readonly<{
-    inspect: typeof inspectDom;
-    ref: typeof ref;
     screenshot: typeof captureScreenshot;
   }>;
   readonly logs: Readonly<{
