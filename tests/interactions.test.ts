@@ -126,10 +126,10 @@ describe("continuous interaction observation", () => {
     const request = vi.fn(async (payload: AppToShellPayload) => payload.type === "llm.request"
       ? { type: "llm.response", result: "User repeatedly adjusts tempo upward and prefers quick feedback." }
       : { type: "jev.response", probability: .1, escalated: false });
-    const button = document.body.appendChild(document.createElement("button"));
+    const buttons = Array.from({ length: 3 }, () => document.body.appendChild(document.createElement("button")));
     const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, historyRewriteInterval: 3 });
 
-    for (let index = 0; index < 3; index++) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    for (const button of buttons) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await vi.waitFor(() => expect(document.querySelector("itsalive-history-summary")?.textContent).toContain("adjusts tempo"));
 
     expect(document.querySelectorAll("itsalive-interaction")).toHaveLength(0);
@@ -138,6 +138,113 @@ describe("continuous interaction observation", () => {
     expect(llmRequest.prompt).toContain("New ephemeral interactions");
     observer.destroy();
   });
+  it("does not evaluate pointerdown and click as separate actions", async () => {
+    const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.1); });
+    const button = document.body.appendChild(document.createElement("button"));
+    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, historyRewriteInterval: 40 });
+
+    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    button.click();
+    await Promise.resolve();
+
+    expect(request).toHaveBeenCalledTimes(1);
+    const payload = request.mock.calls[0]![0] as Extract<AppToShellPayload, { type: "jev.request" }>;
+    expect(payload.state.interaction.type).toBe("click");
+    observer.destroy();
+  });
+
+  it("aggregates rapid unchanged retries and emits a frustration pattern", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.2); });
+    const button = document.body.appendChild(document.createElement("button"));
+    button.textContent = "Check answer";
+    const observer = installInteractionObserver({ request } as never, {
+      acceptUntrustedForTest: true,
+      historyRewriteInterval: 40,
+      repeatIdleMs: 100,
+      repeatWindowMs: 1_000,
+    });
+
+    button.click();
+    await Promise.resolve();
+    for (let index = 0; index < 4; index++) {
+      await vi.advanceTimersByTimeAsync(80);
+      button.click();
+      await Promise.resolve();
+    }
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(request).toHaveBeenCalledTimes(2);
+    const aggregate = request.mock.calls[1]![0] as Extract<AppToShellPayload, { type: "jev.request" }>;
+    expect(aggregate.state.pattern).toMatchObject({
+      kind: "repeated-action",
+      actionCount: 5,
+      coalescedCount: 3,
+      documentChangeCount: 0,
+      likelyBenign: false,
+      frustrationSignal: true,
+    });
+    observer.destroy();
+  });
+
+  it("suppresses frustration boosting for intentional rapid media-style controls", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.2); });
+    const button = document.body.appendChild(document.createElement("button"));
+    button.textContent = "Hear chord";
+    const observer = installInteractionObserver({ request } as never, {
+      acceptUntrustedForTest: true,
+      historyRewriteInterval: 40,
+      repeatIdleMs: 100,
+      repeatWindowMs: 1_000,
+    });
+
+    button.click();
+    await Promise.resolve();
+    for (let index = 0; index < 4; index++) {
+      await vi.advanceTimersByTimeAsync(80);
+      button.click();
+      await Promise.resolve();
+    }
+    await vi.advanceTimersByTimeAsync(100);
+
+    const aggregate = request.mock.calls[1]![0] as Extract<AppToShellPayload, { type: "jev.request" }>;
+    expect(aggregate.state.pattern).toMatchObject({
+      actionCount: 5,
+      likelyBenign: true,
+      frustrationSignal: false,
+    });
+    observer.destroy();
+  });
+
+  it("does not trigger a behavioral-history rewrite for one coalesced five-click burst", async () => {
+    vi.useFakeTimers();
+    const request = vi.fn(async (payload: AppToShellPayload) => payload.type === "llm.request"
+      ? { type: "llm.response", result: "rewritten" }
+      : { type: "jev.response", probability: .2, escalated: false });
+    const button = document.body.appendChild(document.createElement("button"));
+    button.textContent = "Check";
+    const observer = installInteractionObserver({ request } as never, {
+      acceptUntrustedForTest: true,
+      historyRewriteInterval: 3,
+      repeatIdleMs: 100,
+      repeatWindowMs: 1_000,
+    });
+
+    button.click();
+    await Promise.resolve();
+    for (let index = 0; index < 4; index++) {
+      await vi.advanceTimersByTimeAsync(80);
+      button.click();
+      await Promise.resolve();
+    }
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(request.mock.calls.filter(([payload]) => payload.type === "jev.request")).toHaveLength(2);
+    expect(request.mock.calls.filter(([payload]) => payload.type === "llm.request")).toHaveLength(0);
+    observer.destroy();
+  });
+
 });
 
 describe("semantic document bounds", () => {
@@ -184,6 +291,16 @@ describe("Jev decisions and reaction batching", () => {
     batcher.destroy();
     await vi.runAllTimersAsync();
     expect(deliver).toHaveBeenCalledOnce();
+  });
+
+  it("includes local interaction patterns in automatic reaction context", async () => {
+    const patterned: JevState = {
+      ...state(5),
+      pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0, likelyBenign: false, frustrationSignal: true },
+    };
+    const text = formatReactionBatch({ events: [patterned], createdAt: Date.now() });
+    expect(text).toContain('"frustrationSignal": true');
+    expect(text).toContain('"actionCount": 5');
   });
 
   it("orders concurrent results by sequence and selects the newest document", async () => {
@@ -237,9 +354,10 @@ describe("privacy and bounded work", () => {
   it("coalesces saturated Jev work to the freshest interaction", async () => {
     const resolvers: Array<(value: unknown) => void> = [];
     const request = vi.fn((payload: unknown) => { void payload; return new Promise(resolve => resolvers.push(resolve)); });
-    const button = document.body.appendChild(document.createElement("button"));
+    const buttons = Array.from({ length: 4 }, () => document.body.appendChild(document.createElement("button")));
     const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, maxInFlight: 1, historyRewriteInterval: 40 });
-    for (let index = 0; index < 4; index++) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    for (const button of buttons) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    await Promise.resolve();
     expect(request).toHaveBeenCalledOnce();
     resolvers.shift()!({ type: "jev.response", probability: .1, escalated: false });
     await vi.waitFor(() => expect(request).toHaveBeenCalledTimes(2));

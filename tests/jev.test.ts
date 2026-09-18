@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
-import { JEV_MODEL, OPENROUTER_DECISIONS_URL, OpenRouterJevAdapter } from "../src/shell/core/jev";
+import { decideJevEscalation, JEV_MODEL, OPENROUTER_DECISIONS_URL, OpenRouterJevAdapter } from "../src/shell/core/jev";
+import type { JevState } from "../src/shared";
 
 const credential = { id: "active", type: "api-key" as const, value: "sk-or-test" };
 const state = { interaction: { seq: 1 } };
@@ -35,5 +36,36 @@ describe("OpenRouter Jev adapter", () => {
     const fetcher = vi.fn((_url: string | URL | Request, init?: RequestInit) => new Promise<Response>((_resolve, reject) => init?.signal?.addEventListener("abort", () => reject(init.signal?.reason), { once: true })));
     const pending = new OpenRouterJevAdapter(fetcher as typeof fetch).evaluate({ state, signal: controller.signal }, credential); controller.abort(new DOMException("timed out", "TimeoutError"));
     await expect(pending).rejects.toMatchObject({ name: "TimeoutError" });
+  });
+});
+
+
+describe("Jev sequence-aware escalation", () => {
+  const state = (likelyBenign: boolean, frustrationSignal: boolean): JevState => ({
+    interaction: { seq: 5, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "section" }, actualTarget: { tag: "button" } },
+    recentInteractions: [],
+    pattern: {
+      kind: "repeated-action",
+      actionCount: 5,
+      coalescedCount: 3,
+      durationMs: 320,
+      averageIntervalMs: 80,
+      documentChangeCount: 0,
+      likelyBenign,
+      frustrationSignal,
+    },
+    document: "<main><button>Check answer</button></main>",
+  });
+
+  it("escalates a repeated unchanged frustration pattern below the ordinary model threshold", () => {
+    expect(decideJevEscalation(.2, state(false, true))).toEqual({ escalated: true, reason: "repeated-unchanged-action" });
+  });
+
+  it("does not boost a likely-benign rapid repeat", () => {
+    expect(decideJevEscalation(.2, state(true, false))).toEqual({ escalated: false, reason: "none" });
+  });
+
+  it("still honors a high-confidence model decision", () => {
+    expect(decideJevEscalation(.8, state(true, false))).toEqual({ escalated: true, reason: "model-threshold" });
   });
 });

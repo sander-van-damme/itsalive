@@ -1,14 +1,17 @@
+import type { JevState } from "../../shared";
 import type { Credential, DecisionModel, DecisionRequest, DecisionResult } from "./types";
 
 export const JEV_MODEL = "~typesafe/jev-latest";
 export const OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
+export const JEV_ESCALATION_THRESHOLD = 0.7;
+export const JEV_PATTERN_SIGNAL_FLOOR = 0.12;
 export const GENERIC_JEV_QUESTION = {
   requires_llm_attention: {
     type: "noul" as const,
-    instructions: "Given this user interaction, recent interactions, and current semantic application document, should the application invoke its reasoning agent because an intelligent or adaptive response may be useful?",
+    instructions: "Given this user interaction, recent interactions, optional locally-derived interaction pattern, and current semantic application document, should the application invoke its reasoning agent because an intelligent or adaptive response may be useful?",
     criteria: {
-      true: "Meaningful adaptation, assistance, or deeper contextual reasoning may be useful, including behavior suggesting an unmet need.",
-      false: "This is an ordinary expected interaction and existing application behavior is sufficient.",
+      true: "Meaningful adaptation, assistance, or deeper contextual reasoning may be useful, including repeated unchanged attempts suggesting an unmet need.",
+      false: "This is an ordinary expected interaction and existing application behavior is sufficient. A pattern marked likelyBenign usually represents intentional repeatable use rather than frustration.",
     },
   },
 };
@@ -41,4 +44,19 @@ export class MockDecisionModel implements DecisionModel {
   readonly id = "mock-jev";
   constructor(private readonly decide: (request: DecisionRequest) => number | Promise<number>) {}
   async evaluate(request: DecisionRequest): Promise<DecisionResult> { return { probability: await this.decide(request) }; }
+}
+
+
+export interface JevEscalationDecision {
+  escalated: boolean;
+  reason: "model-threshold" | "repeated-unchanged-action" | "none";
+}
+
+export function decideJevEscalation(probability: number, state: JevState, threshold = JEV_ESCALATION_THRESHOLD): JevEscalationDecision {
+  if (probability >= threshold) return { escalated: true, reason: "model-threshold" };
+  const pattern = state.pattern;
+  if (pattern?.frustrationSignal && !pattern.likelyBenign && probability >= JEV_PATTERN_SIGNAL_FLOOR) {
+    return { escalated: true, reason: "repeated-unchanged-action" };
+  }
+  return { escalated: false, reason: "none" };
 }

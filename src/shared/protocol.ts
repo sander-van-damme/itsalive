@@ -3,7 +3,7 @@ import { isValidId } from "./ids";
 import type { SerializedError } from "./serialization";
 
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 3 as const;
+export const BRIDGE_VERSION = 4 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
 
@@ -14,7 +14,17 @@ export interface LogRecord { timestamp: number; level: LogLevel; source: string;
 export interface CronRegistration { callbackId: string; schedule: string; }
 export interface InteractionTarget { tag: string; id?: string; value?: string; state?: Record<string, string | boolean>; }
 export interface InteractionSnapshot { seq: number; at: string; type: string; target: InteractionTarget; actualTarget: InteractionTarget; key?: string; }
-export interface JevState { interaction: InteractionSnapshot; recentInteractions: InteractionSnapshot[]; historySummary?: string; document: string; }
+export interface InteractionPattern {
+  kind: "repeated-action";
+  actionCount: number;
+  coalescedCount: number;
+  durationMs: number;
+  averageIntervalMs: number;
+  documentChangeCount: number;
+  likelyBenign: boolean;
+  frustrationSignal: boolean;
+}
+export interface JevState { interaction: InteractionSnapshot; recentInteractions: InteractionSnapshot[]; pattern?: InteractionPattern; historySummary?: string; document: string; }
 
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
@@ -78,7 +88,16 @@ function isInteractionTarget(value: unknown): boolean {
 function isInteraction(value: unknown): boolean {
   return isObject(value) && hasOnly(value, ["seq", "at", "type", "target", "actualTarget", "key"]) && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0 && typeof value.at === "string" && value.at.length <= 40 && typeof value.type === "string" && value.type.length > 0 && value.type.length <= 30 && (value.key === undefined || typeof value.key === "string" && value.key.length <= 30) && isInteractionTarget(value.target) && isInteractionTarget(value.actualTarget);
 }
-function isJevState(value: unknown): boolean { return isObject(value) && hasOnly(value, ["interaction", "recentInteractions", "historySummary", "document"]) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && (value.historySummary === undefined || typeof value.historySummary === "string" && value.historySummary.length <= 8_000) && typeof value.document === "string" && value.document.length <= MAX_SEMANTIC_DOCUMENT_CHARACTERS; }
+function isInteractionPattern(value: unknown): boolean {
+  if (!isObject(value) || !hasOnly(value, ["kind", "actionCount", "coalescedCount", "durationMs", "averageIntervalMs", "documentChangeCount", "likelyBenign", "frustrationSignal"]) || value.kind !== "repeated-action") return false;
+  return Number.isSafeInteger(value.actionCount) && Number(value.actionCount) >= 2 && Number(value.actionCount) <= 1_000
+    && Number.isSafeInteger(value.coalescedCount) && Number(value.coalescedCount) >= 0 && Number(value.coalescedCount) <= Number(value.actionCount) - 2
+    && typeof value.durationMs === "number" && Number.isFinite(value.durationMs) && value.durationMs >= 0 && value.durationMs <= 60_000
+    && typeof value.averageIntervalMs === "number" && Number.isFinite(value.averageIntervalMs) && value.averageIntervalMs >= 0 && value.averageIntervalMs <= 60_000
+    && Number.isSafeInteger(value.documentChangeCount) && Number(value.documentChangeCount) >= 0 && Number(value.documentChangeCount) < Number(value.actionCount)
+    && typeof value.likelyBenign === "boolean" && typeof value.frustrationSignal === "boolean";
+}
+function isJevState(value: unknown): boolean { return isObject(value) && hasOnly(value, ["interaction", "recentInteractions", "pattern", "historySummary", "document"]) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && (value.pattern === undefined || isInteractionPattern(value.pattern)) && (value.historySummary === undefined || typeof value.historySummary === "string" && value.historySummary.length <= 8_000) && typeof value.document === "string" && value.document.length <= MAX_SEMANTIC_DOCUMENT_CHARACTERS; }
 
 export const isShellToAppMessage = (value: unknown): value is BridgeMessage<ShellToAppPayload> =>
   isBridgeMessage(value) && SHELL_TYPES.has(value.type as ShellToAppPayload["type"]);

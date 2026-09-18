@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, deleteApp, formatReactionBatch, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -19,7 +19,6 @@ let activeRun: AbortController | undefined;
 let connectionTimer: number | undefined;
 const initialBuild = new InitialBuildIntent();
 const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
-const JEV_ESCALATION_THRESHOLD = 0.7;
 
 const OPENROUTER_PROVIDER = 'openrouter';
 const OPENROUTER_MODEL = 'openrouter/auto';
@@ -42,6 +41,7 @@ if (stored) {
 
 const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
+let jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 };
 
 const ui = new ShellUI(root, {
   createApp: async goal => {
@@ -129,7 +129,7 @@ async function selectApp(id: string): Promise<void> {
 }
 
 function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); ui.setBusy(false); }
-function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(new DOMException('App runtime disposed', 'AbortError')); jevControllers.clear(); stopActiveRun('App runtime disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
+function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(new DOMException('App runtime disposed', 'AbortError')); jevControllers.clear(); stopActiveRun('App runtime disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 }; if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
 function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
 
@@ -238,17 +238,31 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   try {
     const key = credential();
     if (!key) throw new Error('OpenRouter is not configured');
+    jevSessionStats.requests++;
+    jevSessionStats.coalescedEvents += message.state.pattern?.coalescedCount ?? 0;
     const decisionModel: DecisionModel = new OpenRouterJevAdapter();
     const result = await decisionModel.evaluate({ state: message.state, signal: controller.signal }, key);
     if (!current()) return;
-    const escalated = result.probability >= JEV_ESCALATION_THRESHOLD;
-    await log('info', 'jev', 'Interaction decision', { probability: result.probability, threshold: JEV_ESCALATION_THRESHOLD, escalated, durationMs: Math.round(performance.now() - startedAt), snapshotCharacters: message.state.document.length, inputTokens: result.usage?.inputTokens }, appId);
+    jevSessionStats.inputTokens += result.usage?.inputTokens ?? 0;
+    const decision = decideJevEscalation(result.probability, message.state);
+    if (decision.escalated) jevSessionStats.escalations++;
+    await log('info', 'jev', 'Interaction decision', {
+      probability: result.probability,
+      threshold: JEV_ESCALATION_THRESHOLD,
+      escalated: decision.escalated,
+      escalationReason: decision.reason,
+      pattern: message.state.pattern,
+      durationMs: Math.round(performance.now() - startedAt),
+      snapshotCharacters: message.state.document.length,
+      inputTokens: result.usage?.inputTokens,
+      session: { ...jevSessionStats },
+    }, appId);
     if (!current()) return;
-    respond(message, { type: 'jev.response', probability: result.probability, escalated });
-    if (escalated) reactionBatcher.add(message.state);
+    respond(message, { type: 'jev.response', probability: result.probability, escalated: decision.escalated });
+    if (decision.escalated) reactionBatcher.add(message.state);
   } catch (error) {
     if (!current()) return;
-    await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500) }, appId);
+    await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500), session: { ...jevSessionStats } }, appId);
     if (!current()) return;
     respond(message, { type: 'jev.response', probability: 0, escalated: false, error: serializeError(error) });
   } finally { jevControllers.delete(controller); }
