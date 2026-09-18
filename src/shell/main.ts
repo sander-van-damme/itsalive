@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, DiagnosticLog, InitialBuildIntent, RuntimeSession, ShellDatabase, buildDiagnosticExport, createDefaultRegistry, deleteApp, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { AgentRunner, DiagnosticLog, InitialBuildIntent, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, createDefaultRegistry, deleteApp, nextCronRun, renameAppRecord, runtimePresentation, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -171,11 +171,24 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   running = true;
   ui.setBusy(true);
   try {
+    if (persistTrigger) {
+      await appendHistory(db, { appId: app.id, role: 'user', kind: 'chat', content: trigger });
+      await refreshMessages();
+    }
     await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
-    await refreshMessages();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
-    const result = await runner.run({ appId: app.id, appPrompt: app.prompt, trigger, persistTrigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
+    const result = await runner.run({
+      appId: app.id,
+      appPrompt: app.prompt,
+      trigger,
+      persistTrigger: false,
+      model: modelConfig(),
+      credential: credential(),
+      tools,
+      summary: app.summary,
+      signal: runController.signal,
+    });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
   } catch (error) {
