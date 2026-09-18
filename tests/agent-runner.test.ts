@@ -60,7 +60,7 @@ describe('AgentRunner lifecycle', () => {
       generate: vi.fn(),
     };
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('document.body.innerHTML')) return { value: '<main>Ready</main>' };
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
       if (code.includes('dataset.first')) {
         events.push('execute:first');
         releaseFirst();
@@ -160,11 +160,11 @@ describe('AgentRunner lifecycle', () => {
       .mockResolvedValueOnce({ text: 'return itsalive.done("ready");' }) };
     let inspections = 0;
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('document.body.innerHTML')) {
+      if (code.includes('rootCount')) {
         inspections++;
         return inspections === 1
-          ? { value: '<fiddl-app></fiddl-app>' }
-          : { value: '<fiddl-app><main>Today’s practice</main></fiddl-app>' };
+          ? { value: { rootHtml: '<fiddl-app></fiddl-app>', rootCount: 1, outsideUiCount: 0 } }
+          : { value: { rootHtml: '<fiddl-app><main>Today’s practice</main></fiddl-app>', rootCount: 1, outsideUiCount: 0 } };
       }
       return { done: true, message: 'candidate' };
     }) };
@@ -180,6 +180,35 @@ describe('AgentRunner lifecycle', () => {
     expect(result).toMatchObject({ status: 'done', turns: 2 });
     expect(providers.generate).toHaveBeenCalledTimes(2);
     expect(inspections).toBe(2);
+  });
+
+  it('stops a repeated low-signal verification loop after one diagnostic repair turn', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async () => ({ text: "return document.querySelector('[data-missing]');" })) };
+    const stableState = '<main id="itsalive-root"><button data-vct="q-check">Check</button></main>';
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('document.getElementById("itsalive-root")?.outerHTML')) return { value: stableState };
+      return { value: null };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Fix the quiz', model, maxTurns: 12,
+    });
+
+    expect(result).toMatchObject({ status: 'stalled', turns: 3 });
+    expect(providers.generate).toHaveBeenCalledTimes(3);
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('Do not repeat the same probe') }),
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('stopped early to avoid burning the remaining turn budget') }),
+    ]));
   });
 
   it('closes trace groups and rejects when aborted', async () => {
@@ -245,7 +274,7 @@ describe('AgentRunner lifecycle', () => {
     let release!: (value: { text: string }) => void;
     const first = new Promise<{ text: string }>(resolve => { release = resolve; });
     const providers = { generate: vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce({ text: 'return itsalive.done();' }) };
-    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('document.body.innerHTML') ? { value: '<main>Ready</main>' } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('rootCount') ? { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
     const queue: string[] = [];
     const consume = vi.fn(() => queue.splice(0));
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
@@ -270,7 +299,7 @@ describe('AgentRunner lifecycle', () => {
     const queue: string[] = [];
     let executions = 0;
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('document.body.innerHTML')) return { value: '<main>Ready</main>' };
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
       if (++executions === 1) queue.push('A final user action arrived.');
       return { done: true };
     }) };

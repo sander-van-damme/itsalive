@@ -8,6 +8,7 @@ import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
 import { serializeError, shellUrlForApp } from "../shared";
 import { installInteractionObserver } from "./interactions";
+import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 
 const DONE = Symbol("agent-done");
 
@@ -100,8 +101,20 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (bridge.acceptResponse(message)) return;
     if (message.type === "execute") {
       try {
-        const result = await run(message.code);
-        if (result && result[DONE]) bridge.post({ type: "result", done: true, message: result.message }, message.requestId);
+        ensureCanonicalAppRoot();
+        let result: unknown;
+        try {
+          result = await run(message.code);
+        } catch (error) {
+          try {
+            enforceCanonicalAppRootAfterAgentCommand();
+          } catch (rootError) {
+            logs.add("warn", ["Canonical app root repaired after a failed agent command", rootError], "agent", rootError instanceof Error ? rootError.stack : undefined);
+          }
+          throw error;
+        }
+        enforceCanonicalAppRootAfterAgentCommand();
+        if (result && typeof result === "object" && DONE in result) bridge.post({ type: "result", done: true, message: (result as { message?: string }).message }, message.requestId);
         else bridge.post({ type: "result", result: bounded(result, options.maxResultBytes ?? 256_000) }, message.requestId);
       } catch (error) {
         logs.add("error", ["Agent execution failed", error], "agent", error instanceof Error ? error.stack : undefined);
@@ -133,6 +146,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   addEventListener("message", listener);
 
   await loadSavedDocument();
+  ensureCanonicalAppRoot();
   const autosave = installAutosave(options.autosaveDelay);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready", detail: appId });

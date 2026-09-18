@@ -91,7 +91,7 @@ describe("app runtime namespace", () => {
 
     document.body.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return itsalive.apiVersion;", requestId: "version" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector(\'main[data-native-dom]\');", requestId: "native-dom" } }));
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector('main[data-native-dom]');", requestId: "native-dom" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'return itsalive.done("ok");', requestId: "done" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "cron.fire", callbackId: "daily", requestId: "cron" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" } }));
@@ -102,6 +102,23 @@ describe("app runtime namespace", () => {
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "fired" }, requestId: "cron" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
+  });
+
+  it("rejects UI appended beside the canonical app root and removes the duplicate surface", async () => {
+    const root = document.getElementById("itsalive-root");
+    expect(root).toBeTruthy();
+    window.dispatchEvent(new MessageEvent("message", { data: {
+      type: "execute",
+      code: "document.body.insertAdjacentHTML('beforeend', '<main data-duplicate-app>Duplicate</main>'); return 'added';",
+      requestId: "duplicate-root",
+    } }));
+    await nextTask();
+
+    const response = state.posts.find(({ requestId }) => requestId === "duplicate-root");
+    expect(response?.payload.type).toBe("execution.error");
+    expect(JSON.stringify(response?.payload)).toContain("#itsalive-root");
+    expect(document.querySelector("[data-duplicate-app]")).toBeNull();
+    expect(document.getElementById("itsalive-root")).toBe(root);
   });
 
   it("keeps screenshot verification failures non-fatal", async () => {
