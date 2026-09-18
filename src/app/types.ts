@@ -8,7 +8,7 @@ export interface RuntimeOptions {
 
 export interface LogEntry {
   timestamp: string;
-  level: "log" | "info" | "warn" | "error";
+  level: "debug" | "log" | "info" | "warn" | "error";
   message: string;
   source: "app" | "agent" | "tool" | "cron" | "bridge";
   stack?: string;
