@@ -143,7 +143,7 @@ describe("continuous interaction observation", () => {
     const button = document.body.appendChild(document.createElement("button"));
     const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, historyRewriteInterval: 40 });
 
-    button.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true }));
+    button.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     button.click();
     await Promise.resolve();
 
