@@ -151,7 +151,7 @@ async function refreshMessages(): Promise<void> {
   ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map((e,i) => ({ id: String(e.id ?? i), role: e.role as ChatLine['role'], content: e.content, timestamp: e.timestamp })));
 }
 
-function modelConfig(): ModelConfig { return { id: 'active', provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS, credentialId: 'active' }; }
+function modelConfig(): ModelConfig { return { id: 'active', provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS, credentialId: 'active', options: { reasoning: { enabled: false } } }; }
 function credential(): Credential | undefined { return settings.apiKey ? { id: 'active', type: 'api-key', value: settings.apiKey } : undefined; }
 
 async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
