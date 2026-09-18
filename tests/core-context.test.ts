@@ -16,17 +16,18 @@ describe("shell context builder", () => {
     }
   });
 
-  it("defines a simple incremental drawing-board contract", () => {
+  it("defines a streamed multi-command drawing-board contract", () => {
+    expect(SYSTEM_PROMPT).toContain("one model response containing one or more independently executable JavaScript commands");
+    expect(SYSTEM_PROMPT).toContain("/* itsalive:command */");
+    expect(SYSTEM_PROMPT).toContain("/* itsalive:end */");
+    expect(SYSTEM_PROMPT).toContain("executes each command as soon as its closing delimiter arrives");
+    expect(SYSTEM_PROMPT).toContain("Commands later in the same response cannot use the return value of an earlier command");
     expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
-    expect(SYSTEM_PROMPT).toContain("Make one small, coherent change per turn");
-    expect(SYSTEM_PROMPT).toContain("Never implement or rewrite the whole app in one response");
     expect(SYSTEM_PROMPT).toContain("ordinary semantic HTML and browser DOM APIs by default");
     expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
     expect(SYSTEM_PROMPT).not.toMatch(/MUST be implemented as native Custom Elements/);
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
-    expect(SYSTEM_PROMPT).toMatch(/classes introduced dynamically after load/);
-    expect(SYSTEM_PROMPT).toContain("return await itsalive.dom.inspect({ maxDepth: 4, maxNodes: 80 })");
   });
 
   it("always includes immutable and mandatory context plus every tool", () => {
