@@ -92,6 +92,7 @@ export function installInteractionObserver(bridge: AppBridge, options: ObserverO
   const rewriteHistory = async () => {
     if (destroyed || rewriting || rewriteQueue.length < rewriteInterval) return;
     rewriting = true;
+    let rewritten = false;
     const batch = rewriteQueue.splice(0);
     try {
       const existing = summary.textContent?.trim() ?? "";
@@ -102,12 +103,13 @@ export function installInteractionObserver(bridge: AppBridge, options: ObserverO
         return;
       }
       summary.textContent = response.result.trim().slice(0, 8_000);
+      rewritten = true;
     } catch (error) {
       rewriteQueue = [...batch, ...rewriteQueue].slice(-MAX_REWRITE_QUEUE);
       console.warn("[itsalive:history] Rewrite unavailable", error);
     } finally {
       rewriting = false;
-      if (!destroyed && rewriteQueue.length >= rewriteInterval) void rewriteHistory();
+      if (rewritten && !destroyed && rewriteQueue.length >= rewriteInterval) void rewriteHistory();
     }
   };
 
