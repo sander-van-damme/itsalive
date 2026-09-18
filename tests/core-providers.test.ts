@@ -102,4 +102,29 @@ describe("ProviderRegistry", () => {
     expect(trace).toContain('[redacted]');
     expect(trace).not.toContain('credential-secret');
   });
+
+  it("streams OpenAI-compatible SSE text and reconstructs the full response", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      'data: {"choices":[{"delta":{"content":"first"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":" second"}}]}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2}}\n\n',
+      'data: [DONE]\n\n',
+    ].join(""), { status: 200, headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = createHttpAdapter({ id: "custom", endpoint: "https://example.test/generate" });
+    const deltas: string[] = [];
+
+    const result = await adapter.stream!(
+      { model: { id: "m", provider: "custom", model: "x", maxContextTokens: 100, maxOutputTokens: 10 }, system: "system", messages: [], maxOutputTokens: 10 },
+      undefined,
+      delta => deltas.push(delta),
+    );
+
+    expect(deltas).toEqual(["first", " second"]);
+    expect(result.text).toBe("first second");
+    expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2 });
+    const request = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body));
+    expect(request.stream).toBe(true);
+  });
+
 });

@@ -1,5 +1,3 @@
-import { ref } from "./inspect";
-
 const SCREENSHOT_UNAVAILABLE_PREFIX = "[screenshot unavailable:";
 const RESOURCE_ATTRIBUTES = ["src", "srcset", "poster"] as const;
 
@@ -18,10 +16,6 @@ function scrubCssResources(css: string): string {
     });
 }
 
-/**
- * Removes resource loads that can taint a canvas when HTML is rendered through
- * an SVG foreignObject. This is only used for the fallback capture attempt.
- */
 export function sanitizeScreenshotClone(clone: HTMLElement): HTMLElement {
   clone.querySelectorAll("script, iframe, object, embed, link").forEach(node => node.remove());
   const elements = [clone, ...Array.from(clone.querySelectorAll<HTMLElement>("*"))];
@@ -66,14 +60,11 @@ async function rasterize(clone: HTMLElement, width: number, height: number, scal
   }
 }
 
-export async function captureScreenshot(options: { ref?: string; scale?: number } = {}): Promise<string> {
-  const target = options.ref ? ref(options.ref) : document.documentElement;
-  if (!(target instanceof HTMLElement)) throw new Error(options.ref ? `Unknown or non-HTML ref: ${options.ref}` : "No document element");
-  const bounds = target === document.documentElement
-    ? { width: Math.max(document.documentElement.scrollWidth, innerWidth), height: Math.max(document.documentElement.scrollHeight, innerHeight) }
-    : target.getBoundingClientRect();
-  const width = Math.max(1, Math.ceil(bounds.width));
-  const height = Math.max(1, Math.ceil(bounds.height));
+export async function captureScreenshot(options: { scale?: number } = {}): Promise<string> {
+  const target = document.documentElement;
+  if (!(target instanceof HTMLElement)) throw new Error("No document element");
+  const width = Math.max(1, Math.ceil(Math.max(target.scrollWidth, innerWidth)));
+  const height = Math.max(1, Math.ceil(Math.max(target.scrollHeight, innerHeight)));
   const scale = Math.max(0.25, Math.min(options.scale ?? 1, 2));
   const clone = target.cloneNode(true) as HTMLElement;
 

@@ -1,5 +1,4 @@
 // @vitest-environment jsdom
-import { readFile } from "node:fs/promises";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
@@ -26,7 +25,7 @@ vi.mock("../src/app/bridge", () => ({
 }));
 
 vi.mock("../src/app/db", () => ({
-  STORES: { document: "document", tools: "tools" },
+  STORES: { document: "document" },
   dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
   dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
   dbDelete: async (_store: string, key: IDBValidKey) => { state.rows.delete(String(key)); },
@@ -62,7 +61,7 @@ describe("app runtime namespace", () => {
   it("installs one immutable, versioned facade without replacing native history", () => {
     expect(window.history).toBe(nativeHistory);
     expect(Object.keys(window.itsalive)).toEqual([
-      "apiVersion", "llm", "history", "tools", "agent", "dom", "logs", "cron", "done",
+      "apiVersion", "llm", "history", "agent", "dom", "logs", "cron", "done",
     ]);
     expect(window.itsalive.apiVersion).toBe(2);
     expect(window.itsalive).not.toHaveProperty("db");
@@ -84,15 +83,21 @@ describe("app runtime namespace", () => {
     await window.itsalive.agent.wake("continue");
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);
     expect(window.itsalive.cron("daily", "0 8 * * *", () => "fired")).toEqual({ id: "daily", schedule: "0 8 * * *" });
-    expect(window.itsalive.dom).toEqual(expect.objectContaining({ inspect: expect.any(Function), ref: expect.any(Function), screenshot: expect.any(Function) }));
+    expect(window.itsalive.dom).toEqual({ screenshot: expect.any(Function) });
+    expect(window.itsalive).not.toHaveProperty("tools");
+    expect(window.itsalive.dom).not.toHaveProperty("inspect");
+    expect(window.itsalive.dom).not.toHaveProperty("ref");
     expect(window.itsalive.logs.get()).toEqual([]);
 
+    document.body.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return itsalive.apiVersion;", requestId: "version" } }));
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector(\'main[data-native-dom]\');", requestId: "native-dom" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'return itsalive.done("ok");', requestId: "done" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "cron.fire", callbackId: "daily", requestId: "cron" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" } }));
     await nextTask();
     expect(state.posts).toContainEqual({ payload: { type: "result", result: 2 }, requestId: "version" });
+    expect(state.posts).toContainEqual({ payload: { type: "result", result: '<main data-native-dom="yes"><h1>Native DOM</h1></main>' }, requestId: "native-dom" });
     expect(state.posts).toContainEqual({ payload: { type: "result", done: true, message: "ok" }, requestId: "done" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "fired" }, requestId: "cron" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
@@ -133,15 +138,6 @@ describe("app runtime namespace", () => {
     await vi.waitFor(() => expect(state.posts).toContainEqual({ payload: { type: "result", result: { cleared: true } }, requestId: "clear" }));
   });
 
-  it("passes the canonical namespace to custom tools as env.itsalive", async () => {
-    await window.itsalive.tools.create({
-      name: "runtimeVersion",
-      description: "Read the runtime API version",
-      code: "return async function(_args, env) { return { version: env.itsalive.apiVersion, legacy: 'app' in env }; }",
-    });
-    await expect(window.itsalive.tools.call("runtimeVersion")).resolves.toEqual({ version: 2, legacy: false });
-  });
-
   it("fails clearly instead of overwriting an existing namespace", async () => {
     const { installRuntimeApi } = await import("../src/app/runtime");
     const target = {} as Window;
@@ -150,9 +146,5 @@ describe("app runtime namespace", () => {
     expect((target.itsalive as unknown as { unrelated: boolean }).unrelated).toBe(true);
   });
 
-  it("uses the namespace for shell tool inventory execution", async () => {
-    const shell = await readFile(`${process.cwd()}/src/shell/main.ts`, "utf8");
-    expect(shell).toContain('return await itsalive.tools.search("");');
-    expect(shell).not.toContain('return await tools.search("");');
-  });
+
 });

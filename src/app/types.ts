@@ -10,15 +10,6 @@ export interface LogEntry {
   timestamp: string;
   level: "debug" | "log" | "info" | "warn" | "error";
   message: string;
-  source: "app" | "agent" | "tool" | "cron" | "bridge";
+  source: "app" | "agent" | "cron" | "bridge";
   stack?: string;
-}
-
-export interface ToolRecord {
-  name: string;
-  description: string;
-  parameters?: unknown;
-  code: string;
-  createdAt: string;
-  updatedAt: string;
 }

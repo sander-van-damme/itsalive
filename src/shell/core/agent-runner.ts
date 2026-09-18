@@ -1,7 +1,7 @@
 import { buildModelContext, type TokenCounter } from "./context";
 import { appendHistory } from "./history";
 import type { ShellDatabase } from "./database";
-import type { Credential, ModelConfig, ToolSummary } from "./types";
+import type { Credential, ModelConfig } from "./types";
 import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
 
@@ -23,7 +23,6 @@ export interface RunOptions {
   trigger: string;
   model: ModelConfig;
   credential?: Credential;
-  tools: ToolSummary[];
   summary?: string;
   maxTurns?: number;
   maxDurationMs?: number;
@@ -39,7 +38,7 @@ export interface RunOptions {
 export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
 
 const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
-const COMPLETION_INSPECTION = 'return await itsalive.dom.inspect({ maxDepth: 4, maxNodes: 80 });';
+const COMPLETION_INSPECTION = 'return document.body.innerHTML;';
 
 class GeneratedCodeError extends Error {
   constructor(readonly phase: "format" | "compile", message: string) {
@@ -73,56 +72,116 @@ export class AgentRunner {
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
+          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
-          console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, toolCount: options.tools.length, hasObservation: Boolean(observation) });
+          console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, hasObservation: Boolean(observation) });
+          const commandParser = new StreamedCommandParser();
+          let streamedResult: ExecutionResult | undefined;
+          let streamedObservation: string | undefined;
+          let streamedCodeError: GeneratedCodeError | undefined;
+          let streamedRuntimeError: unknown;
+          let streamedCommands = 0;
+          let executionQueue = Promise.resolve();
+
+          const enqueueCommand = (code: string) => {
+            streamedCommands++;
+            executionQueue = executionQueue.then(async () => {
+              if (streamedCodeError || streamedRuntimeError || streamedResult?.done || streamedResult?.error) return;
+              try {
+                validateExecutableJavaScript(code);
+              } catch (error) {
+                streamedCodeError = error instanceof GeneratedCodeError
+                  ? error
+                  : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
+                return;
+              }
+              try {
+                const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+                streamedResult = executed.result;
+                streamedObservation = executed.observation;
+              } catch (error) {
+                streamedRuntimeError = error;
+              }
+            });
+          };
+
           let generated;
           try {
-            generated = await this.providers.generate({ purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal }, options.credential);
+            generated = await generateWithStreaming(
+              this.providers,
+              { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal },
+              options.credential,
+              delta => {
+                for (const code of commandParser.push(delta)) enqueueCommand(code);
+              },
+            );
+            await executionQueue;
           } catch (error) {
             console.error('Model request failed', diagnosticError(error));
             throw error;
           }
+          if (streamedRuntimeError) throw streamedRuntimeError;
 
-          let code: string;
-          try {
-            code = extractExecutableJavaScript(generated.text);
-            validateExecutableJavaScript(code);
-            consecutiveGenerationFailures = 0;
-          } catch (error) {
-            const generatedError = error instanceof GeneratedCodeError
-              ? error
-              : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
-            consecutiveGenerationFailures++;
-            observation = generatedCodeObservation(generatedError);
-            console.warn('Generated code rejected before execution', sanitizeDiagnostic({
-              phase: generatedError.phase,
-              message: generatedError.message,
-              consecutiveFailures: consecutiveGenerationFailures,
-            }));
-            await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
-            if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
-              throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+          let result: ExecutionResult;
+          if (commandParser.usesProtocol) {
+            try {
+              commandParser.finish();
+              if (streamedCodeError) throw streamedCodeError;
+              if (!streamedCommands || !streamedResult) throw new GeneratedCodeError("format", "Model returned no complete streamed commands");
+              consecutiveGenerationFailures = 0;
+            } catch (error) {
+              const generatedError = error instanceof GeneratedCodeError
+                ? error
+                : new GeneratedCodeError("format", error instanceof Error ? error.message : String(error));
+              consecutiveGenerationFailures++;
+              observation = generatedCodeObservation(generatedError);
+              console.warn('Generated command stream rejected', sanitizeDiagnostic({
+                phase: generatedError.phase,
+                message: generatedError.message,
+                consecutiveFailures: consecutiveGenerationFailures,
+              }));
+              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
+                throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+              }
+              console.info('Continuing to next turn for streamed command repair');
+              continue;
             }
-            console.info('Continuing to next turn for code repair');
-            continue;
+            result = streamedResult!;
+            observation = streamedObservation;
+            if (result.error) {
+              console.info('A streamed command failed; continuing to next turn for repair');
+              continue;
+            }
+          } else {
+            let code: string;
+            try {
+              code = extractExecutableJavaScript(generated.text);
+              validateExecutableJavaScript(code);
+              consecutiveGenerationFailures = 0;
+            } catch (error) {
+              const generatedError = error instanceof GeneratedCodeError
+                ? error
+                : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
+              consecutiveGenerationFailures++;
+              observation = generatedCodeObservation(generatedError);
+              console.warn('Generated code rejected before execution', sanitizeDiagnostic({
+                phase: generatedError.phase,
+                message: generatedError.message,
+                consecutiveFailures: consecutiveGenerationFailures,
+              }));
+              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
+                throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
+              }
+              console.info('Continuing to next turn for code repair');
+              continue;
+            }
+            const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+            result = executed.result;
+            observation = executed.observation;
           }
 
-          console.info('Executable JavaScript', sanitizeDiagnostic(code));
-          await appendHistory(this.db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
-          const executionStartedAt = performance.now();
-          let result;
-          try {
-            result = await this.executor.execute(options.appId, code, { signal: controller.signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
-          } catch (error) {
-            console.error(`Runtime execution failed (${Math.round(performance.now() - executionStartedAt)}ms)`, diagnosticError(error));
-            throw error;
-          }
-          console.info(`Runtime result (${Math.round(performance.now() - executionStartedAt)}ms)`, sanitizeDiagnostic(result));
-          if (result.error) console.error('Runtime execution error', sanitizeDiagnostic(result.error));
-          observation = boundObservation(result, options.maxObservationCharacters ?? 16_000);
-          console.info('Observation', sanitizeDiagnostic(observation));
-          await appendHistory(this.db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
           if (result.done) {
             const arrivedBeforeCompletion = options.consumeEnvironmentObservations?.() ?? [];
             if (arrivedBeforeCompletion.length) {
@@ -161,6 +220,77 @@ export class AgentRunner {
   }
 }
 
+const COMMAND_START = "/* itsalive:command */";
+const COMMAND_END = "/* itsalive:end */";
+
+class StreamedCommandParser {
+  private buffer = "";
+  private protocol = false;
+
+  get usesProtocol(): boolean { return this.protocol; }
+
+  push(delta: string): string[] {
+    this.buffer += delta;
+    const commands: string[] = [];
+    while (true) {
+      const start = this.buffer.indexOf(COMMAND_START);
+      if (start < 0) return commands;
+      this.protocol = true;
+      if (start > 0) this.buffer = this.buffer.slice(start);
+      const end = this.buffer.indexOf(COMMAND_END, COMMAND_START.length);
+      if (end < 0) return commands;
+      const code = this.buffer.slice(COMMAND_START.length, end).trim();
+      this.buffer = this.buffer.slice(end + COMMAND_END.length);
+      if (code) commands.push(code);
+    }
+  }
+
+  finish(): void {
+    if (!this.protocol) return;
+    if (this.buffer.trim()) throw new GeneratedCodeError("format", "Model stream ended with an incomplete command or trailing content");
+  }
+}
+
+async function generateWithStreaming(
+  providers: ProviderRegistry,
+  request: Parameters<ProviderRegistry["generate"]>[0],
+  credential: Credential | undefined,
+  onText: (delta: string) => void,
+) {
+  const streaming = (providers as ProviderRegistry & {
+    generateStreaming?: (request: Parameters<ProviderRegistry["generate"]>[0], onText: (delta: string) => void, credential?: Credential) => ReturnType<ProviderRegistry["generate"]>;
+  }).generateStreaming;
+  if (typeof streaming === "function") return streaming.call(providers, request, onText, credential);
+  const result = await providers.generate(request, credential);
+  if (result.text) onText(result.text);
+  return result;
+}
+
+async function executeGeneratedCommand(
+  db: ShellDatabase,
+  executor: AppExecutor,
+  options: RunOptions,
+  signal: AbortSignal,
+  code: string,
+): Promise<{ result: ExecutionResult; observation: string }> {
+  console.info('Executable JavaScript', sanitizeDiagnostic(code));
+  await appendHistory(db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
+  const executionStartedAt = performance.now();
+  let result: ExecutionResult;
+  try {
+    result = await executor.execute(options.appId, code, { signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
+  } catch (error) {
+    console.error(`Runtime execution failed (${Math.round(performance.now() - executionStartedAt)}ms)`, diagnosticError(error));
+    throw error;
+  }
+  console.info(`Runtime result (${Math.round(performance.now() - executionStartedAt)}ms)`, sanitizeDiagnostic(result));
+  if (result.error) console.error('Runtime execution error', sanitizeDiagnostic(result.error));
+  const observation = boundObservation(result, options.maxObservationCharacters ?? 16_000);
+  console.info('Observation', sanitizeDiagnostic(observation));
+  await appendHistory(db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
+  return { result, observation };
+}
+
 function extractExecutableJavaScript(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) throw new GeneratedCodeError("format", "Model returned an empty response");
@@ -188,7 +318,7 @@ function validateExecutableJavaScript(code: string): void {
 
 function generatedCodeObservation(error: GeneratedCodeError): string {
   const label = error.phase === "format" ? "Generated response was not usable JavaScript" : "Generated JavaScript did not parse";
-  return `${label}:\n${error.message}\nReturn exactly one complete executable JavaScript program with no prose or Markdown fences.`;
+  return `${label}:\n${error.message}\nReturn complete executable JavaScript commands wrapped with /* itsalive:command */ and /* itsalive:end */. Do not add prose or Markdown fences.`;
 }
 
 async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true } | { ok: false; reason: string }> {
@@ -205,19 +335,20 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
   }
 }
 
-function assessCompletionTree(tree: string): { ok: true } | { ok: false; reason: string } {
-  const lines = tree.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-    .filter(line => !/\b(?:script|style)\b/.test(line));
-  const contentLines = lines.slice(1);
-  const text = [...tree.matchAll(/"([^"]+)"/g)].map(match => match[1]!.trim()).filter(Boolean).join(" ").replace(/\s+/g, " ").trim();
-  const hasInteractive = contentLines.some(line => /\b(?:button|input|textarea|select|a)(?:[#.\s"]|$)/i.test(line));
-  const hasVisual = contentLines.some(line => /\b(?:canvas|svg|img|video|audio)(?:[#.\s"]|$)/i.test(line));
+function assessCompletionTree(html: string): { ok: true } | { ok: false; reason: string } {
+  const withoutImplementation = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ");
+  const text = withoutImplementation.replace(/<[^>]+>/g, " ").replace(/&nbsp;/gi, " ").replace(/\s+/g, " ").trim();
+  const hasInteractive = /<(?:button|input|textarea|select|a)\b/i.test(withoutImplementation);
+  const hasVisual = /<(?:canvas|svg|img|video|audio)\b/i.test(withoutImplementation);
+  const hasStructure = /<(?:main|section|article|header|nav|form|div|ul|ol|table)\b/i.test(withoutImplementation);
   const placeholderOnly = Boolean(text) && /^(?:[\w .'-]+\s+)?(?:loading|starting|initializing|preparing|please wait)[.…! ]*$/i.test(text);
 
   if (placeholderOnly && !hasInteractive && !hasVisual) {
     return { ok: false, reason: "the rendered app still appears to be only a loading/initializing placeholder" };
   }
-  if (!text && !hasInteractive && !hasVisual && contentLines.length < 2) {
+  if (!text && !hasInteractive && !hasVisual && !hasStructure) {
     return { ok: false, reason: "the app contains no meaningful rendered UI yet" };
   }
   return { ok: true };

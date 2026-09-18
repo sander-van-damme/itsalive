@@ -23,7 +23,7 @@ describe('AgentRunner lifecycle', () => {
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain the app', trigger: 'Make a change',
-      model, tools: [], maxTurns: 2,
+      model, maxTurns: 2,
     });
 
     expect(result).toEqual({ status: 'turn-limit', turns: 2 });
@@ -35,9 +35,65 @@ describe('AgentRunner lifecycle', () => {
     expect(groupEnds).toHaveBeenCalledTimes(3);
   });
 
+  it('executes complete commands while the same model response is still streaming', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const events: string[] = [];
+    let releaseFirst!: () => void;
+    const firstExecuted = new Promise<void>(resolve => { releaseFirst = resolve; });
+    const first = '/* itsalive:command */\ndocument.body.dataset.first = "yes";\n/* itsalive:end */\n';
+    const second = '/* itsalive:command */\nreturn itsalive.done("ready");\n/* itsalive:end */';
+    const providers = {
+      generateStreaming: vi.fn(async (_request: unknown, onText: (delta: string) => void) => {
+        events.push('emit:first');
+        onText('/* itsalive:com');
+        onText(first.slice('/* itsalive:com'.length));
+        await firstExecuted;
+        events.push('emit:second');
+        onText('/* itsalive:command */\nreturn itsalive.');
+        onText('done("ready");\n/* itsalive:end */');
+        return { text: first + second };
+      }),
+      generate: vi.fn(),
+    };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('document.body.innerHTML')) return { value: '<main>Ready</main>' };
+      if (code.includes('dataset.first')) {
+        events.push('execute:first');
+        releaseFirst();
+        return { value: null };
+      }
+      if (code.includes('itsalive.done')) {
+        events.push('execute:done');
+        return { done: true, message: 'ready' };
+      }
+      return { value: null };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
+    expect(events.indexOf('execute:first')).toBeGreaterThan(events.indexOf('emit:first'));
+    expect(events.indexOf('execute:first')).toBeLessThan(events.indexOf('emit:second'));
+    expect(events).toEqual(['emit:first', 'execute:first', 'emit:second', 'execute:done']);
+    expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual([
+      'document.body.dataset.first = "yes";',
+      'return itsalive.done("ready");',
+    ]);
+  });
+
   it('extracts a single JavaScript fence even when the model adds prose', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
-    const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nconst view = await itsalive.dom.inspect();\nreturn view;\n```' })) };
+    const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nconst view = document.body;\nreturn view;\n```' })) };
     const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ value: 'ok' })) };
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
@@ -45,11 +101,11 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, tools: [], maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, maxTurns: 1,
     });
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
-    expect((executor.execute.mock.calls as unknown[][])[0]?.[1]).toBe('const view = await itsalive.dom.inspect();\nreturn view;');
+    expect((executor.execute.mock.calls as unknown[][])[0]?.[1]).toBe('const view = document.body;\nreturn view;');
   });
 
   it('rejects syntax-invalid generated JavaScript before calling the executor', async () => {
@@ -66,7 +122,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
     })).resolves.toEqual({ status: 'turn-limit', turns: 1 });
 
     expect(executor.execute).not.toHaveBeenCalled();
@@ -90,7 +146,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 12,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 12,
     })).rejects.toThrow(/invalid JavaScript 3 times in a row/);
 
     expect(providers.generate).toHaveBeenCalledTimes(3);
@@ -104,11 +160,11 @@ describe('AgentRunner lifecycle', () => {
       .mockResolvedValueOnce({ text: 'return itsalive.done("ready");' }) };
     let inspections = 0;
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('itsalive.dom.inspect')) {
+      if (code.includes('document.body.innerHTML')) {
         inspections++;
         return inspections === 1
-          ? { value: '@1 body\n└─ @2 fiddl-app' }
-          : { value: '@1 body\n└─ @2 fiddl-app\n   └─ @3 main "Today’s practice"' };
+          ? { value: '<fiddl-app></fiddl-app>' }
+          : { value: '<fiddl-app><main>Today’s practice</main></fiddl-app>' };
       }
       return { done: true, message: 'candidate' };
     }) };
@@ -118,7 +174,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, tools: [], maxTurns: 3,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 3,
     });
 
     expect(result).toMatchObject({ status: 'done', turns: 2 });
@@ -139,7 +195,7 @@ describe('AgentRunner lifecycle', () => {
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain the app', trigger: 'Change it',
-      model, tools: [], signal: controller.signal,
+      model, signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(providers.generate).not.toHaveBeenCalled();
     expect(groupEnds).toHaveBeenCalledTimes(2);
@@ -160,7 +216,7 @@ describe('AgentRunner lifecycle', () => {
     await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'A durable detailed specification',
       trigger: 'Build the initial version of this app now.', persistTrigger: false,
-      model, tools: [],
+      model,
     });
 
     expect(entries).not.toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user' })]));
@@ -179,7 +235,7 @@ describe('AgentRunner lifecycle', () => {
 
     await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Add a chart',
-      model, tools: [],
+      model,
     });
     expect(add).toHaveBeenCalledWith(expect.objectContaining({ role: 'user', kind: 'chat', content: 'Add a chart' }));
   });
@@ -189,13 +245,13 @@ describe('AgentRunner lifecycle', () => {
     let release!: (value: { text: string }) => void;
     const first = new Promise<{ text: string }>(resolve => { release = resolve; });
     const providers = { generate: vi.fn().mockReturnValueOnce(first).mockResolvedValueOnce({ text: 'return itsalive.done();' }) };
-    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('dom.inspect') ? { value: '@1 body\n└─ @2 main "Ready"' } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => code.includes('document.body.innerHTML') ? { value: '<main>Ready</main>' } : code.includes('done') ? { done: true } : { value: 'turn one' }) };
     const queue: string[] = [];
     const consume = vi.fn(() => queue.splice(0));
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const run = new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, tools: [], consumeEnvironmentObservations: consume });
+    const run = new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: consume });
     await vi.waitFor(() => expect(providers.generate).toHaveBeenCalledTimes(1));
     queue.push('The user changed tempo to 120.');
     release({ text: 'return "updated";' });
@@ -214,14 +270,14 @@ describe('AgentRunner lifecycle', () => {
     const queue: string[] = [];
     let executions = 0;
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('dom.inspect')) return { value: '@1 body\n└─ @2 main "Ready"' };
+      if (code.includes('document.body.innerHTML')) return { value: '<main>Ready</main>' };
       if (++executions === 1) queue.push('A final user action arrived.');
       return { done: true };
     }) };
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const result = await new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, tools: [], consumeEnvironmentObservations: () => queue.splice(0) });
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: () => queue.splice(0) });
     expect(result).toMatchObject({ status: 'done', turns: 2 });
     expect(providers.generate.mock.calls[1]![0].messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('A final user action arrived.') })]));
   });

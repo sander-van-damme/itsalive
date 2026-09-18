@@ -18,8 +18,6 @@ export interface HistoryEntry {
   kind?: "chat" | "javascript" | "execution" | "error" | "compaction";
 }
 
-export interface ToolSummary { name: string; description: string }
-
 export interface ModelConfig {
   id: string;
   provider: string;
@@ -59,6 +57,7 @@ export interface GenerateResult {
 export interface LlmAdapter {
   id: string;
   generate(request: GenerateRequest, credential?: Credential): Promise<GenerateResult>;
+  stream?(request: GenerateRequest, credential: Credential | undefined, onText: (delta: string) => void): Promise<GenerateResult>;
 }
 
 export interface DecisionRequest { state: unknown; signal?: AbortSignal; }
