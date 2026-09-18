@@ -1,5 +1,5 @@
 import { SYSTEM_PROMPT } from "./system-prompt";
-import type { HistoryEntry, ModelConfig, ModelMessage, ToolSummary } from "./types";
+import type { HistoryEntry, ModelConfig, ModelMessage } from "./types";
 
 export type TokenCounter = (text: string) => number;
 export const conservativeTokenEstimate: TokenCounter = (text) => Math.ceil(new TextEncoder().encode(text).length / 3);
@@ -8,7 +8,6 @@ export interface ContextInput {
   model: ModelConfig;
   appPrompt: string;
   trigger: string;
-  tools: ToolSummary[];
   summary?: string;
   observation?: string;
   environmentObservation?: string;
@@ -33,8 +32,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   const count = input.countTokens ?? conservativeTokenEstimate;
   const headroom = input.model.observationHeadroomTokens ?? 1_024;
   const budget = input.model.maxContextTokens - input.model.maxOutputTokens - headroom;
-  const inventory = input.tools.map(({ name, description }) => `${name} — ${description.replace(/\s+/g, " ").trim()}`).join("\n");
-  const mandatory = [section("APP PROMPT", input.appPrompt), section("CUSTOM TOOLS", inventory), section("CURRENT TRIGGER", input.trigger)].join("\n\n");
+  const mandatory = [section("APP PROMPT", input.appPrompt), section("CURRENT TRIGGER", input.trigger)].join("\n\n");
   const baseCost = count(SYSTEM_PROMPT) + count(mandatory);
   if (baseCost > budget) throw new Error(`Mandatory context (${baseCost} tokens estimated) exceeds input budget (${budget}); choose a larger-context model or shorten the app prompt/trigger`);
 
