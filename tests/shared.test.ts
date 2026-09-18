@@ -53,8 +53,8 @@ describe("domain helpers", () => {
 });
 
 describe("bridge protocol", () => {
-  it("uses bridge version 3 and recognizes messages by direction", () => {
-    expect(BRIDGE_VERSION).toBe(3);
+  it("uses bridge version 4 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(4);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
@@ -77,17 +77,20 @@ describe("bridge protocol", () => {
   });
 
   it("rejects unused cron fields and runtime statuses", () => {
-    const envelope = { protocol: "itsalive", version: 3, appId: APP_ID, requestId: "req_fields" };
+    const envelope = { protocol: "itsalive", version: 4, appId: APP_ID, requestId: "req_fields" };
     expect(isBridgeMessage({ ...envelope, type: "cron.register", registration: { callbackId: "daily", schedule: "0 8 * * *", description: "unused" } })).toBe(false);
     for (const status of ["booting", "busy", "saving", "error"]) expect(isBridgeMessage({ ...envelope, type: "status", status })).toBe(false);
     expect(isBridgeMessage({ ...envelope, type: "status", status: "ready" })).toBe(true);
   });
 
   it("bounds every Jev bridge field and rejects unexpected payload data", () => {
-    const envelope = { protocol: "itsalive", version: 3, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
+    const envelope = { protocol: "itsalive", version: 4, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
     const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
     const valid = { ...envelope, state: { interaction, recentInteractions: [interaction], document: "<main>ok</main>" } };
     expect(isBridgeMessage(valid)).toBe(true);
+    const patterned = { ...valid, state: { ...valid.state, pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0, likelyBenign: false, frustrationSignal: true } } };
+    expect(isBridgeMessage(patterned)).toBe(true);
+    expect(isBridgeMessage({ ...patterned, state: { ...patterned.state, pattern: { ...patterned.state.pattern, coalescedCount: 5 } } })).toBe(false);
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, document: "x".repeat(MAX_SEMANTIC_DOCUMENT_CHARACTERS + 1) } })).toBe(false);
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, interaction: { ...interaction, key: "x".repeat(31) } } })).toBe(false);
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, interaction: { ...interaction, target: { tag: "button", id: "x".repeat(201) } } } })).toBe(false);
