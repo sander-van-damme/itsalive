@@ -24,7 +24,7 @@ const JEV_ESCALATION_THRESHOLD = 0.7;
 const OPENROUTER_PROVIDER = 'openrouter';
 const OPENROUTER_MODEL = 'openrouter/auto';
 const MODEL_CONTEXT_TOKENS = 128_000;
-const MODEL_OUTPUT_TOKENS = 2_400;
+const MODEL_OUTPUT_TOKENS = 8_192;
 
 const defaultSettings: SettingsValue = { apiKey: '' };
 const stored = localStorage.getItem('itsalive.settings');
