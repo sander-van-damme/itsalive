@@ -8,13 +8,12 @@ type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
 
 export interface ShellActions {
-  createApp(input: { name: string; prompt: string }): Promise<void>;
+  createApp(goal: string): Promise<void>;
   selectApp(id: string): Promise<void>;
   deleteApp(id: string): Promise<void>;
   sendMessage(content: string): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
-  designApp(goal: string): Promise<{ name: string; prompt: string }>;
   exportLogs(): Promise<void>;
   reloadApp(): void;
 }
@@ -254,35 +253,33 @@ export class ShellUI {
   }
 
   private renderCreation(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-cancel type="button" aria-label="Cancel"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>What do you want to make?</h1><p>Describe the app you have in mind.</p></div></header>
-      <div class="creation-chat" data-creation><div class="message assistant">Tell me what you want your app to help you do.</div></div>
-      <form class="composer" data-create-form><div class="composer-box"><label class="sr-only" for="goal">Describe your app</label><textarea id="goal" rows="1" required autofocus placeholder="Describe your app…"></textarea><button class="send" type="submit" aria-label="Send description"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-cancel type="button" aria-label="Cancel"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>What do you want to make?</h1><p>Describe it once. Building starts immediately.</p></div></header>
+      <div class="creation-status" data-create-status aria-live="polite">Your prompt becomes the app brief directly — no confirmation step.</div>
+      <form class="composer" data-create-form><div class="composer-box"><label class="sr-only" for="goal">Describe your app</label><textarea id="goal" rows="1" required autofocus placeholder="Describe your app…"></textarea><button class="send" type="submit" aria-label="Start building"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
     panel.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
     const form = panel.querySelector<HTMLFormElement>('[data-create-form]')!;
     const goal = panel.querySelector<HTMLTextAreaElement>('#goal')!;
-    form.onsubmit = event => { event.preventDefault(); void this.handleDesignApp(panel, form, goal); };
+    form.onsubmit = event => { event.preventDefault(); void this.handleCreateApp(panel, form, goal); };
     goal.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
   }
 
-  private async handleDesignApp(panel: HTMLElement, form: HTMLFormElement, goal: HTMLTextAreaElement): Promise<void> {
+  private async handleCreateApp(panel: HTMLElement, form: HTMLFormElement, goal: HTMLTextAreaElement): Promise<void> {
     const content = goal.value.trim();
     if (!content) return;
-    goal.value = ''; goal.disabled = true;
-    const submit = form.querySelector<HTMLButtonElement>('button')!; submit.disabled = true;
-    const chat = panel.querySelector<HTMLElement>('[data-creation]')!;
-    chat.insertAdjacentHTML('beforeend', `<div class="message user">${esc(content)}</div><div class="thinking"><i></i><i></i><i></i></div>`);
+    goal.disabled = true;
+    const submit = form.querySelector<HTMLButtonElement>('button')!;
+    submit.disabled = true;
+    const status = panel.querySelector<HTMLElement>('[data-create-status]')!;
+    status.className = 'creation-status pending';
+    status.textContent = 'Starting your app…';
     try {
-      const draft = await this.actions.designApp(content);
-      chat.querySelector('.thinking')?.remove();
-      const proposal = document.createElement('div');
-      proposal.className = 'creation-proposal';
-      proposal.innerHTML = `<span class="app-icon">${esc(initials(draft.name))}</span><div><strong>${esc(draft.name)}</strong><p>${esc(draft.prompt)}</p></div><button class="action primary" type="button">Create app</button>`;
-      proposal.querySelector<HTMLButtonElement>('button')!.onclick = () => void this.actions.createApp(draft);
-      chat.append(proposal);
+      await this.actions.createApp(content);
     } catch (error) {
-      chat.querySelector('.thinking')?.remove();
-      chat.insertAdjacentHTML('beforeend', `<div class="message system">${esc(friendlyError(error, 'your new app'))}</div>`);
-      goal.disabled = false; submit.disabled = false;
+      status.className = 'creation-status failure';
+      status.textContent = friendlyError(error, 'your new app');
+      goal.disabled = false;
+      submit.disabled = false;
+      goal.focus();
     }
   }
 
