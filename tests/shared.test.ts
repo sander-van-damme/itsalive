@@ -82,6 +82,17 @@ describe("bridge protocol", () => {
     expect(isBridgeMessage({ ...envelope, type: "status", status: "ready" })).toBe(true);
   });
 
+  it("bounds every Jev bridge field and rejects unexpected payload data", () => {
+    const envelope = { protocol: "itsalive", version: 3, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
+    const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
+    const valid = { ...envelope, state: { interaction, recentInteractions: [interaction], document: "<main>ok</main>" } };
+    expect(isBridgeMessage(valid)).toBe(true);
+    expect(isBridgeMessage({ ...valid, state: { ...valid.state, document: "x".repeat(100_001) } })).toBe(false);
+    expect(isBridgeMessage({ ...valid, state: { ...valid.state, interaction: { ...interaction, key: "x".repeat(31) } } })).toBe(false);
+    expect(isBridgeMessage({ ...valid, state: { ...valid.state, interaction: { ...interaction, target: { tag: "button", id: "x".repeat(201) } } } })).toBe(false);
+    expect(isBridgeMessage({ ...valid, state: { ...valid.state, paidProviderOption: true } })).toBe(false);
+  });
+
   it("rejects removed legacy message types", () => {
     const envelope = createBridgeMessage(APP_ID, "req_legacy", { type: "execute", code: "" });
     for (const type of ["ready.request", "ready", "metadata.request", "metadata", "logs.request", "logs.response", "app.meta.update", "app.meta.response", "screenshot.request", "screenshot"]) {

@@ -12,7 +12,7 @@ export interface LogRecord { timestamp: number; level: LogLevel; source: string;
 export interface CronRegistration { callbackId: string; schedule: string; }
 export interface InteractionTarget { tag: string; id?: string; value?: string; state?: Record<string, string | boolean>; }
 export interface InteractionSnapshot { seq: number; at: string; type: string; target: InteractionTarget; actualTarget: InteractionTarget; key?: string; }
-export interface JevState { interaction: InteractionSnapshot; recentInteractions: InteractionSnapshot[]; document: string; }
+export interface JevState { interaction: InteractionSnapshot; recentInteractions: InteractionSnapshot[]; historySummary?: string; document: string; }
 
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
@@ -67,9 +67,16 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
   }
 }
 
-function isInteractionTarget(value: unknown): boolean { return isObject(value) && typeof value.tag === "string" && value.tag.length <= 100 && (value.id === undefined || typeof value.id === "string") && (value.value === undefined || typeof value.value === "string" && value.value.length <= 500); }
-function isInteraction(value: unknown): boolean { return isObject(value) && Number.isSafeInteger(value.seq) && typeof value.at === "string" && typeof value.type === "string" && isInteractionTarget(value.target) && isInteractionTarget(value.actualTarget); }
-function isJevState(value: unknown): boolean { return isObject(value) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && typeof value.document === "string" && value.document.length <= 100_000; }
+const hasOnly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key));
+function isInteractionTarget(value: unknown): boolean {
+  if (!isObject(value) || !hasOnly(value, ["tag", "id", "value", "state"]) || typeof value.tag !== "string" || value.tag.length < 1 || value.tag.length > 100 || (value.id !== undefined && (typeof value.id !== "string" || value.id.length > 200)) || (value.value !== undefined && (typeof value.value !== "string" || value.value.length > 500))) return false;
+  if (value.state === undefined) return true;
+  return isObject(value.state) && Object.keys(value.state).length <= 20 && Object.entries(value.state).every(([key, entry]) => key.length <= 100 && (typeof entry === "boolean" || typeof entry === "string" && entry.length <= 200));
+}
+function isInteraction(value: unknown): boolean {
+  return isObject(value) && hasOnly(value, ["seq", "at", "type", "target", "actualTarget", "key"]) && Number.isSafeInteger(value.seq) && Number(value.seq) >= 0 && typeof value.at === "string" && value.at.length <= 40 && typeof value.type === "string" && value.type.length > 0 && value.type.length <= 30 && (value.key === undefined || typeof value.key === "string" && value.key.length <= 30) && isInteractionTarget(value.target) && isInteractionTarget(value.actualTarget);
+}
+function isJevState(value: unknown): boolean { return isObject(value) && hasOnly(value, ["interaction", "recentInteractions", "historySummary", "document"]) && isInteraction(value.interaction) && Array.isArray(value.recentInteractions) && value.recentInteractions.length <= 20 && value.recentInteractions.every(isInteraction) && (value.historySummary === undefined || typeof value.historySummary === "string" && value.historySummary.length <= 8_000) && typeof value.document === "string" && value.document.length <= 100_000; }
 
 export const isShellToAppMessage = (value: unknown): value is BridgeMessage<ShellToAppPayload> =>
   isBridgeMessage(value) && SHELL_TYPES.has(value.type as ShellToAppPayload["type"]);

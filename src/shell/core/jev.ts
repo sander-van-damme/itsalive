@@ -1,6 +1,7 @@
 import type { Credential, DecisionModel, DecisionRequest, DecisionResult } from "./types";
 
-export const JEV_MODEL = "typesafe/jev";
+export const JEV_MODEL = "~typesafe/jev-latest";
+export const OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 export const GENERIC_JEV_QUESTION = {
   requires_llm_attention: {
     type: "noul" as const,
@@ -13,22 +14,23 @@ export const GENERIC_JEV_QUESTION = {
 };
 
 /** Narrow typed-decision adapter; deliberately separate from text generation. */
-export class CloudflareJevAdapter implements DecisionModel {
-  readonly id = "cloudflare-jev";
-  constructor(private readonly accountId: string, private readonly fetcher: typeof fetch = fetch) {}
+export class OpenRouterJevAdapter implements DecisionModel {
+  readonly id = "openrouter-jev";
+  constructor(private readonly fetcher: typeof fetch = fetch) {}
   async evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult> {
     if (!credential?.value) throw new Error("Jev credential is not configured");
-    const response = await this.fetcher(`https://api.cloudflare.com/client/v4/accounts/${encodeURIComponent(this.accountId)}/ai/run/${JEV_MODEL}`, {
+    const response = await this.fetcher(OPENROUTER_DECISIONS_URL, {
       method: "POST", headers: { "content-type": "application/json", authorization: `Bearer ${credential.value}` },
-      body: JSON.stringify({ state: request.state, questions: GENERIC_JEV_QUESTION }), signal: request.signal,
+      body: JSON.stringify({ model: JEV_MODEL, state: request.state, questions: GENERIC_JEV_QUESTION }), signal: request.signal,
     });
     const body = await response.json().catch(() => ({})) as Record<string, unknown>;
-    if (!response.ok) throw new Error(`Jev provider failed (${response.status})`);
-    const result = body.result as Record<string, unknown> | undefined;
-    const raw = result?.requires_llm_attention;
-    const probability = typeof raw === "number" ? raw : raw && typeof raw === "object" ? (raw as Record<string, unknown>).probability : undefined;
+    if (!response.ok) throw new Error(`OpenRouter Jev failed (${response.status})`);
+    const answers = body.answers as Record<string, unknown> | undefined;
+    const answer = answers?.requires_llm_attention as Record<string, unknown> | undefined;
+    const probability = answer?.noul;
     if (typeof probability !== "number" || !Number.isFinite(probability) || probability < 0 || probability > 1) throw new Error("Jev provider returned a malformed Noul probability");
-    return { probability, raw: body };
+    const usage = body.usage as Record<string, unknown> | undefined;
+    return { probability, ...(typeof usage?.input_tokens === "number" ? { usage: { inputTokens: usage.input_tokens } } : {}) };
   }
 }
 
@@ -37,4 +39,3 @@ export class MockDecisionModel implements DecisionModel {
   constructor(private readonly decide: (request: DecisionRequest) => number | Promise<number>) {}
   async evaluate(request: DecisionRequest): Promise<DecisionResult> { return { probability: await this.decide(request) }; }
 }
-
