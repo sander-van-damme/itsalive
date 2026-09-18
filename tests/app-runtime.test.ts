@@ -7,6 +7,7 @@ const state = vi.hoisted(() => ({
   rows: new Map<string, unknown>(),
   restoredWithApi: false,
   requests: [] as Record<string, unknown>[],
+  screenshotError: undefined as Error | undefined,
 }));
 
 vi.mock("../src/app/bridge", () => ({
@@ -52,7 +53,10 @@ describe("app runtime namespace", () => {
   beforeAll(async () => {
     state.posts.length = 0;
     const { startAppRuntime } = await import("../src/app/runtime");
-    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000", screenshot: async element => element.tagName });
+    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000", screenshot: async element => {
+      if (state.screenshotError) throw state.screenshotError;
+      return element.tagName;
+    } });
   });
 
   it("installs one immutable, versioned facade without replacing native history", () => {
