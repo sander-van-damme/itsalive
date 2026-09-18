@@ -18,6 +18,8 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toMatch(/MUST be implemented as native Custom Elements/);
     expect(SYSTEM_PROMPT).toContain("class TaskList extends HTMLElement");
     expect(SYSTEM_PROMPT).toContain("customElements.define('task-list'");
+    expect(SYSTEM_PROMPT).toContain('if (this.dataset.enhanced) return');
+    expect(SYSTEM_PROMPT).not.toContain("this.innerHTML = '<section");
     expect(SYSTEM_PROMPT).toMatch(/Prefer light DOM/);
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);

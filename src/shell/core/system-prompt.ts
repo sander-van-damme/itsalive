@@ -15,8 +15,16 @@ Meaningful application UI MUST be implemented as native Custom Elements: classes
 Concise pattern:
 class TaskList extends HTMLElement {
   connectedCallback() {
-    if (!this.querySelector('[data-list]')) this.innerHTML = '<section class="space-y-3"><h2 class="text-xl font-semibold">Tasks</h2><ul data-list class="grid gap-2"></ul></section>';
-    this.querySelector('[data-list]').replaceChildren(...this.querySelectorAll(':scope > task-item'));
+    if (this.dataset.enhanced) return;
+    this.dataset.enhanced = 'true';
+    this.classList.add('block', 'space-y-3');
+    let list = this.querySelector<HTMLElement>(':scope > [data-list]');
+    if (!list) {
+      const heading = document.createElement('h2'); heading.textContent = 'Tasks'; heading.className = 'text-xl font-semibold';
+      list = document.createElement('ul'); list.dataset.list = ''; list.className = 'grid gap-2';
+      this.append(heading, list);
+    }
+    for (const item of this.querySelectorAll(':scope > task-item')) list.append(item);
   }
 }
 if (!customElements.get('task-list')) customElements.define('task-list', TaskList);

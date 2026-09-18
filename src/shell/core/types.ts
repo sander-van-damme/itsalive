@@ -41,6 +41,8 @@ export interface Credential {
 export interface ModelMessage { role: "user" | "assistant"; content: string }
 
 export interface GenerateRequest {
+  /** Console diagnostic label; never sent to the provider. */
+  purpose?: string;
   model: ModelConfig;
   system: string;
   messages: ModelMessage[];
