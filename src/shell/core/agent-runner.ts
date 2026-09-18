@@ -32,7 +32,6 @@ export interface RunOptions {
   countTokens?: TokenCounter;
   signal?: AbortSignal;
   persistTrigger?: boolean;
-  onTriggerPersisted?: () => void | Promise<void>;
 }
 
 export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
@@ -52,10 +51,7 @@ export class AgentRunner {
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
     try {
-      if (options.persistTrigger !== false) {
-        await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
-        await options.onTriggerPersisted?.();
-      }
+      if (options.persistTrigger !== false) await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
       for (let turn = 1; turn <= maxTurns; turn++) {
         console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
         try {
