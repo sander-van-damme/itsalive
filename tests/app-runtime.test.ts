@@ -95,6 +95,18 @@ describe("app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
   });
 
+  it("returns only the current execution error instead of recursively embedding prior logs", async () => {
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'throw new Error("first failure");', requestId: "error-one" } }));
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'throw new Error("second failure");', requestId: "error-two" } }));
+    await nextTask();
+
+    const second = state.posts.find(({ requestId }) => requestId === "error-two");
+    expect(second?.payload.type).toBe("execution.error");
+    expect(second?.payload.error).toEqual(expect.objectContaining({ name: "Error", message: "second failure" }));
+    expect(second?.payload.error).not.toHaveProperty("cause");
+    expect(JSON.stringify(second)).not.toContain("first failure");
+  });
+
   it("clears origin storage through the private shell command", async () => {
     localStorage.setItem("app", "state");
     sessionStorage.setItem("app", "session");

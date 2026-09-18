@@ -23,6 +23,9 @@ export interface BuiltContext {
   omittedHistoryCount: number;
 }
 
+const MAX_RECENT_CHAT_ENTRIES = 8;
+const MAX_RECENT_OPERATION_ENTRIES = 6;
+const MAX_HISTORY_TOKENS = 12_000;
 const section = (title: string, body: string) => `${title}\n${body.trim() || "(none)"}`;
 
 export function buildModelContext(input: ContextInput): BuiltContext {
@@ -47,18 +50,65 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
   }
 
+  const candidates = recentHistory(input.history, input.trigger, input.observation);
+  const historyBudget = Math.min(
+    Math.max(0, budget - used),
+    Math.min(MAX_HISTORY_TOKENS, Math.max(256, Math.floor(input.model.maxContextTokens * 0.2))),
+  );
+  let historyUsed = 0;
   const selected: HistoryEntry[] = [];
-  for (const entry of [...input.history].sort((a, b) => b.timestamp - a.timestamp)) {
+  for (const entry of [...candidates].sort((a, b) => b.timestamp - a.timestamp)) {
     const cost = count(entry.content) + 8;
-    if (used + cost > budget) continue;
-    selected.push(entry); used += cost;
+    if (historyUsed + cost > historyBudget || used + cost > budget) continue;
+    selected.push(entry);
+    historyUsed += cost;
+    used += cost;
   }
   selected.reverse();
   messages.splice(0, 0, ...selected.map((entry): ModelMessage => ({
     role: entry.role === "assistant" || entry.role === "agent" ? "assistant" : "user",
     content: entry.content,
   })));
-  return { system: SYSTEM_PROMPT, messages, estimatedInputTokens: used, includedHistoryIds: selected.flatMap(x => x.id == null ? [] : [x.id]), omittedHistoryCount: input.history.length - selected.length };
+  return {
+    system: SYSTEM_PROMPT,
+    messages,
+    estimatedInputTokens: used,
+    includedHistoryIds: selected.flatMap(x => x.id == null ? [] : [x.id]),
+    omittedHistoryCount: input.history.length - selected.length,
+  };
+}
+
+function recentHistory(history: HistoryEntry[], trigger: string, observation?: string): HistoryEntry[] {
+  const excluded = new Set<number>();
+  const newestMatching = (predicate: (entry: HistoryEntry) => boolean) => {
+    for (let index = history.length - 1; index >= 0; index--) {
+      if (!excluded.has(index) && predicate(history[index]!)) {
+        excluded.add(index);
+        return;
+      }
+    }
+  };
+
+  newestMatching(entry => entry.role === "user" && entry.kind === "chat" && entry.content === trigger);
+  if (observation) newestMatching(entry => entry.role === "observation" && entry.content === observation);
+
+  const remaining = history.filter((_entry, index) => !excluded.has(index));
+  const chat = remaining
+    .filter(entry => !isOperational(entry) && entry.kind !== "compaction")
+    .slice(-MAX_RECENT_CHAT_ENTRIES);
+  const operations = remaining.filter(isOperational).slice(-MAX_RECENT_OPERATION_ENTRIES);
+  const compaction = remaining.filter(entry => entry.kind === "compaction").slice(-1);
+
+  const unique = new Map<string | number, HistoryEntry>();
+  for (const entry of [...chat, ...operations, ...compaction]) {
+    unique.set(entry.id ?? `${entry.timestamp}:${entry.role}:${entry.content}`, entry);
+  }
+  return [...unique.values()].sort((a, b) => a.timestamp - b.timestamp);
+}
+
+function isOperational(entry: HistoryEntry): boolean {
+  return entry.role === "agent" || entry.role === "observation"
+    || entry.kind === "javascript" || entry.kind === "execution" || entry.kind === "error";
 }
 
 function truncateToTokens(value: string, limit: number, count: TokenCounter): string {

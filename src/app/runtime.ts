@@ -12,11 +12,6 @@ import { serializeError, shellUrlForApp } from "../shared";
 
 const DONE = Symbol("agent-done");
 
-function errorPayload(error: unknown, logs: unknown[]) {
-  const value = error instanceof Error ? error : new Error(String(error));
-  return { message: value.message, stack: value.stack, logs };
-}
-
 function bounded(value: unknown, maxBytes: number): unknown {
   if (value === undefined) return null;
   let json: string;
@@ -93,8 +88,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
         else bridge.post({ type: "result", result: bounded(result, options.maxResultBytes ?? 256_000) }, message.requestId);
       } catch (error) {
         logs.add("error", ["Agent execution failed", error], "agent", error instanceof Error ? error.stack : undefined);
-        const details = errorPayload(error, logs.get({ level: "error", limit: 30 }));
-        bridge.post({ type: "execution.error", error: { ...serializeError(error), cause: JSON.stringify(details.logs) } }, message.requestId);
+        bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
       }
     } else if (message.type === "reload") {
       bridge.post({ type: "result", result: { reloading: true } }, message.requestId);

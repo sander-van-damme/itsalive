@@ -20,16 +20,20 @@ describe("ProviderRegistry", () => {
     expect(result.text).toBe("system");
   });
 
-  it('centrally traces full requests and sanitized responses without credentials', async () => {
+  it('centrally traces compact request and response metadata without replaying full prompts', async () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
-    const registry = new ProviderRegistry().register({ id: 'local', generate: async () => ({ text: 'ok', raw: { authorization: 'Bearer secret-token' } }) });
+    const registry = new ProviderRegistry().register({ id: 'local', generate: async () => ({ text: 'ok', raw: { id: 'response-id', model: 'resolved-model', authorization: 'Bearer secret-token' } }) });
     await registry.generate({ purpose: 'app design', model: { id: 'm', provider: 'local', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'full system', messages: [{ role: 'user', content: 'full message' }], maxOutputTokens: 10 }, { id: 'credential', type: 'api-key', value: 'credential-secret' });
     const trace = JSON.stringify(info.mock.calls);
-    expect(trace).toContain('full system');
-    expect(trace).toContain('full message');
-    expect(trace).toContain('[redacted]');
+    expect(trace).toContain('systemCharacters');
+    expect(trace).toContain('messages');
+    expect(trace).toContain('response-id');
+    expect(trace).toContain('resolved-model');
+    expect(trace).toContain('textPreview');
+    expect(trace).not.toContain('full system');
+    expect(trace).not.toContain('full message');
     expect(trace).not.toContain('secret-token');
     expect(trace).not.toContain('credential-secret');
   });
