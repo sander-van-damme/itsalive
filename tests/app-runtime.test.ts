@@ -6,6 +6,7 @@ const state = vi.hoisted(() => ({
   posts: [] as Array<{ payload: Record<string, unknown>; requestId?: string }>,
   rows: new Map<string, unknown>(),
   restoredWithApi: false,
+  requests: [] as Record<string, unknown>[],
 }));
 
 vi.mock("../src/app/bridge", () => ({
@@ -15,6 +16,7 @@ vi.mock("../src/app/bridge", () => ({
     validate(event: MessageEvent) { return event.data; }
     acceptResponse() { return false; }
     async request(payload: Record<string, unknown>) {
+      state.requests.push(payload);
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
       if (payload.type === "history.request") return { type: "history.response", results: ["match"] };
       throw new Error(`Unexpected request: ${String(payload.type)}`);
@@ -27,7 +29,8 @@ vi.mock("../src/app/db", () => ({
   dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
   dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
   dbDelete: async (_store: string, key: IDBValidKey) => { state.rows.delete(String(key)); },
-  dbQuery: async () => [...state.rows.values()].map((value, index) => ({ key: index, value })),
+  dbAll: async () => [...state.rows.values()],
+  closeAppDatabase: async () => undefined,
 }));
 
 vi.mock("../src/app/logs", () => ({
@@ -39,7 +42,7 @@ vi.mock("../src/app/logs", () => ({
 
 vi.mock("../src/app/persistence", () => ({
   loadSavedDocument: async () => { state.restoredWithApi = window.itsalive?.apiVersion === 2; },
-  installAutosave: () => ({ disconnect: vi.fn() }),
+  installAutosave: () => ({ suspend: vi.fn(), disconnect: vi.fn() }),
 }));
 
 const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -72,6 +75,7 @@ describe("app runtime namespace", () => {
 
   it("preserves bridge-backed LLM, history, wake, cron, DOM, logs, and completion behavior", async () => {
     expect(await window.itsalive.llm.ask("question")).toBe("answer");
+    expect(state.requests.find(request => request.type === "llm.request")).toEqual({ type: "llm.request", prompt: "question" });
     expect(await window.itsalive.history.search({ query: "old" })).toEqual(["match"]);
     await window.itsalive.agent.wake("continue");
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);
@@ -89,6 +93,16 @@ describe("app runtime namespace", () => {
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "fired" }, requestId: "cron" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
+  });
+
+  it("clears origin storage through the private shell command", async () => {
+    localStorage.setItem("app", "state");
+    sessionStorage.setItem("app", "session");
+    window.dispatchEvent(new MessageEvent("message", { data: { type: "storage.clear", requestId: "clear" } }));
+    await nextTask();
+    expect(localStorage.getItem("app")).toBeNull();
+    expect(sessionStorage.getItem("app")).toBeNull();
+    await vi.waitFor(() => expect(state.posts).toContainEqual({ payload: { type: "result", result: { cleared: true } }, requestId: "clear" }));
   });
 
   it("passes the canonical namespace to custom tools as env.itsalive", async () => {

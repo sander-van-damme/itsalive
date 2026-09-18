@@ -35,10 +35,8 @@ export class ShellDatabase {
         const db = open.result;
         db.createObjectStore("apps", { keyPath: "id" });
         const history = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
-        history.createIndex("appTimestamp", ["appId", "timestamp"]);
         history.createIndex("appId", "appId");
         const logs = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
-        logs.createIndex("timestamp", "timestamp");
         logs.createIndex("appId", "appId");
         const schedules = db.createObjectStore("schedules", { keyPath: "id" });
         schedules.createIndex("appId", "appId");
@@ -83,11 +81,26 @@ export class ShellDatabase {
     return request(db.transaction(store).objectStore(store).index(index).getAll(query));
   }
 
+  async deleteApp(id: string): Promise<void> {
+    const db = await this.open();
+    const tx = db.transaction(["apps", "history", "logs", "schedules"], "readwrite");
+    const completed = transactionDone(tx);
+    tx.objectStore("apps").delete(id);
+    for (const store of ["history", "logs", "schedules"] as const) {
+      const cursor = tx.objectStore(store).index("appId").openKeyCursor(IDBKeyRange.only(id));
+      cursor.onsuccess = () => {
+        const row = cursor.result;
+        if (row) { tx.objectStore(store).delete(row.primaryKey); row.continue(); }
+      };
+    }
+    await completed;
+  }
+
   apps = {
     list: () => this.all<AppRecord>("apps"),
     get: (id: string) => this.get<AppRecord>("apps", id),
     put: (app: AppRecord) => this.put("apps", app),
-    delete: (id: string) => this.delete("apps", id),
+    delete: (id: string) => this.deleteApp(id),
   };
   history = {
     add: async (entry: HistoryEntry) => Number(await this.put("history", entry)),

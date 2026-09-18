@@ -6,14 +6,15 @@ export const BRIDGE_PROTOCOL = "itsalive" as const;
 export const BRIDGE_VERSION = 2 as const;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
-export type RuntimeStatus = "booting" | "ready" | "busy" | "saving" | "error";
+export type RuntimeStatus = "ready" | "error";
 
 export interface LogRecord { timestamp: number; level: LogLevel; source: string; message: string; details?: unknown; }
-export interface CronRegistration { callbackId: string; schedule: string; description?: string; }
+export interface CronRegistration { callbackId: string; schedule: string; }
 
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
   | { type: "reload" }
+  | { type: "storage.clear" }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
   | { type: "cron.fire"; callbackId: string };
@@ -22,7 +23,7 @@ export type AppToShellPayload =
   | { type: "result"; result?: unknown; done?: boolean; message?: string }
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
-  | { type: "llm.request"; prompt: string; options?: Record<string, unknown> }
+  | { type: "llm.request"; prompt: string }
   | { type: "history.request"; query: string; limit?: number }
   | { type: "log"; record: LogRecord }
   | { type: "cron.register"; registration: CronRegistration }
@@ -36,7 +37,7 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "llm.response", "history.response", "cron.fire"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "storage.clear", "llm.response", "history.response", "cron.fire"]);
 const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "wake", "llm.request", "history.request", "log", "cron.register", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
@@ -48,13 +49,13 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
       !isValidAppId(value.appId) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
   switch (value.type) {
     case "execute": return typeof value.code === "string";
-    case "llm.request": return typeof value.prompt === "string";
+    case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
     case "history.request": return typeof value.query === "string";
     case "cron.fire": return typeof value.callbackId === "string" && value.callbackId.length > 0 && value.callbackId.length <= 200;
     case "execution.error": return isSerializedError(value.error);
     case "log": return isLogRecord(value.record);
-    case "cron.register": return isObject(value.registration) && typeof value.registration.callbackId === "string" && typeof value.registration.schedule === "string";
-    case "status": return ["booting", "ready", "busy", "saving", "error"].includes(String(value.status));
+    case "cron.register": return isObject(value.registration) && typeof value.registration.callbackId === "string" && typeof value.registration.schedule === "string" && value.registration.description === undefined;
+    case "status": return ["ready", "error"].includes(String(value.status));
     default: return true;
   }
 }
