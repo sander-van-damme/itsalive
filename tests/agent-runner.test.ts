@@ -49,10 +49,12 @@ describe('AgentRunner lifecycle', () => {
     const providers = {
       generateStreaming: vi.fn(async (_request: unknown, onText: (delta: string) => void) => {
         events.push('emit:first');
-        onText(first);
+        onText('/* itsalive:com');
+        onText(first.slice('/* itsalive:com'.length));
         await firstExecuted;
         events.push('emit:second');
-        onText(second);
+        onText('/* itsalive:command */\nreturn itsalive.');
+        onText('done("ready");\n/* itsalive:end */');
         return { text: first + second };
       }),
       generate: vi.fn(),
