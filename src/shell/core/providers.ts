@@ -22,10 +22,23 @@ export class ProviderRegistry {
     const startedAt = performance.now();
     const label = request.purpose ?? 'generation';
     console.groupCollapsed(`[itsalive:llm] ${label} · ${request.model.provider}/${request.model.model}`);
-    console.info('Request', sanitizeDiagnostic({ purpose: label, provider: request.model.provider, model: request.model.model, system: request.system, messages: request.messages, maxOutputTokens: request.maxOutputTokens, modelOptions: request.model.options }));
+    console.info('Request', sanitizeDiagnostic({
+      purpose: label,
+      provider: request.model.provider,
+      model: request.model.model,
+      systemCharacters: request.system.length,
+      messages: request.messages.map(message => ({ role: message.role, characters: message.content.length })),
+      maxOutputTokens: request.maxOutputTokens,
+      modelOptions: request.model.options,
+    }));
     try {
       const result = await this.get(request.model.provider).generate(request, credential);
-      console.info(`Response (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic({ text: result.text, usage: result.usage, raw: result.raw }));
+      console.info(`Response (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic({
+        textPreview: result.text.slice(0, 500),
+        textCharacters: result.text.length,
+        usage: result.usage,
+        provider: compactProviderMetadata(result.raw),
+      }));
       return result;
     } catch (error) {
       console.error(`Request failed (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic(error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, ...('diagnostic' in error ? { diagnostic: error.diagnostic } : {}) } : error));
@@ -34,6 +47,22 @@ export class ProviderRegistry {
       console.groupEnd();
     }
   }
+}
+
+function compactProviderMetadata(raw: unknown): Record<string, unknown> | undefined {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const record = raw as Record<string, unknown>;
+  const firstChoice = Array.isArray(record.choices) && record.choices[0] && typeof record.choices[0] === "object"
+    ? record.choices[0] as Record<string, unknown>
+    : undefined;
+  return {
+    ...(typeof record.id === "string" ? { id: record.id } : {}),
+    ...(typeof record.model === "string" ? { model: record.model } : {}),
+    ...(typeof record.provider === "string" ? { provider: record.provider } : {}),
+    ...(typeof record.object === "string" ? { object: record.object } : {}),
+    ...(typeof firstChoice?.finish_reason === "string" ? { finishReason: firstChoice.finish_reason } : {}),
+    ...(typeof firstChoice?.native_finish_reason === "string" ? { nativeFinishReason: firstChoice.native_finish_reason } : {}),
+  };
 }
 
 interface Json {
