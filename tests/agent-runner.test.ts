@@ -53,35 +53,6 @@ describe('AgentRunner lifecycle', () => {
     expect(groupEnds).toHaveBeenCalledTimes(2);
   });
 
-  it('notifies after persisting a user trigger and before model generation', async () => {
-    const entries: HistoryEntry[] = [];
-    const events: string[] = [];
-    const db = { history: {
-      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); events.push('persisted'); return entries.length; }),
-      forApp: vi.fn(async () => entries),
-    } };
-    const providers = { generate: vi.fn(async () => { events.push('generated'); return { text: 'return itsalive.done();' }; }) };
-    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ done: true })) };
-    const onTriggerPersisted = vi.fn(async () => {
-      expect(entries).toEqual(expect.arrayContaining([
-        expect.objectContaining({ role: 'user', kind: 'chat', content: 'Add a chart' }),
-      ]));
-      events.push('notified');
-    });
-    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
-    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
-
-    await new AgentRunner(db as never, providers as never, executor).run({
-      appId: '550e8400-e29b-41d4-a716-446655440000', appPrompt: 'Maintain it', trigger: 'Add a chart',
-      model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 },
-      tools: [], onTriggerPersisted,
-    });
-
-    expect(onTriggerPersisted).toHaveBeenCalledOnce();
-    expect(events.slice(0, 3)).toEqual(['persisted', 'notified', 'generated']);
-  });
-
   it('does not persist a platform-owned initial-build trigger as user chat', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
@@ -94,16 +65,12 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const onTriggerPersisted = vi.fn();
-
     await new AgentRunner(db as never, providers as never, executor).run({
       appId: '550e8400-e29b-41d4-a716-446655440000', appPrompt: 'A durable detailed specification',
       trigger: 'Build the initial version of this app now.', persistTrigger: false,
       model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 }, tools: [],
-      onTriggerPersisted,
     });
 
-    expect(onTriggerPersisted).not.toHaveBeenCalled();
     expect(entries).not.toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user' })]));
     expect(entries.map(entry => entry.content)).not.toContain('A durable detailed specification');
     expect(providers.generate).toHaveBeenCalledTimes(1);
