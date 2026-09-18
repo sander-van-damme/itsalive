@@ -42,6 +42,7 @@ describe('AgentRunner lifecycle', () => {
       forApp: vi.fn(async () => entries),
     } };
     const events: string[] = [];
+    const progress: string[] = [];
     let releaseFirst!: () => void;
     const firstExecuted = new Promise<void>(resolve => { releaseFirst = resolve; });
     const first = '/* itsalive:command */\ndocument.body.dataset.first = "yes";\n/* itsalive:end */\n';
@@ -79,12 +80,14 @@ describe('AgentRunner lifecycle', () => {
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
+      onProgress: update => progress.push(update.phase),
     });
 
     expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
     expect(events.indexOf('execute:first')).toBeGreaterThan(events.indexOf('emit:first'));
     expect(events.indexOf('execute:first')).toBeLessThan(events.indexOf('emit:second'));
     expect(events).toEqual(['emit:first', 'execute:first', 'emit:second', 'execute:done']);
+    expect(progress).toEqual(expect.arrayContaining(['generating', 'executing', 'verifying', 'finishing']));
     expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual([
       'document.body.dataset.first = "yes";',
       'return itsalive.done("ready");',
