@@ -4,10 +4,27 @@ import { createHttpAdapter, ProviderRegistry, ProviderResponseError } from "../s
 describe("ProviderRegistry", () => {
   afterEach(() => vi.restoreAllMocks());
   it("registers and routes neutral generation requests", async () => {
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const registry = new ProviderRegistry().register({ id: "local", generate: async request => ({ text: request.system }) });
     expect(registry.list()).toEqual(["local"]);
     const result = await registry.generate({ model: { id: "m", provider: "local", model: "x", maxContextTokens: 1_000, maxOutputTokens: 10 }, system: "system", messages: [], maxOutputTokens: 10 });
     expect(result.text).toBe("system");
+  });
+
+  it('centrally traces full requests and sanitized responses without credentials', async () => {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    const registry = new ProviderRegistry().register({ id: 'local', generate: async () => ({ text: 'ok', raw: { authorization: 'Bearer secret-token' } }) });
+    await registry.generate({ purpose: 'app design', model: { id: 'm', provider: 'local', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'full system', messages: [{ role: 'user', content: 'full message' }], maxOutputTokens: 10 }, { id: 'credential', type: 'api-key', value: 'credential-secret' });
+    const trace = JSON.stringify(info.mock.calls);
+    expect(trace).toContain('full system');
+    expect(trace).toContain('full message');
+    expect(trace).toContain('[redacted]');
+    expect(trace).not.toContain('secret-token');
+    expect(trace).not.toContain('credential-secret');
   });
 
   it("rejects unknown providers clearly", () => {

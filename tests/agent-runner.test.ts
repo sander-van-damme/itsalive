@@ -19,7 +19,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId: 'test-app', appPrompt: 'Maintain the app', trigger: 'Make a change',
+      appId: '550e8400-e29b-41d4-a716-446655440000', appPrompt: 'Maintain the app', trigger: 'Make a change',
       model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 },
       tools: [], maxTurns: 2,
     });
@@ -28,7 +28,7 @@ describe('AgentRunner lifecycle', () => {
     expect(providers.generate).toHaveBeenCalledTimes(2);
     expect(executor.execute).toHaveBeenCalledTimes(2);
     expect(groups.mock.calls.map(call => call[0])).toEqual([
-      '[itsalive:agent] Run · test-app', '[itsalive:agent] Turn 1/2', '[itsalive:agent] Turn 2/2',
+      '[itsalive:agent] Run · 550e8400-e29b-41d4-a716-446655440000', '[itsalive:agent] Turn 1/2', '[itsalive:agent] Turn 2/2',
     ]);
     expect(groupEnds).toHaveBeenCalledTimes(3);
   });
@@ -45,11 +45,50 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId: 'test-app', appPrompt: 'Maintain the app', trigger: 'Change it',
+      appId: '550e8400-e29b-41d4-a716-446655440000', appPrompt: 'Maintain the app', trigger: 'Change it',
       model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 },
       tools: [], signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(providers.generate).not.toHaveBeenCalled();
     expect(groupEnds).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not persist a platform-owned initial-build trigger as user chat', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done();' })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ done: true })) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await new AgentRunner(db as never, providers as never, executor).run({
+      appId: '550e8400-e29b-41d4-a716-446655440000', appPrompt: 'A durable detailed specification',
+      trigger: 'Build the initial version of this app now.', persistTrigger: false,
+      model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 }, tools: [],
+    });
+
+    expect(entries).not.toEqual(expect.arrayContaining([expect.objectContaining({ role: 'user' })]));
+    expect(entries.map(entry => entry.content)).not.toContain('A durable detailed specification');
+    expect(providers.generate).toHaveBeenCalledTimes(1);
+  });
+
+  it('continues to persist normal user triggers', async () => {
+    const add = vi.fn(async () => 1);
+    const db = { history: { add, forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done();' })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ done: true })) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    await new AgentRunner(db as never, providers as never, executor).run({
+      appId: '550e8400-e29b-41d4-a716-446655440000', appPrompt: 'Maintain it', trigger: 'Add a chart',
+      model: { id: 'm', provider: 'local', model: 'test-model', maxContextTokens: 10_000, maxOutputTokens: 100 }, tools: [],
+    });
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({ role: 'user', kind: 'chat', content: 'Add a chart' }));
   });
 });

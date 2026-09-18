@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
+import { AgentRunner, InitialBuildIntent, RuntimeSession, ShellDatabase, createDefaultRegistry, createHttpAdapter, nextCronRun, openAiCompatible, renameAppRecord, runtimePresentation, sanitizeDiagnostic, searchHistory, type AppRecord, type Credential, type LogEntry, type ModelConfig } from './core';
 import { ROOT_DOMAIN, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, validateMessageEvent, type BridgeMessage } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -13,7 +13,8 @@ let activeId: string | undefined;
 let running = false;
 let activeRun: AbortController | undefined;
 let connectionTimer: number | undefined;
-let pendingInitialAppId: string | undefined;
+const initialBuild = new InitialBuildIntent();
+const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
 
 const defaultSettings: SettingsValue = { provider: 'openai', model: 'gpt-5-mini', endpoint: '', apiKey: '', maxContextTokens: 128000, maxOutputTokens: 8192 };
 const stored = localStorage.getItem('itsalive.settings');
@@ -28,13 +29,12 @@ const ui = new ShellUI(root, {
     const id = crypto.randomUUID();
     const now = Date.now();
     await db.apps.put({ ...input, id, summary: '', createdAt: now, updatedAt: now });
-    pendingInitialAppId = id;
-    ui.setBusy(true);
+    initialBuild.schedule(id);
     ui.setConnectionStatus('Preparing your app…', 'working');
     await refreshApps(id);
   },
   selectApp: async id => { await selectApp(id); },
-  deleteApp: async id => { await db.apps.delete(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id); },
+  deleteApp: async id => { await db.apps.delete(id); initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id); },
   sendMessage: async content => { await runAgent(content); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
@@ -80,7 +80,7 @@ async function generateAppProposal(goal: string, system: string): Promise<{ name
   let failure = 'invalid JSON';
   for (let attempt = 1; attempt <= 3; attempt++) {
     const repair = attempt === 1 ? goal : `${goal}\n\nYour previous response could not be parsed (${failure}). Return the complete JSON object again. Do not abbreviate or add commentary.`;
-    const result = await registry.generate({ model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(settings.maxOutputTokens, 2000) }, credential());
+    const result = await registry.generate({ purpose: `app design attempt ${attempt}`, model: modelConfig(), system, messages: [{ role: 'user', content: repair }], maxOutputTokens: Math.min(settings.maxOutputTokens, 2000) }, credential());
     try {
       const parsed = parseJsonObject(result.text) as { name?: unknown; prompt?: unknown };
       if (typeof parsed.name !== 'string' || typeof parsed.prompt !== 'string') throw new Error('required string fields are missing');
@@ -122,15 +122,15 @@ async function selectApp(id: string): Promise<void> {
   const url = new URL(location.href); url.searchParams.set('app', id); history.replaceState(null, '', url);
   disposeFrame();
   ui.setConnectionStatus('Connecting…', 'working');
-  connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setConnectionStatus('App unavailable', 'error'); }, 10_000);
+  connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('App unavailable', 'error'); }, 10_000);
   ui.setApps(apps as AppSummary[], id);
   const frame = runtime.switchTo(id, currentOrigin());
-  frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); runtime.setState('error'); ui.setConnectionStatus('Connection failed', 'error'); });
+  frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('Connection failed', 'error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('Starting app…', 'working'); });
   await refreshMessages();
 }
 
-function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); }
+function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); ui.setBusy(false); }
 function disposeFrame(): void { stopActiveRun('App runtime disposed'); if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
 function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
@@ -153,12 +153,12 @@ function configureRegistry(): void {
 function modelConfig(): ModelConfig { return { id: 'active', provider: settings.provider, model: settings.model, maxContextTokens: settings.maxContextTokens, maxOutputTokens: settings.maxOutputTokens, credentialId: 'active' }; }
 function credential(): Credential | undefined { return settings.apiKey ? { id: 'active', type: 'api-key', value: settings.apiKey } : undefined; }
 
-async function runAgent(trigger: string): Promise<void> {
+async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
   const app = currentApp();
-  if (!app || running) return;
+  if (!app || running) return false;
   let executor: ReturnType<RuntimeSession['requireReady']>;
   try { executor = runtime.requireReady(); }
-  catch (error) { ui.setConnectionStatus(error instanceof Error ? error.message : String(error), 'error'); ui.showError(error instanceof Error ? error.message : String(error)); return; }
+  catch (error) { ui.setBusy(false); ui.setConnectionStatus(error instanceof Error ? error.message : String(error), 'error'); ui.showError(error instanceof Error ? error.message : String(error)); return false; }
   const runController = new AbortController();
   activeRun = runController;
   running = true;
@@ -169,7 +169,7 @@ async function runAgent(trigger: string): Promise<void> {
     configureRegistry();
     const tools = await requestRuntime<{ name: string; description: string }[]>({ type: 'execute', code: 'return await itsalive.tools.search("");' }).catch(() => []);
     const runner = new AgentRunner(db, registry, executor);
-    const result = await runner.run({ appId: app.id, appPrompt: app.prompt, trigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
+    const result = await runner.run({ appId: app.id, appPrompt: app.prompt, trigger, persistTrigger, model: modelConfig(), credential: credential(), tools, summary: app.summary, signal: runController.signal });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
   } catch (error) {
@@ -183,7 +183,20 @@ async function runAgent(trigger: string): Promise<void> {
     ui.setBusy(false);
     ui.setConnectionStatus(connection.status, connection.tone);
     await refreshMessages();
+    void startPendingInitialBuild();
   }
+  return true;
+}
+
+async function startPendingInitialBuild(): Promise<void> {
+  const id = initialBuild.candidate(activeId, runtime.state === 'ready', running);
+  if (!id) return;
+  ui.setConnectionStatus('Building your first version…', 'working');
+  // runAgent marks the run active before its first await. Clear only after that
+  // synchronous acceptance; otherwise retain the intent for a later retry.
+  const run = runAgent(INITIAL_BUILD_TRIGGER, false);
+  if (running && activeRun) initialBuild.accepted(id);
+  await run;
 }
 
 async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void> {
@@ -204,11 +217,11 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
     case 'wake': if (!running) void runAgent(message.reason || 'The app requested an agent wake-up.'); break;
     case 'status':
       runtime.setState(message.status === 'ready' ? 'ready' : message.status === 'error' ? 'error' : 'loading');
+      if (message.status === 'error') ui.setBusy(false);
       if (message.status === 'ready' && connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
       ui.setConnectionStatus(message.status === 'ready' ? 'Ready' : (message.detail || message.status), message.status === 'ready' ? 'connected' : (message.status === 'error' ? 'error' : 'working'));
-      if (message.status === 'ready' && pendingInitialAppId === activeId) {
-        const initial = currentApp(); pendingInitialAppId = undefined;
-        if (initial) { ui.setConnectionStatus('Building your first version…', 'working'); void runAgent(initial.prompt); }
+      if (message.status === 'ready') {
+        void startPendingInitialBuild();
       }
       break;
   }
@@ -243,7 +256,7 @@ async function fireDueSchedules(): Promise<void> {
 }
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
-  try { configureRegistry(); const result = await registry.generate({ model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: settings.maxOutputTokens }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
+  try { configureRegistry(); const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: settings.maxOutputTokens }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
   catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
@@ -284,7 +297,7 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   else if (candidate.provider === 'google') testRegistry.register(createHttpAdapter({ id: 'google', endpoint: candidate.endpoint || `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(candidate.model)}:generateContent`, format: 'google' }));
   else if (candidate.endpoint) testRegistry.register(createHttpAdapter({ id: candidate.provider, endpoint: candidate.endpoint, format: candidate.provider === 'anthropic' ? 'anthropic' : 'openai' }));
   const model = { id: 'connection-test', provider: candidate.provider, model: candidate.model, maxContextTokens: candidate.maxContextTokens, maxOutputTokens: candidate.maxOutputTokens };
-  await testRegistry.generate({ model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: 8 }, candidate.apiKey ? { id: 'connection-test', type: 'api-key', value: candidate.apiKey } : undefined);
+  await testRegistry.generate({ purpose: 'model connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: 8 }, candidate.apiKey ? { id: 'connection-test', type: 'api-key', value: candidate.apiKey } : undefined);
   return { ...candidate, ...await retrieveModelLimits(candidate).catch(() => ({})) };
 }
 

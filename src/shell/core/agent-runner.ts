@@ -31,6 +31,7 @@ export interface RunOptions {
   maxObservationCharacters?: number;
   countTokens?: TokenCounter;
   signal?: AbortSignal;
+  persistTrigger?: boolean;
 }
 
 export interface RunResult { status: "done" | "turn-limit"; message?: string; turns: number }
@@ -50,7 +51,7 @@ export class AgentRunner {
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
     try {
-      await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
+      if (options.persistTrigger !== false) await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
       for (let turn = 1; turn <= maxTurns; turn++) {
         console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
         try {
@@ -58,16 +59,13 @@ export class AgentRunner {
           const history = await this.db.history.forApp(options.appId);
           const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, tools: options.tools, summary: options.summary, observation, history, countTokens: options.countTokens });
           console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, toolCount: options.tools.length, hasObservation: Boolean(observation) });
-          const requestStartedAt = performance.now();
-          console.info('Model request started', { maxOutputTokens: options.model.maxOutputTokens });
           let generated;
           try {
-            generated = await this.providers.generate({ model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal }, options.credential);
+            generated = await this.providers.generate({ purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal }, options.credential);
           } catch (error) {
-            console.error(`Model request failed (${Math.round(performance.now() - requestStartedAt)}ms)`, diagnosticError(error));
+            console.error('Model request failed', diagnosticError(error));
             throw error;
           }
-          console.info(`Model response (${Math.round(performance.now() - requestStartedAt)}ms)`, sanitizeDiagnostic({ text: generated.text, usage: generated.usage, raw: generated.raw }));
           const code = stripAccidentalFence(generated.text);
           console.info('Executable JavaScript', sanitizeDiagnostic(code));
           await appendHistory(this.db, { appId: options.appId, role: "agent", kind: "javascript", content: code });

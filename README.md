@@ -24,7 +24,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Compact DOM inspection with temporary references, literal history search, in-frame screenshots, and app log retrieval.
 - Durable app database helpers and agent-created custom tools.
 - App-to-shell LLM requests and agent wake-ups.
-- Stable cron registrations and callback dispatch protocol.
+- Stable cron registrations and callback dispatch protocol. Cron callbacks run only while the relevant app runtime and shell are active; this is not server-side or background scheduling.
 - Tailwind's browser runtime and Lucide availability in itsalive apps without imposing a generated framework. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
@@ -97,8 +97,8 @@ itsalive.done(message)
 
 The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. Custom tools receive the same API object as `env.itsalive` alongside `document`, `window`, and `fetch`.
 
-Generated apps should keep natural, reasonably sized state in semantic HTML and use `itsalive.db` for large, binary, or query-heavy data. Meaningful application UI must use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should normally use light DOM so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply.
+Generated apps should keep natural, reasonably sized state in persistent semantic HTML and use `itsalive.db` for large, binary, or query-heavy data. The system prompt strongly requires meaningful application UI to use idempotent native Custom Elements because documents and scripts may be restored at any time. Components should preserve restored light DOM and normally use it so global Tailwind utilities—including utilities added dynamically at runtime—continue to apply. This is a generation contract rather than runtime output validation.
 
 ## Security notes
 
-Generated app JavaScript intentionally has broad control over its own origin and can use browser/device/network APIs. Origin isolation prevents direct access to other apps and the shell. The runtime does not provide a fine-grained capability sandbox. Review the product threat model in `CONCEPT.md` before production deployment, protect the root origin, and never share credentials through parent-domain cookies.
+Generated app JavaScript intentionally has broad control over its own origin and can use browser/device/network APIs. Origin isolation prevents direct access to other apps and the shell. The runtime does not provide a fine-grained capability sandbox. Protect the root origin, avoid parent-domain cookies, and remember that provider credentials belong only to the shell origin and are never passed to generated app code.

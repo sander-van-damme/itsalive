@@ -18,8 +18,21 @@ export class ProviderRegistry {
     if (!adapter) throw new Error(`Unknown LLM provider: ${id}`);
     return adapter;
   }
-  generate(request: GenerateRequest, credential?: Credential): Promise<GenerateResult> {
-    return this.get(request.model.provider).generate(request, credential);
+  async generate(request: GenerateRequest, credential?: Credential): Promise<GenerateResult> {
+    const startedAt = performance.now();
+    const label = request.purpose ?? 'generation';
+    console.groupCollapsed(`[itsalive:llm] ${label} · ${request.model.provider}/${request.model.model}`);
+    console.info('Request', sanitizeDiagnostic({ purpose: label, provider: request.model.provider, model: request.model.model, system: request.system, messages: request.messages, maxOutputTokens: request.maxOutputTokens, modelOptions: request.model.options }));
+    try {
+      const result = await this.get(request.model.provider).generate(request, credential);
+      console.info(`Response (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic({ text: result.text, usage: result.usage, raw: result.raw }));
+      return result;
+    } catch (error) {
+      console.error(`Request failed (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic(error instanceof Error ? { name: error.name, message: error.message, stack: error.stack, ...('diagnostic' in error ? { diagnostic: error.diagnostic } : {}) } : error));
+      throw error;
+    } finally {
+      console.groupEnd();
+    }
   }
 }
 
