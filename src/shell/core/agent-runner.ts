@@ -290,7 +290,7 @@ async function executeGeneratedCommand(
   console.info('Observation', sanitizeDiagnostic(observation));
   await appendHistory(db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
   return { result, observation };
-
+}
 
 function extractExecutableJavaScript(text: string): string {
   const trimmed = text.trim();
