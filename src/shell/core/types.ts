@@ -50,7 +50,7 @@ export interface GenerateRequest {
 
 export interface GenerateResult {
   text: string;
-  usage?: { inputTokens?: number; outputTokens?: number };
+  usage?: { inputTokens?: number; outputTokens?: number; cost?: number };
   raw?: unknown;
 }
 

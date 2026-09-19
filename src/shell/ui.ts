@@ -9,6 +9,18 @@ export interface InteractionPrompt { id: string; content: string; confirmLabel: 
 export interface ResumePrompt { id: string; content: string; actionLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
+export interface UsageValue {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  cost?: number;
+  costComplete: boolean;
+  latestContextTokens?: number;
+  contextCapacity?: number;
+  keyUsage?: number;
+  keyLimit?: number | null;
+  keyLimitRemaining?: number | null;
+}
 export type RuntimeViewState = 'loading' | 'ready' | 'problem';
 type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
@@ -23,12 +35,15 @@ export interface ShellActions {
   resolveInteractionPrompt(id: string, accepted: boolean): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
+  refreshUsage(): Promise<void>;
   exportLogs(): Promise<void>;
   reloadApp(): void;
 }
 
 const esc = (value: string) => value.replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase() || 'IA';
+const compactTokens = (value: number) => value < 1_000 ? String(Math.round(value)) : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
+const money = (value: number) => String.fromCharCode(36) + (value > 0 && value < 1 ? value.toFixed(4) : value.toFixed(2));
 export function friendlyError(error: unknown, appName = 'This app'): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/iframe|not connected|not available|not ready/i.test(message)) return `${appName} isn't ready yet. Try reloading it.`;
@@ -46,6 +61,8 @@ export class ShellUI {
   private resumePrompt?: ResumePrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
+  private usage: UsageValue = { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true };
+  private usageOpen = false;
   private busy = false;
   private agentProgress = '';
   private appUpdating = false;
@@ -100,6 +117,11 @@ export class ShellUI {
     this.modelContextTokens = tokens;
     const node = this.mount.querySelector<HTMLElement>('[data-model-context]');
     if (node) node.textContent = `Auto Router context capacity: ${tokens == null ? 'Not loaded yet' : `${tokens.toLocaleString()} tokens`}. This is loaded from OpenRouter rather than hardcoded.`;
+  }
+
+  setUsage(usage: UsageValue): void {
+    this.usage = { ...usage };
+    this.renderRail();
   }
 
   setBusy(busy: boolean): void {
@@ -225,8 +247,33 @@ export class ShellUI {
   }
 
   private renderGlobalActions(): string {
+    const sessionTotal = this.usage.inputTokens + this.usage.outputTokens;
+    const usageLabel = this.usage.cost !== undefined ? `${money(this.usage.cost)}${this.usage.costComplete ? '' : '+'}` : `${compactTokens(sessionTotal)} tok`;
+    const context = this.usage.latestContextTokens !== undefined && this.usage.contextCapacity !== undefined
+      ? `${compactTokens(this.usage.latestContextTokens)} / ${compactTokens(this.usage.contextCapacity)}`
+      : 'Not measured yet';
+    const keySpend = this.usage.keyUsage !== undefined ? money(this.usage.keyUsage) : 'Not loaded';
+    const remaining = typeof this.usage.keyLimitRemaining === 'number' ? money(this.usage.keyLimitRemaining) : this.usage.keyLimitRemaining === null ? 'No key limit' : 'Not loaded';
+    const cost = this.usage.cost !== undefined
+      ? `${money(this.usage.cost)}${this.usage.costComplete ? '' : '+ known'}`
+      : this.usage.requests ? 'Not reported' : '$0.00';
+    const costLabel = this.usage.costComplete ? 'Session cost' : 'Known session cost';
+    const usagePopover = this.usageOpen ? `<div class="popover usage-popover" data-usage-popover>
+        <strong>OpenRouter usage</strong>
+        <dl>
+          <div><dt>This session</dt><dd>${esc(compactTokens(this.usage.inputTokens))} in · ${esc(compactTokens(this.usage.outputTokens))} out</dd></div>
+          <div><dt>${esc(costLabel)}</dt><dd>${esc(cost)}</dd></div>
+          <div><dt>Current context</dt><dd>${esc(context)}</dd></div>
+          <div><dt>Key spend</dt><dd>${esc(keySpend)}</dd></div>
+          <div><dt>Key remaining</dt><dd>${esc(remaining)}</dd></div>
+        </dl>
+      </div>` : '';
     return `<nav class="global-actions" aria-label="Global controls">
       <button class="icon-button quiet" data-mobile-app type="button" aria-label="View app"><i data-lucide="panel-left" aria-hidden="true"></i><span>App</span></button>
+      <div class="usage-anchor">
+        <button class="usage-button ${this.usageOpen ? 'active' : ''}" data-usage type="button" aria-label="OpenRouter usage: ${esc(usageLabel)}" aria-expanded="${this.usageOpen}"><i data-lucide="circle-gauge" aria-hidden="true"></i><span>${esc(usageLabel)}</span></button>
+        ${usagePopover}
+      </div>
       <button class="icon-button quiet ${this.view === 'settings' ? 'active' : ''}" data-settings type="button" aria-label="Settings"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></button>
       <button class="icon-button quiet" data-theme type="button" aria-label="Use ${this.theme === 'light' ? 'dark' : 'light'} theme"><i data-lucide="${this.theme === 'light' ? 'moon' : 'sun'}" aria-hidden="true"></i><span>Theme</span></button>
     </nav>`;
@@ -238,14 +285,21 @@ export class ShellUI {
       localStorage.setItem('itsalive.sidebar', this.collapsed ? 'collapsed' : 'expanded');
       this.renderRail();
     };
+    rail.querySelector<HTMLButtonElement>('[data-usage]')!.onclick = () => {
+      this.usageOpen = !this.usageOpen;
+      if (this.usageOpen) { this.switcherOpen = false; this.actionsOpen = false; }
+      this.renderRail();
+      if (this.usageOpen) void this.actions.refreshUsage();
+    };
     rail.querySelector<HTMLButtonElement>('[data-theme]')!.onclick = () => {
+      this.usageOpen = false;
       this.theme = this.theme === 'light' ? 'dark' : 'light';
       localStorage.setItem('itsalive.theme', this.theme);
       this.renderRail();
     };
-    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.view = this.view === 'settings' && this.active ? 'workspace' : 'settings'; this.collapsed = false; this.renderRail(); };
-    rail.querySelector<HTMLButtonElement>('[data-switcher]')?.addEventListener('click', () => { this.switcherOpen = !this.switcherOpen; this.actionsOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
-    rail.querySelector<HTMLButtonElement>('[data-app-menu]')?.addEventListener('click', () => { this.actionsOpen = !this.actionsOpen; this.switcherOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
+    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.usageOpen = false; this.view = this.view === 'settings' && this.active ? 'workspace' : 'settings'; this.collapsed = false; this.renderRail(); };
+    rail.querySelector<HTMLButtonElement>('[data-switcher]')?.addEventListener('click', () => { this.switcherOpen = !this.switcherOpen; this.actionsOpen = false; this.usageOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
+    rail.querySelector<HTMLButtonElement>('[data-app-menu]')?.addEventListener('click', () => { this.actionsOpen = !this.actionsOpen; this.switcherOpen = false; this.usageOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
     rail.querySelector<HTMLButtonElement>('[data-launcher]')?.addEventListener('click', () => { this.view = 'launcher'; this.renderRail(); });
     rail.querySelector<HTMLButtonElement>('[data-mobile-app]')!.onclick = () => { this.mobileView = 'app'; this.renderRail(); };
     this.mount.querySelector<HTMLButtonElement>('[data-mobile-chat]')!.onclick = () => { this.mobileView = 'chat'; this.renderRail(); };
@@ -375,6 +429,7 @@ export class ShellUI {
           <div class="field"><label for="apiKey">OpenRouter API key</label><input id="apiKey" type="password" required value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Paste your OpenRouter API key"></div>
           <p class="security-note">The key is stored by this site in your browser and is never shared with generated apps. Avoid saving a key on a shared device.</p>
           <p class="security-note" data-model-context>Auto Router context capacity: ${esc(contextCapacity)}. This is loaded from OpenRouter rather than hardcoded.</p>
+          <p class="security-note">Session usage and key spend are shown in the usage control at the bottom of the sidebar.</p>
         </section>
         <section class="settings-section" aria-labelledby="context-test-heading"><h2 id="context-test-heading">Context testing</h2>
           <p>Use this while testing to vary how much prior shell history can be sent on each agent turn.</p>
@@ -441,7 +496,7 @@ export class ShellUI {
 
   private focusFirstMenuItem(): void { requestAnimationFrame(() => this.mount.querySelector<HTMLButtonElement>('[role="menu"] button')?.focus()); }
   private handleDocumentKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || (!this.switcherOpen && !this.actionsOpen)) return;
-    this.switcherOpen = false; this.actionsOpen = false; this.renderRail();
+    if (event.key !== 'Escape' || (!this.switcherOpen && !this.actionsOpen && !this.usageOpen)) return;
+    this.switcherOpen = false; this.actionsOpen = false; this.usageOpen = false; this.renderRail();
   };
 }

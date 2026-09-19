@@ -10,7 +10,7 @@ function actions(): ShellActions {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
     resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
-    renameApp: vi.fn().mockResolvedValue(undefined),
+    refreshUsage: vi.fn().mockResolvedValue(undefined), renameApp: vi.fn().mockResolvedValue(undefined),
     exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
 }
@@ -120,6 +120,45 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('[data-result]')?.textContent).toContain('OpenRouter connection works');
     ui.setModelContextCapacity(1_000_000);
     expect(document.querySelector('[data-model-context]')?.textContent).toContain('1,000,000 tokens');
+  });
+
+  it('shows session spend, context, and key usage as separate usage concepts', () => {
+    const { ui, callbacks } = mounted();
+    ui.setUsage({
+      requests: 4,
+      inputTokens: 12_000,
+      outputTokens: 3_000,
+      cost: 0.0123,
+      costComplete: false,
+      latestContextTokens: 4_200,
+      contextCapacity: 1_000_000,
+      keyUsage: 2.5,
+      keyLimitRemaining: 7.5,
+    });
+
+    const button = document.querySelector<HTMLButtonElement>('[data-usage]')!;
+    expect(button.getAttribute('aria-label')).toContain('$0.0123+');
+    button.click();
+
+    expect(callbacks.refreshUsage).toHaveBeenCalledOnce();
+    const popover = document.querySelector('[data-usage-popover]')!;
+    expect(popover.textContent).toContain('This session');
+    expect(popover.textContent).toContain('Known session cost');
+    expect(popover.textContent).toContain('$0.0123+ known');
+    expect(popover.textContent).toContain('Current context');
+    expect(popover.textContent).toContain('Key spend');
+    expect(popover.textContent).toContain('Key remaining');
+  });
+
+  it('closes the usage disclosure when another shell menu opens', () => {
+    const { ui } = mounted();
+    ui.setUsage({ requests: 1, inputTokens: 100, outputTokens: 20, costComplete: false });
+    document.querySelector<HTMLButtonElement>('[data-usage]')!.click();
+    expect(document.querySelector('[data-usage-popover]')).not.toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[data-switcher]')!.click();
+    expect(document.querySelector('[data-usage-popover]')).toBeNull();
+    expect(document.querySelector('.app-switcher')).not.toBeNull();
   });
 
   it('routes creation to Settings until an LLM is configured', () => {

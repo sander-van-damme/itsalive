@@ -102,7 +102,7 @@ describe("ProviderRegistry", () => {
     const fetchMock = vi.fn().mockResolvedValue(new Response([
       'data: {"choices":[{"delta":{"content":"first"}}]}\n\n',
       'data: {"choices":[{"delta":{"content":" second"}}]}\n\n',
-      'data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2}}\n\n',
+      'data: {"choices":[],"usage":{"prompt_tokens":4,"completion_tokens":2,"cost":0.0012}}\n\n',
       'data: [DONE]\n\n',
     ].join(""), { status: 200, headers: { "content-type": "text/event-stream" } }));
     vi.stubGlobal("fetch", fetchMock);
@@ -117,10 +117,28 @@ describe("ProviderRegistry", () => {
 
     expect(deltas).toEqual(["first", " second"]);
     expect(result.text).toBe("first second");
-    expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2 });
+    expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2, cost: 0.0012 });
     const request = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body));
     expect(request.stream).toBe(true);
+    expect(request.usage).toEqual({ include: true });
     expect(request).not.toHaveProperty("max_tokens");
+  });
+
+
+  it("reports missing usage metadata to the registry instead of silently skipping accounting", async () => {
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const onUsage = vi.fn();
+    const registry = new ProviderRegistry(onUsage).register({
+      id: "local",
+      generate: async () => ({ text: "ok" }),
+    });
+
+    await registry.generate({ model: { provider: "local", model: "x" }, system: "system", messages: [] });
+
+    expect(onUsage).toHaveBeenCalledOnce();
+    expect(onUsage).toHaveBeenCalledWith(undefined);
   });
 
 });

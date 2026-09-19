@@ -11,6 +11,8 @@ export class ProviderResponseError extends Error {
 export class ProviderRegistry {
   private readonly adapters = new Map<string, LlmAdapter>();
 
+  constructor(private readonly onUsage?: (usage: GenerateResult["usage"]) => void) {}
+
   register(adapter: LlmAdapter): this {
     this.adapters.set(adapter.id, adapter);
     return this;
@@ -56,6 +58,7 @@ export class ProviderRegistry {
         provider: compactProviderMetadata(result.raw),
         ...(streaming ? { streaming: Boolean(adapter.stream) } : {}),
       }));
+      this.onUsage?.(result.usage);
       return result;
     } catch (error) {
       console.error(`Request failed (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic(error instanceof Error ? {
@@ -91,7 +94,14 @@ interface Json {
   [key: string]: unknown;
   error?: { message?: string };
   choices?: Array<{ message?: { content?: string }; delta?: { content?: string }; finish_reason?: string; native_finish_reason?: string }>;
-  usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number };
+  usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cost?: number };
+}
+
+interface ChatCompletionBody {
+  model: string;
+  messages: Array<{ role: string; content: string }>;
+  usage: { include: true };
+  [key: string]: unknown;
 }
 
 interface HttpAdapterOptions {
@@ -120,11 +130,12 @@ function headersFor(credential?: Credential): Record<string, string> {
   };
 }
 
-function bodyFor(request: GenerateRequest): Json {
+function bodyFor(request: GenerateRequest): ChatCompletionBody {
   return {
     model: request.model.model,
     messages: [{ role: "system", content: request.system }, ...request.messages],
     ...request.model.options,
+    usage: { include: true },
   };
 }
 
@@ -146,7 +157,11 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
       }
       return {
         text,
-        usage: { inputTokens: json.usage?.prompt_tokens, outputTokens: json.usage?.completion_tokens },
+        usage: {
+          inputTokens: json.usage?.prompt_tokens ?? json.usage?.input_tokens,
+          outputTokens: json.usage?.completion_tokens ?? json.usage?.output_tokens,
+          cost: json.usage?.cost,
+        },
         raw: json,
       };
     },
@@ -193,6 +208,7 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
     if (json.usage) usage = {
       inputTokens: json.usage.prompt_tokens ?? json.usage.input_tokens,
       outputTokens: json.usage.completion_tokens ?? json.usage.output_tokens,
+      cost: json.usage.cost,
     };
     return false;
   };
@@ -215,8 +231,8 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
   return { text, usage, raw: last };
 }
 
-export function createDefaultRegistry(): ProviderRegistry {
-  return new ProviderRegistry().register(
+export function createDefaultRegistry(onUsage?: (usage: GenerateResult["usage"]) => void): ProviderRegistry {
+  return new ProviderRegistry(onUsage).register(
     createHttpAdapter({ id: "openrouter", endpoint: "https://openrouter.ai/api/v1/chat/completions" }),
   );
 }
