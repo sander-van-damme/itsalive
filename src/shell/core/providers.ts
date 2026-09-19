@@ -28,11 +28,11 @@ export class ProviderRegistry {
     return this.trace(request, credential, false);
   }
 
-  async generateStreaming(request: GenerateRequest, onText: (delta: string) => void, credential?: Credential): Promise<GenerateResult> {
-    return this.trace(request, credential, true, onText);
+  async generateStreaming(request: GenerateRequest, onText: (delta: string) => void, credential?: Credential, onActivity?: () => void): Promise<GenerateResult> {
+    return this.trace(request, credential, true, onText, onActivity);
   }
 
-  private async trace(request: GenerateRequest, credential: Credential | undefined, streaming: boolean, onText?: (delta: string) => void): Promise<GenerateResult> {
+  private async trace(request: GenerateRequest, credential: Credential | undefined, streaming: boolean, onText?: (delta: string) => void, onActivity?: () => void): Promise<GenerateResult> {
     const startedAt = performance.now();
     const label = request.purpose ?? 'generation';
     console.groupCollapsed(`[itsalive:llm] ${label} · ${request.model.provider}/${request.model.model}${streaming ? ' · stream' : ''}`);
@@ -48,7 +48,7 @@ export class ProviderRegistry {
     try {
       const adapter = this.get(request.model.provider);
       const result = streaming && adapter.stream
-        ? await adapter.stream(request, credential, onText!)
+        ? await adapter.stream(request, credential, onText!, onActivity)
         : await adapter.generate(request, credential);
       if (streaming && !adapter.stream && result.text) onText?.(result.text);
       console.info(`Response (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic({
@@ -165,7 +165,7 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
         raw: json,
       };
     },
-    async stream(request, credential, onText) {
+    async stream(request, credential, onText, onActivity) {
       const response = await fetch(options.endpoint, {
         method: "POST",
         headers: headersFor(credential),
@@ -174,12 +174,12 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
       });
       if (!response.ok) await checkedJson(response);
       if (!response.body) throw new ProviderResponseError("Provider returned no streaming body", { status: response.status });
-      return readOpenAiStream(response.body, onText);
+      return readOpenAiStream(response.body, onText, onActivity);
     },
   };
 }
 
-async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta: string) => void): Promise<GenerateResult> {
+async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta: string) => void, onActivity?: () => void): Promise<GenerateResult> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -216,6 +216,7 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
   let done = false;
   while (!done) {
     const chunk = await reader.read();
+    if (chunk.value?.byteLength) onActivity?.();
     buffer += decoder.decode(chunk.value ?? new Uint8Array(), { stream: !chunk.done });
     let separator = buffer.match(/\r?\n\r?\n/);
     while (separator?.index !== undefined) {
