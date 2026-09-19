@@ -31,6 +31,7 @@ describe('deriveAppName', () => {
 
   it('turns common action intents into noun-like app titles', () => {
     expect(deriveAppName('create an app that helps me with learning musical chords, use the violin as the example instrument')).toBe('Musical Chord Trainer');
+    expect(deriveAppName('Create an app that helps with learning the musical chords. Use the violin as the example instrument.')).toBe('Musical Chord Trainer');
     expect(deriveAppName('build me a tool to track my reading sessions')).toBe('Reading Session Tracker');
     expect(deriveAppName('I need an application for planning weekly meals')).toBe('Weekly Meal Planner');
   });
