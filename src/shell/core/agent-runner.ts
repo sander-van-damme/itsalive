@@ -85,6 +85,7 @@ export class AgentRunner {
     const startedAt = performance.now();
     const elapsedMs = () => Math.round(performance.now() - startedAt);
     let lastProgressAt = startedAt;
+    let firstProviderActivityMs: number | undefined;
     let firstStreamTextMs: number | undefined;
     let firstCompleteCommandMs: number | undefined;
     let firstExecutionMs: number | undefined;
@@ -188,6 +189,10 @@ export class AgentRunner {
                 const commands = commandParser.push(delta);
                 if (commands.length && firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
                 for (const code of commands) enqueueCommand(code);
+              },
+              () => {
+                touchProgress();
+                if (firstProviderActivityMs == null) firstProviderActivityMs = recordMilestone('first-provider-activity');
               },
             );
             await executionQueue;
@@ -348,6 +353,7 @@ export class AgentRunner {
       const totalMs = elapsedMs();
       console.info('Timing summary', {
         totalMs,
+        firstProviderActivityMs,
         firstStreamTextMs,
         firstCompleteCommandMs,
         firstExecutionMs,
@@ -400,12 +406,14 @@ async function generateWithStreaming(
   request: Parameters<ProviderRegistry["generate"]>[0],
   credential: Credential | undefined,
   onText: (delta: string) => void,
+  onActivity?: () => void,
 ) {
   const streaming = (providers as ProviderRegistry & {
-    generateStreaming?: (request: Parameters<ProviderRegistry["generate"]>[0], onText: (delta: string) => void, credential?: Credential) => ReturnType<ProviderRegistry["generate"]>;
+    generateStreaming?: (request: Parameters<ProviderRegistry["generate"]>[0], onText: (delta: string) => void, credential?: Credential, onActivity?: () => void) => ReturnType<ProviderRegistry["generate"]>;
   }).generateStreaming;
-  if (typeof streaming === "function") return streaming.call(providers, request, onText, credential);
+  if (typeof streaming === "function") return streaming.call(providers, request, onText, credential, onActivity);
   const result = await providers.generate(request, credential);
+  onActivity?.();
   if (result.text) onText(result.text);
   return result;
 }
