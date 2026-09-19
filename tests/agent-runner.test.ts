@@ -1,12 +1,13 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentRunner, type ExecutionResult } from '../src/shell/core/agent-runner';
+import { AGENT_IDLE_TIMEOUT_REASON, AGENT_SAFETY_TIMEOUT_REASON } from '../src/shell/core/run-lifecycle';
 import type { HistoryEntry } from '../src/shell/core/types';
 
 const appId = '550e8400-e29b-41d4-a716-446655440000';
 const model = { provider: 'local', model: 'test-model', maxContextTokens: 10_000, outputHeadroomTokens: 100, historyContextTokens: 2_000 };
 
 describe('AgentRunner lifecycle', () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
   it('traces each turn and reports a deterministic turn-limit result', async () => {
     const entries: HistoryEntry[] = [];
@@ -231,6 +232,58 @@ describe('AgentRunner lifecycle', () => {
     })).rejects.toMatchObject({ name: 'AbortError' });
     expect(providers.generate).not.toHaveBeenCalled();
     expect(groupEnds).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops an inactive run with the product idle-timeout reason', async () => {
+    vi.useFakeTimers();
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = {
+      generateStreaming: vi.fn((request: { signal?: AbortSignal }) => new Promise((_resolve, reject) => {
+        request.signal?.addEventListener('abort', () => reject(new Error('BodyStreamBuffer was aborted')), { once: true });
+      })),
+      generate: vi.fn(),
+    };
+    const executor = { execute: vi.fn() };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const run = new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Make it complex', model,
+      idleTimeoutMs: 50, maxDurationMs: 1_000,
+    });
+    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_IDLE_TIMEOUT_REASON });
+    await vi.advanceTimersByTimeAsync(51);
+    await assertion;
+  });
+
+  it('lets streamed progress outlive the idle watchdog until the safety ceiling', async () => {
+    vi.useFakeTimers();
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = {
+      generateStreaming: vi.fn((request: { signal?: AbortSignal }, onText: (delta: string) => void) => new Promise((_resolve, reject) => {
+        const timer = setInterval(() => onText(' '), 30);
+        request.signal?.addEventListener('abort', () => {
+          clearInterval(timer);
+          reject(new Error('stream transport aborted'));
+        }, { once: true });
+      })),
+      generate: vi.fn(),
+    };
+    const executor = { execute: vi.fn() };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const run = new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Keep building', model,
+      idleTimeoutMs: 50, maxDurationMs: 125,
+    });
+    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_SAFETY_TIMEOUT_REASON });
+    await vi.advanceTimersByTimeAsync(126);
+    await assertion;
   });
 
   it('does not persist a platform-owned initial-build trigger as user chat', async () => {
