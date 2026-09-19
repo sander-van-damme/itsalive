@@ -125,6 +125,30 @@ describe("ProviderRegistry", () => {
   });
 
 
+  it("reports stream transport activity separately from visible text", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response([
+      'data: {"choices":[{"delta":{"reasoning":"thinking"}}]}\n\n',
+      'data: {"choices":[{"delta":{"content":"done"}}]}\n\n',
+      'data: [DONE]\n\n',
+    ].join(""), { status: 200, headers: { "content-type": "text/event-stream" } }));
+    vi.stubGlobal("fetch", fetchMock);
+    const adapter = createHttpAdapter({ id: "custom", endpoint: "https://example.test/generate" });
+    const deltas: string[] = [];
+    const activity = vi.fn();
+
+    const result = await adapter.stream!(
+      { model: { provider: "custom", model: "x" }, system: "system", messages: [] },
+      undefined,
+      delta => deltas.push(delta),
+      activity,
+    );
+
+    expect(activity).toHaveBeenCalled();
+    expect(deltas).toEqual(["done"]);
+    expect(result.text).toBe("done");
+  });
+
+
   it("reports missing usage metadata to the registry instead of silently skipping accounting", async () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
