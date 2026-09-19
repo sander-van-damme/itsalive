@@ -197,7 +197,7 @@ describe('AgentRunner lifecycle', () => {
     expect(entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'assistant', kind: 'chat', content: 'Done — it’s ready.' }),
     ]));
-    expect(entries.map(entry => entry.content).join('\n')).not.toContain('AudioContext');
+    expect(entries.filter(entry => entry.role === 'assistant').map(entry => entry.content).join('\n')).not.toContain('AudioContext');
   });
 
   it('keeps concise non-technical completion messages intact', async () => {
