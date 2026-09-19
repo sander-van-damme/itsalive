@@ -50,7 +50,7 @@ if (stored) {
 const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
-const confirmedReactionQueue = new Map<string, ReactionBatch>();
+const confirmedReactionQueue = new Map<string, { batch: ReactionBatch; intent: string }>();
 const pausedRuns = new PausedRunStore();
 let jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 };
 
@@ -85,7 +85,7 @@ const ui = new ShellUI(root, {
   },
   stopAgent: () => { stopActiveRun('user-stop'); },
   resumePausedRun: async id => { await resumePausedRun(id); },
-  resolveInteractionPrompt: async (id, accepted) => { await resolveInteractionPrompt(id, accepted); },
+  resolveInteractionPrompt: async (id, intent) => { await resolveInteractionPrompt(id, intent); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -437,7 +437,8 @@ function syncInteractionPrompt(): void {
     ? {
         id: confirmation.id,
         content: interactionConfirmationMessage(confirmation.batch),
-        confirmLabel: 'Adapt app',
+        intentPlaceholder: 'Describe what you expected to happen…',
+        confirmLabel: 'Use this intent',
         dismissLabel: 'Not now',
       }
     : undefined;
@@ -464,10 +465,10 @@ async function deliverReactionBatch(batch: ReactionBatch): Promise<void> {
   if (activeId === appId) syncInteractionPrompt();
 }
 
-async function resolveInteractionPrompt(id: string, accepted: boolean): Promise<void> {
+async function resolveInteractionPrompt(id: string, intent?: string): Promise<void> {
   const appId = activeId;
   if (!appId) return;
-  const resolution = reactionConfirmationGates.get(appId)?.resolve(id, accepted) ?? { kind: 'missing' as const };
+  const resolution = reactionConfirmationGates.get(appId)?.resolve(id, intent) ?? { kind: 'missing' as const };
   if (resolution.kind === 'missing') {
     await log('warn', 'reaction', 'Ignored stale interaction confirmation response', { promptId: id }, appId);
     syncInteractionPrompt();
@@ -475,24 +476,25 @@ async function resolveInteractionPrompt(id: string, accepted: boolean): Promise<
   }
 
   syncInteractionPrompt();
-  await log('info', 'reaction', accepted ? 'Interaction adaptation confirmed' : 'Interaction adaptation dismissed', {
+  await log('info', 'reaction', resolution.kind === 'confirmed' ? 'Interaction intent confirmed' : 'Interaction adaptation dismissed', {
     promptId: resolution.confirmation.id,
     size: resolution.confirmation.batch.events.length,
+    ...(resolution.kind === 'confirmed' ? { intent: resolution.intent } : {}),
   }, appId);
-  if (!accepted) return;
+  if (resolution.kind !== 'confirmed') return;
 
-  confirmedReactionQueue.set(appId, resolution.confirmation.batch);
+  confirmedReactionQueue.set(appId, { batch: resolution.confirmation.batch, intent: resolution.intent });
   void startQueuedConfirmedReaction();
 }
 
 async function startQueuedConfirmedReaction(): Promise<void> {
   const appId = activeId;
   if (!appId || running || runtime.state !== 'ready') return;
-  const batch = confirmedReactionQueue.get(appId);
-  if (!batch) return;
+  const queued = confirmedReactionQueue.get(appId);
+  if (!queued) return;
   confirmedReactionQueue.delete(appId);
-  const accepted = await runAgent(formatReactionBatch(batch), false);
-  if (!accepted) confirmedReactionQueue.set(appId, batch);
+  const accepted = await runAgent(formatReactionBatch(queued.batch, queued.intent), false);
+  if (!accepted) confirmedReactionQueue.set(appId, queued);
 }
 
 async function fireDueSchedules(): Promise<void> {
