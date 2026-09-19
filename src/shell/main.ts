@@ -260,21 +260,24 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   } finally {
     if (activeRun === runController) activeRun = undefined;
     running = false;
-    const stillActive = activeId === app.id;
-    if (stillActive) {
-      ui.setBusy(false);
-      ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
-      syncResumePrompt();
-      await refreshMessages();
+    try {
+      const stillActive = activeId === app.id;
+      if (stillActive) {
+        ui.setBusy(false);
+        ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
+        syncResumePrompt();
+        await refreshMessages();
+      }
+      void startPendingInitialBuild();
+      void startQueuedConfirmedReaction();
+      if (stillActive && environmentalObservations.length && runtime.state === 'ready') {
+        const trigger = environmentalObservations.splice(0).join('\n\n');
+        void runAgent(trigger, false);
+      }
+    } finally {
+      resolveRunFinished();
+      if (activeRunFinished === runFinished) activeRunFinished = undefined;
     }
-    void startPendingInitialBuild();
-    void startQueuedConfirmedReaction();
-    if (stillActive && environmentalObservations.length && runtime.state === 'ready') {
-      const trigger = environmentalObservations.splice(0).join('\n\n');
-      void runAgent(trigger, false);
-    }
-    resolveRunFinished();
-    if (activeRunFinished === runFinished) activeRunFinished = undefined;
   }
   return true;
 }
