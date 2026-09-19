@@ -11,7 +11,7 @@ function actions(): ShellActions {
     sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
     resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     refreshUsage: vi.fn().mockResolvedValue(undefined), renameApp: vi.fn().mockResolvedValue(undefined),
-    exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
+    checkDiagnostics: vi.fn().mockResolvedValue(12), exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
 }
 
@@ -163,6 +163,29 @@ describe('ShellUI workspace', () => {
     document.querySelector<HTMLButtonElement>('[data-switcher]')!.click();
     expect(document.querySelector('[data-usage-popover]')).toBeNull();
     expect(document.querySelector('.app-switcher')).not.toBeNull();
+  });
+
+  it('preflights diagnostic persistence before a test', async () => {
+    const { callbacks } = mounted();
+    document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
+
+    const status = document.querySelector<HTMLElement>('[data-diagnostics-status]')!;
+    expect(status.textContent).toContain('Check logging before a test');
+
+    document.querySelector<HTMLButtonElement>('[data-check-diagnostics]')!.click();
+    await vi.waitFor(() => expect(callbacks.checkDiagnostics).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(status.textContent).toContain('Logging works'));
+    expect(status.textContent).toContain('12 diagnostic entries');
+  });
+
+  it('surfaces diagnostic preflight failure instead of silently proceeding', async () => {
+    const { callbacks } = mounted();
+    callbacks.checkDiagnostics = vi.fn().mockRejectedValue(new Error('IndexedDB unavailable'));
+    document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
+
+    document.querySelector<HTMLButtonElement>('[data-check-diagnostics]')!.click();
+    const status = document.querySelector<HTMLElement>('[data-diagnostics-status]')!;
+    await vi.waitFor(() => expect(status.textContent).toContain('Do not start a test yet'));
   });
 
   it('keeps launcher and API-key copy concise', () => {
