@@ -5,6 +5,7 @@ import { dbSet, openAppDatabase, STORES } from '../src/app/db';
 import { installAutosave, loadSavedDocument } from '../src/app/persistence';
 import { ShellDatabase } from '../src/shell/core/database';
 import { deleteApp } from '../src/shell/core/app-deletion';
+import { DiagnosticLog, buildDiagnosticExport } from '../src/shell/core/diagnostic-log';
 
 const APP_ID = '550e8400-e29b-41d4-a716-446655440000';
 
@@ -78,6 +79,34 @@ describe('shell persistence', () => {
     expect(await db.history.forApp(otherId)).toHaveLength(1);
     expect(await db.logs.forApp(otherId)).toHaveLength(1);
     expect(await db.schedules.forApp(otherId)).toHaveLength(1);
+  });
+
+  it('keeps recorded diagnostics readable after shell reload and app deletion', async () => {
+    const databaseName = `shell-${crypto.randomUUID()}`;
+    const firstShell = new ShellDatabase(databaseName);
+    await firstShell.apps.put({ id: APP_ID, name: 'Test', prompt: 'Build', createdAt: 1, updatedAt: 1 });
+    await firstShell.history.add({ appId: APP_ID, timestamp: 2, role: 'user', kind: 'chat', content: 'build something' });
+
+    const diagnostics = new DiagnosticLog(firstShell, () => APP_ID);
+    await diagnostics.write('info', 'logging', 'Diagnostic storage self-check', { probe: 'roundtrip' }, APP_ID);
+    await diagnostics.flush();
+
+    // A new wrapper over the same IndexedDB database simulates a shell reload.
+    const reloadedShell = new ShellDatabase(databaseName);
+    expect(await reloadedShell.logs.forApp(APP_ID)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ source: 'logging', message: 'Diagnostic storage self-check' }),
+    ]));
+
+    await reloadedShell.apps.delete(APP_ID);
+    expect(await reloadedShell.apps.get(APP_ID)).toBeUndefined();
+
+    const logs = await reloadedShell.logs.all();
+    const history = await reloadedShell.history.all();
+    const exported = buildDiagnosticExport(logs, history);
+
+    expect(exported).toContain('Diagnostic storage self-check');
+    expect(exported).toContain('roundtrip');
+    expect(exported.trim().length).toBeGreaterThan(0);
   });
 
   it('continues app deletion when origin cleanup fails', async () => {
