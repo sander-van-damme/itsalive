@@ -11,7 +11,7 @@ export class ProviderResponseError extends Error {
 export class ProviderRegistry {
   private readonly adapters = new Map<string, LlmAdapter>();
 
-  constructor(private readonly onUsage?: (usage: NonNullable<GenerateResult["usage"]>) => void) {}
+  constructor(private readonly onUsage?: (usage: GenerateResult["usage"]) => void) {}
 
   register(adapter: LlmAdapter): this {
     this.adapters.set(adapter.id, adapter);
@@ -58,7 +58,7 @@ export class ProviderRegistry {
         provider: compactProviderMetadata(result.raw),
         ...(streaming ? { streaming: Boolean(adapter.stream) } : {}),
       }));
-      if (result.usage) this.onUsage?.(result.usage);
+      this.onUsage?.(result.usage);
       return result;
     } catch (error) {
       console.error(`Request failed (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic(error instanceof Error ? {
@@ -127,8 +127,8 @@ function bodyFor(request: GenerateRequest): Json {
   return {
     model: request.model.model,
     messages: [{ role: "system", content: request.system }, ...request.messages],
-    usage: { include: true },
     ...request.model.options,
+    usage: { include: true },
   };
 }
 
@@ -224,7 +224,7 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
   return { text, usage, raw: last };
 }
 
-export function createDefaultRegistry(onUsage?: (usage: NonNullable<GenerateResult["usage"]>) => void): ProviderRegistry {
+export function createDefaultRegistry(onUsage?: (usage: GenerateResult["usage"]) => void): ProviderRegistry {
   return new ProviderRegistry(onUsage).register(
     createHttpAdapter({ id: "openrouter", endpoint: "https://openrouter.ai/api/v1/chat/completions" }),
   );
