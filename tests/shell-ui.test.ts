@@ -59,15 +59,26 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('.workspace-header > [data-collapse]')).not.toBeNull();
   });
 
-  it('keeps reload and confirmed delete in the app actions menu', () => {
-    vi.spyOn(window, 'confirm').mockReturnValue(true);
+  it('keeps reload in the app menu and confirms deletion in shell UI', async () => {
     const { callbacks } = mounted();
     document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
     document.querySelector<HTMLButtonElement>('[data-reload]')!.click();
     expect(callbacks.reloadApp).toHaveBeenCalledOnce();
+
     document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
     document.querySelector<HTMLButtonElement>('[data-delete]')!.click();
-    expect(callbacks.deleteApp).toHaveBeenCalledWith(app.id);
+    expect(document.querySelector('[role="alertdialog"]')?.textContent).toContain('Delete “FiddleMate”?');
+    expect(callbacks.deleteApp).not.toHaveBeenCalled();
+
+    document.querySelector<HTMLButtonElement>('[data-dialog-cancel]')!.click();
+    expect(document.querySelector('[data-shell-dialog]')).toBeNull();
+    expect(callbacks.deleteApp).not.toHaveBeenCalled();
+
+    document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-delete]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-dialog-confirm-delete]')!.click();
+    await vi.waitFor(() => expect(callbacks.deleteApp).toHaveBeenCalledWith(app.id));
+    expect(document.querySelector('[data-shell-dialog]')).toBeNull();
   });
 
   it('uses concise creation guidance, grows the prompt field, and starts immediately on submit', async () => {
@@ -217,14 +228,54 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('.panel-heading p')?.textContent).toContain('Add and test your OpenRouter API key');
   });
 
-  it('renames from the app menu without changing app identity', () => {
-    const prompt = vi.spyOn(window, 'prompt').mockReturnValue('New Fiddle Name');
+  it('renames in shell UI and keeps validation inside the dialog', async () => {
     const { callbacks } = mounted();
     document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
     document.querySelector<HTMLButtonElement>('[data-rename]')!.click();
-    expect(prompt).toHaveBeenCalledWith('Rename app', app.name);
-    expect(callbacks.renameApp).toHaveBeenCalledWith('New Fiddle Name');
+
+    const form = document.querySelector<HTMLFormElement>('[data-rename-form]')!;
+    const input = document.querySelector<HTMLInputElement>('#app-name')!;
+    expect(document.querySelector('[role="dialog"]')).not.toBeNull();
+    expect(input.value).toBe(app.name);
+
+    input.value = '';
+    form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(document.querySelector('[data-dialog-error]')?.textContent).toContain('Enter a name');
+    expect(callbacks.renameApp).not.toHaveBeenCalled();
+
+    document.querySelector<HTMLInputElement>('#app-name')!.value = app.name;
+    document.querySelector<HTMLFormElement>('[data-rename-form]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    expect(document.querySelector('[data-dialog-error]')?.textContent).toContain('different name');
+    expect(callbacks.renameApp).not.toHaveBeenCalled();
+
+    const updatedInput = document.querySelector<HTMLInputElement>('#app-name')!;
+    updatedInput.value = 'New Fiddle Name';
+    document.querySelector<HTMLFormElement>('[data-rename-form]')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    await vi.waitFor(() => expect(callbacks.renameApp).toHaveBeenCalledWith('New Fiddle Name'));
     expect(callbacks.selectApp).not.toHaveBeenCalled();
+    expect(document.querySelector('[data-shell-dialog]')).toBeNull();
+  });
+
+  it('traps dialog focus, closes on Escape, and returns focus to app actions', async () => {
+    mounted();
+    document.querySelector<HTMLButtonElement>('[data-app-menu]')!.click();
+    document.querySelector<HTMLButtonElement>('[data-rename]')!.click();
+
+    const input = document.querySelector<HTMLInputElement>('#app-name')!;
+    await vi.waitFor(() => expect(document.activeElement).toBe(input));
+    const submit = document.querySelector<HTMLButtonElement>('[data-rename-form] button[type="submit"]')!;
+
+    submit.focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', bubbles: true }));
+    expect(document.activeElement).toBe(input);
+
+    input.focus();
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Tab', shiftKey: true, bubbles: true }));
+    expect(document.activeElement).toBe(submit);
+
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    expect(document.querySelector('[data-shell-dialog]')).toBeNull();
+    await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector('[data-app-menu]')));
   });
 
   it('requires a concrete intent before confirming an interaction adaptation', () => {
