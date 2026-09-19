@@ -22,6 +22,7 @@ const CREATION_PREFIXES = [
 
 const HELPER_PREFIXES = [
   /^(?:that\s+)?(?:helps?|teaches?|shows?|gives?)\s+(?:me|us|users?|people)\s+(?:(?:with|to)\s+)?/i,
+  /^(?:that\s+)?helps?\s+(?:with|to)\s+/i,
   /^(?:that\s+)?(?:lets?|allows?)\s+(?:me|us|users?|people)\s+(?:to\s+)?/i,
 ];
 
