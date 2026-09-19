@@ -25,11 +25,9 @@ describe("agent run lifecycle semantics", () => {
     const controller = new AbortController();
     controller.abort(createAgentAbort("app-switch"));
 
-    expect(normalizeAgentRunFailure(new Error("fetch aborted"), controller.signal)).toMatchObject({
-      kind: "app-switch",
-      resumable: true,
-      userMessage: undefined,
-    });
+    const result = normalizeAgentRunFailure(new Error("fetch aborted"), controller.signal);
+    expect(result).toMatchObject({ kind: "app-switch", resumable: true });
+    expect(result.userMessage).toBeUndefined();
   });
 
   it("stores, consumes, and restores one paused request per app", () => {
