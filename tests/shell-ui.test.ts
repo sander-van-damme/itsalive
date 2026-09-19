@@ -200,6 +200,8 @@ describe('ShellUI workspace', () => {
 
     expect(document.querySelectorAll('.working-state')).toHaveLength(1);
     expect(document.querySelector('.working-state')?.textContent).toContain('Updating the app');
+    expect(document.querySelector('[data-stream]')?.lastElementChild?.classList.contains('working-state')).toBe(true);
+    expect(document.querySelector('.panel > .working-state')).toBeNull();
     expect(document.querySelector('.thinking')).toBeNull();
     expect(document.querySelector('[data-stage-state]')?.textContent).toContain('Updating the app');
     expect(document.querySelector('[data-stage-state]')?.classList.contains('updating')).toBe(true);
