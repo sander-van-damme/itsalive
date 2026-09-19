@@ -50,6 +50,24 @@ describe("SessionUsageTracker", () => {
     });
   });
 
+  it("restores session totals across a shell reload without persisting account metadata", () => {
+    const first = new SessionUsageTracker();
+    first.recordGeneration({ inputTokens: 100, outputTokens: 20, cost: 0.01 });
+    first.recordUnpricedUsage({ inputTokens: 25 });
+    first.setContext(2_400, 1_000_000);
+    first.setKeyInfo({ usage: 3.25, limit: 10, limitRemaining: 6.75 });
+
+    const restored = new SessionUsageTracker(first.state());
+
+    expect(restored.snapshot()).toEqual({
+      requests: 2,
+      inputTokens: 125,
+      outputTokens: 20,
+      cost: 0.01,
+      costComplete: false,
+    });
+  });
+
   it("resets totals and account metadata when the active API key changes", () => {
     const tracker = new SessionUsageTracker();
     tracker.recordGeneration({ inputTokens: 10, outputTokens: 5, cost: 0.001 });

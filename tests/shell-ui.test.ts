@@ -137,14 +137,18 @@ describe('ShellUI workspace', () => {
     });
 
     const button = document.querySelector<HTMLButtonElement>('[data-usage]')!;
-    expect(button.getAttribute('aria-label')).toContain('$0.0123+');
+    expect(button.textContent).toContain('tok');
+    expect(button.textContent).toContain('$0.0123');
+    expect(button.getAttribute('aria-label')).toContain('some requests did not report a price');
+    expect(button.getAttribute('aria-label')).not.toContain('+');
     button.click();
 
     expect(callbacks.refreshUsage).toHaveBeenCalledOnce();
     const popover = document.querySelector('[data-usage-popover]')!;
     expect(popover.textContent).toContain('This session');
     expect(popover.textContent).toContain('Known session cost');
-    expect(popover.textContent).toContain('$0.0123+ known');
+    expect(popover.textContent).toContain('$0.0123');
+    expect(popover.textContent).toContain('Some AI requests did not report a price');
     expect(popover.textContent).toContain('Current context');
     expect(popover.textContent).toContain('Key spend');
     expect(popover.textContent).toContain('Key remaining');

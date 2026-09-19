@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -12,8 +12,25 @@ let runtimeEpoch = 0;
 const jevControllers = new Set<AbortController>();
 const diagnostics = new DiagnosticLog(db, () => activeId);
 diagnostics.installConsoleCapture();
-const sessionUsage = new SessionUsageTracker();
-const registry = createDefaultRegistry(usage => sessionUsage.recordGeneration(usage));
+
+const SESSION_USAGE_STORAGE_KEY = 'itsalive.session-usage-v1';
+function loadSessionUsageState(): Partial<SessionUsageState> | undefined {
+  try {
+    const stored = sessionStorage.getItem(SESSION_USAGE_STORAGE_KEY);
+    if (!stored) return undefined;
+    const parsed = JSON.parse(stored) as unknown;
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed as Partial<SessionUsageState> : undefined;
+  } catch {
+    sessionStorage.removeItem(SESSION_USAGE_STORAGE_KEY);
+    return undefined;
+  }
+}
+const sessionUsage = new SessionUsageTracker(loadSessionUsageState());
+function persistSessionUsage(): void {
+  try { sessionStorage.setItem(SESSION_USAGE_STORAGE_KEY, JSON.stringify(sessionUsage.state())); }
+  catch (error) { console.warn('[itsalive] Could not persist session usage', error); }
+}
+const registry = createDefaultRegistry(usage => { sessionUsage.recordGeneration(usage); persistSessionUsage(); });
 let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
@@ -105,7 +122,7 @@ const ui = new ShellUI(root, {
   exportLogs: async () => {
     await diagnostics.flush();
     const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
-    const contents = buildDiagnosticExport(logs, history, activeId);
+    const contents = buildDiagnosticExport(logs, history);
     downloadText(`itsalive-logs-${Date.now()}.log`, contents || 'No log entries recorded.');
   },
   reloadApp: () => {
@@ -217,7 +234,10 @@ async function loadModelContextCapacity(key: Credential): Promise<number> {
   return modelContextTokens;
 }
 
-function syncUsage(): void { ui.setUsage(sessionUsage.snapshot()); }
+function syncUsage(): void {
+  persistSessionUsage();
+  ui.setUsage(sessionUsage.snapshot());
+}
 
 async function refreshOpenRouterUsage(): Promise<void> {
   const key = credential();
