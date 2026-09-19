@@ -70,11 +70,21 @@ describe('ShellUI workspace', () => {
     expect(callbacks.deleteApp).toHaveBeenCalledWith(app.id);
   });
 
-  it('starts creating from the submitted prompt without a confirmation step', async () => {
+  it('uses concise creation guidance, grows the prompt field, and starts immediately on submit', async () => {
     const { callbacks, ui } = mounted(false);
     ui.setSettings({ apiKey: 'configured' });
     document.querySelector<HTMLButtonElement>('[data-create]')!.click();
+
+    expect(document.querySelector('.flow-heading')?.textContent).toContain('You can refine it after the first version appears');
+    expect(document.querySelector('[data-create-status]')?.textContent).toContain('details that matter most');
+    expect(document.querySelector('[data-create-status]')?.textContent).not.toContain('confirmation step');
+
     const goal = document.querySelector<HTMLTextAreaElement>('#goal')!;
+    Object.defineProperty(goal, 'scrollHeight', { configurable: true, value: 300 });
+    goal.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(goal.style.height).toBe('230px');
+    expect(goal.style.overflowY).toBe('auto');
+
     goal.value = 'Help plan meals';
     document.querySelector<HTMLFormElement>('[data-create-form]')!.requestSubmit();
 
