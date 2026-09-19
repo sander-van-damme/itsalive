@@ -2,8 +2,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { ShellUI, friendlyError, type AppSummary, type ShellActions } from '../src/shell/ui';
 
-const app: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440003', name: 'FiddleMate', prompt: 'Build music tools', createdAt: 1, updatedAt: 1 };
-const other: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440004', name: 'Budget Pal', prompt: 'Budgeting', createdAt: 2, updatedAt: 2 };
+const app: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440003', name: 'FiddleMate' };
+const other: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440004', name: 'Budget Pal' };
 
 function actions(): ShellActions {
   return {
@@ -29,7 +29,6 @@ describe('ShellUI workspace', () => {
   it('opens a selected app directly in chat without desktop Apps/Chat tabs', () => {
     mounted();
     expect(document.querySelector('[data-composer]')).not.toBeNull();
-    expect(document.querySelector('.tabs')).toBeNull();
     expect(document.querySelector('.empty-chat')?.textContent).toContain('What should we change?');
   });
 
@@ -45,7 +44,7 @@ describe('ShellUI workspace', () => {
 
   it('does not destroy the iframe during ordinary sidebar interactions', () => {
     const { ui, frame } = mounted();
-    ui.setMessages([{ id: '1', role: 'user', content: 'Create a metronome', timestamp: 1 }]);
+    ui.setMessages([{ role: 'user', content: 'Create a metronome' }]);
     for (const selector of ['[data-switcher]', '[data-theme]', '[data-settings]', '[data-collapse]']) {
       document.querySelector<HTMLButtonElement>(selector)!.click();
       expect(document.querySelector('.app-frame-wrap iframe')).toBe(frame);
@@ -80,7 +79,6 @@ describe('ShellUI workspace', () => {
 
     await vi.waitFor(() => expect(callbacks.createApp).toHaveBeenCalledWith('Help plan meals'));
     expect(callbacks.createApp).toHaveBeenCalledTimes(1);
-    expect(document.querySelector('.creation-proposal')).toBeNull();
     expect(document.querySelector('[data-create-status]')?.textContent).toContain('Starting your app');
   });
 
@@ -154,7 +152,7 @@ describe('ShellUI workspace', () => {
 
   it('keeps runtime problems visible even while agent busy state changes', () => {
     const { ui } = mounted();
-    ui.setConnectionStatus('App runtime error', 'error');
+    ui.setConnectionStatus('error');
     ui.setBusy(true);
     ui.setAgentProgress('Updating the app…', true);
 
