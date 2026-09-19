@@ -59,13 +59,17 @@ describe("app runtime namespace", () => {
   it("installs one immutable, versioned facade without replacing native history", () => {
     expect(window.history).toBe(nativeHistory);
     expect(Object.keys(window.itsalive)).toEqual([
-      "apiVersion", "llm", "history", "agent", "dom", "logs", "cron", "done",
+      "apiVersion", "llm", "history", "agent", "dom", "logs", "components", "cron", "done",
     ]);
     expect(window.itsalive.apiVersion).toBe(2);
     expect(window.itsalive).not.toHaveProperty("db");
     expect(window.itsalive).not.toHaveProperty("reload");
     expect(Object.isFrozen(window.itsalive)).toBe(true);
     expect(Object.isFrozen(window.itsalive.dom)).toBe(true);
+    expect(Object.isFrozen(window.itsalive.components)).toBe(true);
+    expect(Object.keys(window.itsalive.components)).toHaveLength(42);
+    expect(window.itsalive.components).toHaveProperty("modal");
+    expect(window.itsalive.components).toHaveProperty("date-picker");
     expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(state.restoredWithApi).toBe(true);
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
