@@ -1,5 +1,3 @@
-import { dbGet, dbSet, STORES } from "./db";
-
 const RUNTIME_SELECTOR = "[data-app-runtime]";
 
 function normalizeControls(root: ParentNode) {
@@ -46,41 +44,57 @@ export async function restoreAppDocument(html: string): Promise<void> {
   await executeScripts(document);
 }
 
-export async function loadSavedDocument() {
-  const html = await dbGet<string>(STORES.document, "html");
-  if (html) await restoreAppDocument(html);
-  return Boolean(html);
+export async function restoreInitialDocument(html?: string): Promise<boolean> {
+  if (!html) return false;
+  await restoreAppDocument(html);
+  return true;
 }
 
-export function installAutosave(delay = 750) {
+export type DocumentWriter = (html: string) => Promise<void>;
+
+export function installAutosave(writeDocument: DocumentWriter, delay = 750) {
   let timer: number | undefined;
   let suspended = false;
-  const save = async () => {
+  let queue = Promise.resolve();
+
+  const save = (): Promise<void> => {
     window.clearTimeout(timer);
     timer = undefined;
-    if (!suspended) await dbSet(STORES.document, "html", serializeAppDocument());
+    if (suspended) return queue;
+
+    const html = serializeAppDocument();
+    const next = queue.catch(() => undefined).then(() => writeDocument(html));
+    queue = next;
+    return next;
   };
-  const observer = new MutationObserver(() => {
+
+  const saveBestEffort = () => {
+    void save().catch(error => console.warn("[itsalive:persistence] Autosave failed", error));
+  };
+  const scheduleSave = () => {
     if (suspended) return;
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => void save(), delay);
-  });
+    timer = window.setTimeout(saveBestEffort, delay);
+  };
+
+  const observer = new MutationObserver(scheduleSave);
   observer.observe(document.documentElement, { attributes: true, childList: true, characterData: true, subtree: true });
-  const scheduleSave = () => { window.clearTimeout(timer); timer = window.setTimeout(() => void save(), delay); };
-  const saveOnPageHide = () => void save();
+
   addEventListener("input", scheduleSave, true);
   addEventListener("change", scheduleSave, true);
-  addEventListener("pagehide", saveOnPageHide);
+  addEventListener("pagehide", saveBestEffort);
+
   return {
     save,
-    suspend: () => { suspended = true; },
+    suspend: () => { suspended = true; window.clearTimeout(timer); timer = undefined; },
     resume: () => { suspended = false; },
     disconnect: () => {
       observer.disconnect();
       window.clearTimeout(timer);
+      timer = undefined;
       removeEventListener("input", scheduleSave, true);
       removeEventListener("change", scheduleSave, true);
-      removeEventListener("pagehide", saveOnPageHide);
+      removeEventListener("pagehide", saveBestEffort);
     },
   };
 }
