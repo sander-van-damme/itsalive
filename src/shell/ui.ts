@@ -248,16 +248,22 @@ export class ShellUI {
 
   private renderGlobalActions(): string {
     const sessionTotal = this.usage.inputTokens + this.usage.outputTokens;
-    const usageLabel = this.usage.cost !== undefined ? `${money(this.usage.cost)}${this.usage.costComplete ? '' : '+'}` : `${compactTokens(sessionTotal)} tok`;
+    const tokenLabel = `${compactTokens(sessionTotal)} tok`;
+    const compactCost = this.usage.cost !== undefined ? money(this.usage.cost) : this.usage.requests ? 'price n/a' : '$0.00';
+    const usageLabel = `${tokenLabel} · ${compactCost}`;
+    const usageAria = this.usage.costComplete
+      ? `${tokenLabel}; session cost ${compactCost}`
+      : `${tokenLabel}; known priced cost ${compactCost}; some requests did not report a price`;
     const context = this.usage.latestContextTokens !== undefined && this.usage.contextCapacity !== undefined
       ? `${compactTokens(this.usage.latestContextTokens)} / ${compactTokens(this.usage.contextCapacity)}`
       : 'Not measured yet';
     const keySpend = this.usage.keyUsage !== undefined ? money(this.usage.keyUsage) : 'Not loaded';
     const remaining = typeof this.usage.keyLimitRemaining === 'number' ? money(this.usage.keyLimitRemaining) : this.usage.keyLimitRemaining === null ? 'No key limit' : 'Not loaded';
-    const cost = this.usage.cost !== undefined
-      ? `${money(this.usage.cost)}${this.usage.costComplete ? '' : '+ known'}`
-      : this.usage.requests ? 'Not reported' : '$0.00';
+    const cost = this.usage.cost !== undefined ? money(this.usage.cost) : this.usage.requests ? 'Not reported' : '$0.00';
     const costLabel = this.usage.costComplete ? 'Session cost' : 'Known session cost';
+    const costNote = !this.usage.costComplete && this.usage.requests
+      ? '<p class="usage-note">Some AI requests did not report a price. The known cost is only the priced portion of this session.</p>'
+      : '';
     const usagePopover = this.usageOpen ? `<div class="popover usage-popover" data-usage-popover>
         <strong>OpenRouter usage</strong>
         <dl>
@@ -267,11 +273,12 @@ export class ShellUI {
           <div><dt>Key spend</dt><dd>${esc(keySpend)}</dd></div>
           <div><dt>Key remaining</dt><dd>${esc(remaining)}</dd></div>
         </dl>
+        ${costNote}
       </div>` : '';
     return `<nav class="global-actions" aria-label="Global controls">
       <button class="icon-button quiet" data-mobile-app type="button" aria-label="View app"><i data-lucide="panel-left" aria-hidden="true"></i><span>App</span></button>
       <div class="usage-anchor">
-        <button class="usage-button ${this.usageOpen ? 'active' : ''}" data-usage type="button" aria-label="OpenRouter usage: ${esc(usageLabel)}" aria-expanded="${this.usageOpen}"><i data-lucide="circle-gauge" aria-hidden="true"></i><span>${esc(usageLabel)}</span></button>
+        <button class="usage-button ${this.usageOpen ? 'active' : ''}" data-usage type="button" aria-label="OpenRouter usage: ${esc(usageAria)}" aria-expanded="${this.usageOpen}"><i data-lucide="circle-gauge" aria-hidden="true"></i><span>${esc(usageLabel)}</span></button>
         ${usagePopover}
       </div>
       <button class="icon-button quiet ${this.view === 'settings' ? 'active' : ''}" data-settings type="button" aria-label="Settings"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></button>
