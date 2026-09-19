@@ -24,7 +24,7 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toContain("Alpine.js as the default layer");
     expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
     expect(SYSTEM_PROMPT).toContain("Chart, d3, THREE");
-    expect(SYSTEM_PROMPT).toContain("42 canonical Pines UI snippets");
+    expect(SYSTEM_PROMPT).toContain("alternate examples use keys such as modal/example-01");
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
