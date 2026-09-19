@@ -359,18 +359,17 @@ describe('ShellUI workspace', () => {
     expect(callbacks.resumePausedRun).toHaveBeenCalledWith('paused-1');
   });
 
-  it('shows one primary busy status plus a subtle app-update badge', () => {
+  it('shows agent progress once in chat without duplicating it over the app', () => {
     const { ui } = mounted();
     ui.setBusy(true);
-    ui.setAgentProgress('Updating the app…', true);
+    ui.setAgentProgress('Applying your change · part 2…');
 
     expect(document.querySelectorAll('.working-state')).toHaveLength(1);
-    expect(document.querySelector('.working-state')?.textContent).toContain('Updating the app');
+    expect(document.querySelector('.working-state')?.textContent).toContain('part 2');
     expect(document.querySelector('[data-stream]')?.lastElementChild?.classList.contains('working-state')).toBe(true);
     expect(document.querySelector('.panel > .working-state')).toBeNull();
     expect(document.querySelector('.thinking')).toBeNull();
-    expect(document.querySelector('[data-stage-state]')?.textContent).toContain('Updating the app');
-    expect(document.querySelector('[data-stage-state]')?.classList.contains('updating')).toBe(true);
+    expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(true);
 
     ui.setBusy(false);
     expect(document.querySelector('.working-state')).toBeNull();
@@ -381,10 +380,9 @@ describe('ShellUI workspace', () => {
     const { ui } = mounted();
     ui.setConnectionStatus('error');
     ui.setBusy(true);
-    ui.setAgentProgress('Updating the app…', true);
+    ui.setAgentProgress('Applying your change…');
 
     expect(document.querySelector('[data-stage-state]')?.textContent).toContain("couldn't load");
-    expect(document.querySelector('[data-stage-state]')?.classList.contains('updating')).toBe(false);
     ui.setBusy(false);
     expect(document.querySelector('[data-stage-state]')?.hasAttribute('hidden')).toBe(false);
   });
