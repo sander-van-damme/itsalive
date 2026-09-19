@@ -14,13 +14,17 @@ During beta:
 Only after the project owner explicitly declares itsalive.org out of beta and ready for release should agents treat backward compatibility, migrations, deprecation periods, and stable public contracts as default requirements.
 
 
-## Architecture boundary: keep the app runtime thin
+## Architecture boundary: wildcard app is only a bootstrap
 
-Treat `src/app` as a minimal cross-origin execution kernel that can be replaced without losing platform-owned state or behavior.
+Treat `src/app` and `dist-app` as a minimal, stable cross-origin bootstrap, not as the home of the platform runtime.
 
-- The root shell owns platform persistence, durable app documents, prompts, product policy, runtime API contracts and implementations, configuration, credentials, catalogs, history, logs, schedules, and other platform state unless browser security requires code to run in the app origin.
-- Put code in `src/app` only when it must execute in the app origin, such as DOM access, generated-code execution, interaction capture, screenshots, validated `postMessage` transport, durability checks, or app-origin storage/service-worker cleanup.
-- Do not add platform-private IndexedDB, localStorage, or other durable platform state to the app origin. Generated apps may still use their own browser-origin storage when the product intentionally exposes ordinary browser APIs to them.
-- Initialize the runtime from the root shell over the validated bridge. Persistent app HTML is loaded and stored by the shell; the app runtime may serialize and restore DOM because that work requires app-origin document access.
-- Treat `window.itsalive` as a shell-owned API exposed through a thin app-side facade/proxy. Keep policy, durable state, prompts, and large static catalogs in the shell; only local implementations that inherently require the app origin belong in the app runtime.
-- When a responsibility can live on either side, prefer the shell. Do not move code into `src/app` merely because generated app code calls it.
+- The permanent wildcard app code should do only what is required to bootstrap safely: derive/validate the immutable app UUID, authenticate the expected root origin/source, validate the bootstrap envelope/version, establish the communication channel, and execute the shell-supplied runtime payload.
+- The root shell owns, builds, and versions substantive runtime source. Code may need to **execute** in the app origin without being **owned or deployed** by the app build.
+- DOM execution, document serialization/restoration, interaction capture, screenshots, logging hooks, canonical-root enforcement, durability checks, `window.itsalive` installation, cron callback registration, and similar origin-dependent logic should normally live in the shell-owned injectable runtime bundle.
+- Prefer a one-time validated `postMessage` bootstrap handshake that transfers a dedicated `MessagePort` for subsequent runtime communication.
+- A mounted app should receive the runtime version belonging to the currently loaded shell. Ordinary runtime changes should require only a root deployment; update the wildcard bootstrap only when the bootstrap/security protocol itself must change.
+- The root shell owns platform persistence, durable app documents, prompts, product policy, runtime API contracts, configuration, credentials, catalogs, behavioral summaries, histories, logs, schedules, and other platform state.
+- Persistent app HTML is loaded/stored by the shell. The injected runtime may serialize and restore DOM because those operations require app-origin access, but it sends snapshots to the shell for persistence.
+- Do not add platform-private IndexedDB, localStorage, or other durable platform state to the app origin. Generated apps may still use their own browser-origin storage through ordinary browser APIs.
+- Treat `window.itsalive` as a shell-owned API installed by the injected runtime. Keep policy, durable state, prompts, and catalogs shell-owned; local implementations exist only to bridge or perform browser-origin operations.
+- When deciding whether code belongs in `src/app`, ask whether it is necessary **before trusted shell runtime code can be received and started**. If not, it belongs outside the permanent app bootstrap.
