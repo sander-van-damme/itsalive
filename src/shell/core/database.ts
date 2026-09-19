@@ -83,10 +83,12 @@ export class ShellDatabase {
 
   async deleteApp(id: string): Promise<void> {
     const db = await this.open();
-    const tx = db.transaction(["apps", "history", "logs", "schedules"], "readwrite");
+    // Diagnostics intentionally outlive app deletion so a just-failed test can
+    // still be exported after the user removes the app itself.
+    const tx = db.transaction(["apps", "history", "schedules"], "readwrite");
     const completed = transactionDone(tx);
     tx.objectStore("apps").delete(id);
-    for (const store of ["history", "logs", "schedules"] as const) {
+    for (const store of ["history", "schedules"] as const) {
       const cursor = tx.objectStore(store).index("appId").openKeyCursor(IDBKeyRange.only(id));
       cursor.onsuccess = () => {
         const row = cursor.result;
