@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, CONNECTION_TEST_OUTPUT_TOKENS, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -22,8 +22,8 @@ const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
 
 const OPENROUTER_PROVIDER = 'openrouter';
 const OPENROUTER_MODEL = 'openrouter/auto';
-const MODEL_CONTEXT_TOKENS = 128_000;
-const MODEL_OUTPUT_TOKENS = 8_192;
+const MODEL_CONTEXT_TOKENS = 2_000_000;
+const MODEL_OUTPUT_HEADROOM_TOKENS = 8_192;
 
 const defaultSettings: SettingsValue = { apiKey: '' };
 const stored = localStorage.getItem('itsalive.settings');
@@ -139,7 +139,7 @@ async function refreshMessages(): Promise<void> {
   ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map(e => ({ role: e.role as ChatLine['role'], content: e.content })));
 }
 
-function modelConfig(): ModelConfig { return { provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS }; }
+function modelConfig(): ModelConfig { return { provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, outputHeadroomTokens: MODEL_OUTPUT_HEADROOM_TOKENS }; }
 function credential(): Credential | undefined { return settings.apiKey ? { value: settings.apiKey } : undefined; }
 
 async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
@@ -291,7 +291,7 @@ async function fireDueSchedules(): Promise<void> {
 }
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
-  try { const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }], maxOutputTokens: MODEL_OUTPUT_TOKENS }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
+  try { const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }] }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
   catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
@@ -319,8 +319,8 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   const apiKey = candidate.apiKey.trim();
   if (!apiKey) throw new Error('OpenRouter API key is required');
   const testRegistry = createDefaultRegistry();
-  const model = connectionTestModelConfig(OPENROUTER_PROVIDER, OPENROUTER_MODEL, MODEL_CONTEXT_TOKENS);
-  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: CONNECTION_TEST_OUTPUT_TOKENS }, { value: apiKey });
+  const model = connectionTestModelConfig(OPENROUTER_PROVIDER, OPENROUTER_MODEL);
+  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }] }, { value: apiKey });
   return { apiKey };
 }
 

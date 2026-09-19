@@ -59,7 +59,7 @@ npm run lint         # ESLint
 
 ## Provider configuration
 
-Open **Settings** in the shell, add your OpenRouter API key, and press **Save**. The shell tests the key before saving it. All product LLM requests use OpenRouter's `openrouter/auto` model; provider, model, endpoint, and token-limit controls are intentionally not user-configurable.
+Open **Settings** in the shell, add your OpenRouter API key, and press **Save**. The shell tests the key before saving it. All product LLM requests use OpenRouter's `openrouter/auto` model. The shell does not send a client-side generation-token ceiling; OpenRouter and the routed model determine generation length. The shell still budgets and prunes input context/history so requests remain within the model context window.
 
 OpenRouter requests happen directly from root-origin browser JavaScript. Credentials are saved only in root-origin `localStorage`; use the runtime only on a trusted device and origin.
 

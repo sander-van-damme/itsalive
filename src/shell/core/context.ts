@@ -30,7 +30,7 @@ const section = (title: string, body: string) => `${title}\n${body.trim() || "(n
 export function buildModelContext(input: ContextInput): BuiltContext {
   const count = input.countTokens ?? conservativeTokenEstimate;
   const headroom = input.model.observationHeadroomTokens ?? 1_024;
-  const budget = input.model.maxContextTokens - input.model.maxOutputTokens - headroom;
+  const budget = input.model.maxContextTokens - input.model.outputHeadroomTokens - headroom;
   const mandatory = [section("APP PROMPT", input.appPrompt), section("CURRENT TRIGGER", input.trigger)].join("\n\n");
   const baseCost = count(SYSTEM_PROMPT) + count(mandatory);
   if (baseCost > budget) throw new Error(`Mandatory context (${baseCost} tokens estimated) exceeds input budget (${budget}); choose a larger-context model or shorten the app prompt/trigger`);

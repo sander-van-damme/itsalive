@@ -11,7 +11,7 @@ describe("ProviderRegistry", () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     const registry = new ProviderRegistry().register({ id: "local", generate: async request => ({ text: request.system }) });
-    const result = await registry.generate({ model: { provider: "local", model: "x", maxContextTokens: 1_000, maxOutputTokens: 10 }, system: "system", messages: [], maxOutputTokens: 10 });
+    const result = await registry.generate({ model: { provider: "local", model: "x" }, system: "system", messages: [] });
     expect(result.text).toBe("system");
   });
 
@@ -20,7 +20,7 @@ describe("ProviderRegistry", () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     const registry = new ProviderRegistry().register({ id: 'local', generate: async () => ({ text: 'ok', raw: { id: 'response-id', model: 'resolved-model', authorization: 'Bearer secret-token' } }) });
-    await registry.generate({ purpose: 'app design', model: { provider: 'local', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'full system', messages: [{ role: 'user', content: 'full message' }], maxOutputTokens: 10 }, { value: 'credential-secret' });
+    await registry.generate({ purpose: 'app design', model: { provider: 'local', model: 'x' }, system: 'full system', messages: [{ role: 'user', content: 'full message' }] }, { value: 'credential-secret' });
     const trace = JSON.stringify(info.mock.calls);
     expect(trace).toContain('systemCharacters');
     expect(trace).toContain('messages');
@@ -44,7 +44,7 @@ describe("ProviderRegistry", () => {
       metadata: { api_key: 'must-not-leak-either' },
     }), { status: 200, headers: { 'content-type': 'application/json' } })));
     const error = await createHttpAdapter({ id: 'custom', endpoint: 'https://example.test/generate' })
-      .generate({ model: { provider: 'custom', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'system', messages: [], maxOutputTokens: 10 }, { value: 'request-secret' })
+      .generate({ model: { provider: 'custom', model: 'x' }, system: 'system', messages: [] }, { value: 'request-secret' })
       .catch(value => value);
     expect(error).toBeInstanceOf(ProviderResponseError);
     expect(error.message).toBe('Provider returned no text response');
@@ -63,7 +63,7 @@ describe("ProviderRegistry", () => {
     }), { status: 400, statusText: 'Bad Request', headers: { 'content-type': 'application/json' } })));
 
     const error = await createHttpAdapter({ id: 'custom', endpoint: 'https://example.test/generate' })
-      .generate({ model: { provider: 'custom', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'system', messages: [], maxOutputTokens: 10 })
+      .generate({ model: { provider: 'custom', model: 'x' }, system: 'system', messages: [] })
       .catch(value => value);
 
     expect(error).toBeInstanceOf(ProviderResponseError);
@@ -88,7 +88,7 @@ describe("ProviderRegistry", () => {
     const errorTrace = vi.spyOn(console, 'error').mockImplementation(() => undefined);
     const registry = new ProviderRegistry().register(createHttpAdapter({ id: 'custom', endpoint: 'https://example.test/generate' }));
 
-    await expect(registry.generate({ model: { provider: 'custom', model: 'x', maxContextTokens: 100, maxOutputTokens: 10 }, system: 'system', messages: [], maxOutputTokens: 10 })).rejects.toBeInstanceOf(ProviderResponseError);
+    await expect(registry.generate({ model: { provider: 'custom', model: 'x' }, system: 'system', messages: [] })).rejects.toBeInstanceOf(ProviderResponseError);
 
     const trace = JSON.stringify(errorTrace.mock.calls);
     expect(trace).toContain('diagnostic');
@@ -110,7 +110,7 @@ describe("ProviderRegistry", () => {
     const deltas: string[] = [];
 
     const result = await adapter.stream!(
-      { model: { provider: "custom", model: "x", maxContextTokens: 100, maxOutputTokens: 10 }, system: "system", messages: [], maxOutputTokens: 10 },
+      { model: { provider: "custom", model: "x" }, system: "system", messages: [] },
       undefined,
       delta => deltas.push(delta),
     );
@@ -120,6 +120,7 @@ describe("ProviderRegistry", () => {
     expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2 });
     const request = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body));
     expect(request.stream).toBe(true);
+    expect(request).not.toHaveProperty("max_tokens");
   });
 
 });
