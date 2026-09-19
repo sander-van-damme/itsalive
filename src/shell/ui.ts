@@ -301,8 +301,10 @@ export class ShellUI {
     const composerAction = this.busy
       ? `<button class="send stop" data-stop type="button" aria-label="Stop agent"><i data-lucide="square" aria-hidden="true"></i></button>`
       : `<button class="send" type="submit" aria-label="Send message"><i data-lucide="arrow-up" aria-hidden="true"></i></button>`;
-    panel.innerHTML = `${this.busy ? `<div class="working-state" role="status"><span class="spinner" aria-hidden="true"></span>${esc(this.agentProgress || 'Working…')}</div>` : ''}
-      <div class="chat-stream" data-stream aria-live="polite">${messages}</div>
+    const progress = this.busy
+      ? `<div class="working-state" role="status"><span class="spinner" aria-hidden="true"></span>${esc(this.agentProgress || 'Working…')}</div>`
+      : '';
+    panel.innerHTML = `<div class="chat-stream" data-stream aria-live="polite">${messages}${progress}</div>
       <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" rows="1" placeholder="Ask me to change anything…" ${this.busy ? 'disabled' : ''}></textarea>${composerAction}</div></form>`;
     const stream = panel.querySelector<HTMLElement>('[data-stream]')!;
     if (this.chatNearBottom) stream.scrollTop = stream.scrollHeight;
