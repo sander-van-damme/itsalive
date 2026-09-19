@@ -1,77 +1,115 @@
-// @vitest-environment jsdom
-import 'fake-indexeddb/auto';
-import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearOriginStorage } from '../src/runtime/storage';
+import { describe, expect, it, vi } from "vitest";
+import {
+  APP_CLEANUP_HEADER,
+  clearAppOrigin,
+} from "../src/shell/core/app-deletion";
+import {
+  CLEANUP_PATH,
+  CLEANUP_REQUEST_HEADER,
+  ROOT_CLEANUP_ORIGIN,
+  handleAppRequest,
+  type AppWorkerEnv,
+} from "../src/app-worker";
 
-function openDatabase(name: string): Promise<IDBDatabase> {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open(name, 1);
-    request.onupgradeneeded = () => request.result.createObjectStore('data');
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
+describe("shell-triggered app-origin cleanup", () => {
+  it("uses a credentialed non-simple POST to the app cleanup endpoint", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 204 }));
+
+    await clearAppOrigin("https://550e8400-e29b-41d4-a716-446655440000.itsalive.org", request as typeof fetch);
+
+    expect(request).toHaveBeenCalledOnce();
+    const [url, init] = request.mock.calls[0]!;
+    expect(String(url)).toBe("https://550e8400-e29b-41d4-a716-446655440000.itsalive.org/__clear");
+    expect(init).toMatchObject({
+      method: "POST",
+      credentials: "include",
+      headers: { [APP_CLEANUP_HEADER]: "1" },
+    });
   });
-}
 
-function wasDeleted(name: string): Promise<boolean> {
-  return new Promise((resolve, reject) => {
-    let created = false;
-    const request = indexedDB.open(name, 1);
-    request.onupgradeneeded = () => {
-      created = true;
-      request.result.createObjectStore('probe');
-    };
-    request.onsuccess = () => {
-      request.result.close();
-      const deletion = indexedDB.deleteDatabase(name);
-      deletion.onsuccess = () => resolve(created);
-      deletion.onerror = () => reject(deletion.error);
-    };
-    request.onerror = () => reject(request.error);
+  it("reports a non-success cleanup response", async () => {
+    const request = vi.fn(async () => new Response(null, { status: 403 }));
+    await expect(clearAppOrigin("https://app.itsalive.org", request as typeof fetch))
+      .rejects.toThrow("App-origin cleanup failed (403)");
   });
-}
-
-const originalServiceWorker = Object.getOwnPropertyDescriptor(navigator, 'serviceWorker');
-
-afterEach(() => {
-  localStorage.clear();
-  sessionStorage.clear();
-  if (originalServiceWorker) Object.defineProperty(navigator, 'serviceWorker', originalServiceWorker);
-  else Reflect.deleteProperty(navigator, 'serviceWorker');
 });
 
-describe('clearOriginStorage', () => {
-  it('unregisters service workers and deletes runtime and generated IndexedDB databases', async () => {
-    const runtimeDb = await openDatabase('itsalive-app-v2');
-    const generatedDb = await openDatabase('generated-app-state');
-    runtimeDb.close();
-    generatedDb.close();
+describe("wildcard cleanup endpoint", () => {
+  const assets = { fetch: vi.fn(async () => new Response("asset", { status: 200 })) };
+  const env = { ASSETS: assets } satisfies AppWorkerEnv;
+  const appUrl = `https://550e8400-e29b-41d4-a716-446655440000.itsalive.org${CLEANUP_PATH}`;
 
-    const unregister = vi.fn().mockResolvedValue(true);
-    const getRegistrations = vi.fn().mockResolvedValue([{ scope: 'https://app.test/', unregister }]);
-    Object.defineProperty(navigator, 'serviceWorker', {
-      configurable: true,
-      value: { getRegistrations },
-    });
+  it("approves only the exact root-origin preflight and cleanup header", async () => {
+    const response = await handleAppRequest(new Request(appUrl, {
+      method: "OPTIONS",
+      headers: {
+        Origin: ROOT_CLEANUP_ORIGIN,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": CLEANUP_REQUEST_HEADER,
+      },
+    }), env);
 
-    localStorage.setItem('app', 'state');
-    sessionStorage.setItem('app', 'session');
-
-    await clearOriginStorage();
-
-    expect(getRegistrations).toHaveBeenCalledOnce();
-    expect(unregister).toHaveBeenCalledOnce();
-    expect(localStorage.getItem('app')).toBeNull();
-    expect(sessionStorage.getItem('app')).toBeNull();
-    expect(await wasDeleted('itsalive-app-v2')).toBe(true);
-    expect(await wasDeleted('generated-app-state')).toBe(true);
+    expect(response.status).toBe(204);
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(ROOT_CLEANUP_ORIGIN);
+    expect(response.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(response.headers.get("Access-Control-Allow-Methods")).toBe("POST");
+    expect(response.headers.get("Access-Control-Allow-Headers")).toBe(CLEANUP_REQUEST_HEADER);
+    expect(response.headers.get("Clear-Site-Data")).toBeNull();
   });
 
-  it('reports a failed service-worker unregister as cleanup failure', async () => {
-    Object.defineProperty(navigator, 'serviceWorker', {
-      configurable: true,
-      value: { getRegistrations: vi.fn().mockResolvedValue([{ scope: 'https://app.test/', unregister: vi.fn().mockResolvedValue(false) }]) },
-    });
+  it("rejects third-party origins and unexpected preflight headers", async () => {
+    const thirdParty = await handleAppRequest(new Request(appUrl, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://evil.example",
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": CLEANUP_REQUEST_HEADER,
+      },
+    }), env);
+    expect(thirdParty.status).toBe(403);
 
-    await expect(clearOriginStorage()).rejects.toThrow('Some app-origin storage could not be cleared');
+    const extraHeader = await handleAppRequest(new Request(appUrl, {
+      method: "OPTIONS",
+      headers: {
+        Origin: ROOT_CLEANUP_ORIGIN,
+        "Access-Control-Request-Method": "POST",
+        "Access-Control-Request-Headers": `${CLEANUP_REQUEST_HEADER}, X-Other`,
+      },
+    }), env);
+    expect(extraHeader.status).toBe(403);
+  });
+
+  it("returns Clear-Site-Data only for an authorized destructive request", async () => {
+    const unauthorized = await handleAppRequest(new Request(appUrl, {
+      method: "POST",
+      headers: { Origin: "https://evil.example", [CLEANUP_REQUEST_HEADER]: "1" },
+    }), env);
+    expect(unauthorized.status).toBe(403);
+    expect(unauthorized.headers.get("Clear-Site-Data")).toBeNull();
+
+    const missingHeader = await handleAppRequest(new Request(appUrl, {
+      method: "POST",
+      headers: { Origin: ROOT_CLEANUP_ORIGIN },
+    }), env);
+    expect(missingHeader.status).toBe(403);
+    expect(missingHeader.headers.get("Clear-Site-Data")).toBeNull();
+
+    const response = await handleAppRequest(new Request(appUrl, {
+      method: "POST",
+      headers: { Origin: ROOT_CLEANUP_ORIGIN, [CLEANUP_REQUEST_HEADER]: "1" },
+    }), env);
+
+    expect(response.status).toBe(204);
+    expect(response.headers.get("Clear-Site-Data")).toBe('"storage", "cache"');
+    expect(response.headers.get("Clear-Site-Data")).not.toContain("cookies");
+    expect(response.headers.get("Access-Control-Allow-Origin")).toBe(ROOT_CLEANUP_ORIGIN);
+  });
+
+  it("passes ordinary wildcard asset requests through untouched", async () => {
+    assets.fetch.mockClear();
+    const request = new Request("https://550e8400-e29b-41d4-a716-446655440000.itsalive.org/");
+    const response = await handleAppRequest(request, env);
+    expect(await response.text()).toBe("asset");
+    expect(assets.fetch).toHaveBeenCalledWith(request);
   });
 });
