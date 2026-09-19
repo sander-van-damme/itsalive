@@ -5,6 +5,7 @@ const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMI
 
 export interface AppSummary { id: string; name: string }
 export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
+export interface InteractionPrompt { id: string; content: string; confirmLabel: string; dismissLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
 export type RuntimeViewState = 'loading' | 'ready' | 'problem';
@@ -16,6 +17,7 @@ export interface ShellActions {
   selectApp(id: string): Promise<void>;
   deleteApp(id: string): Promise<void>;
   sendMessage(content: string): Promise<void>;
+  resolveInteractionPrompt(id: string, accepted: boolean): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
   exportLogs(): Promise<void>;
@@ -37,6 +39,7 @@ export class ShellUI {
   private apps: AppSummary[] = [];
   private active?: AppSummary;
   private messages: ChatLine[] = [];
+  private interactionPrompt?: InteractionPrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
   private busy = false;
@@ -65,6 +68,7 @@ export class ShellUI {
       this.switcherOpen = false;
       this.actionsOpen = false;
       this.mobileView = 'chat';
+      this.interactionPrompt = undefined;
     }
     this.renderStagePlaceholder();
     this.renderRail();
@@ -73,6 +77,11 @@ export class ShellUI {
   setMessages(messages: ChatLine[]): void {
     this.rememberChatPosition();
     this.messages = messages;
+    if (this.view === 'workspace') this.renderPanel();
+  }
+
+  setInteractionPrompt(prompt: InteractionPrompt | undefined): void {
+    this.interactionPrompt = prompt;
     if (this.view === 'workspace') this.renderPanel();
   }
 
@@ -258,8 +267,17 @@ export class ShellUI {
   }
 
   private renderChat(panel: HTMLElement): void {
-    const messages = this.messages.length
-      ? this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')
+    const prompt = this.interactionPrompt
+      ? `<div class="message assistant interaction-prompt" data-interaction-prompt="${esc(this.interactionPrompt.id)}">
+          <span>${esc(this.interactionPrompt.content)}</span>
+          <div class="prompt-actions">
+            <button class="action primary" data-prompt-confirm type="button" ${this.busy ? 'disabled' : ''}>${esc(this.interactionPrompt.confirmLabel)}</button>
+            <button class="action" data-prompt-dismiss type="button" ${this.busy ? 'disabled' : ''}>${esc(this.interactionPrompt.dismissLabel)}</button>
+          </div>
+        </div>`
+      : '';
+    const messages = this.messages.length || prompt
+      ? `${this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')}${prompt}`
       : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>What should we change?</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
     panel.innerHTML = `${this.busy ? `<div class="working-state" role="status"><span class="spinner" aria-hidden="true"></span>${esc(this.agentProgress || 'Working…')}</div>` : ''}
       <div class="chat-stream" data-stream aria-live="polite">${messages}</div>
@@ -267,6 +285,14 @@ export class ShellUI {
     const stream = panel.querySelector<HTMLElement>('[data-stream]')!;
     if (this.chatNearBottom) stream.scrollTop = stream.scrollHeight;
     stream.onscroll = () => { this.chatNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80; };
+    const resolvePrompt = (accepted: boolean) => {
+      const current = this.interactionPrompt;
+      if (!current) return;
+      panel.querySelectorAll<HTMLButtonElement>('[data-prompt-confirm], [data-prompt-dismiss]').forEach(button => { button.disabled = true; });
+      void this.actions.resolveInteractionPrompt(current.id, accepted);
+    };
+    panel.querySelector<HTMLButtonElement>('[data-prompt-confirm]')?.addEventListener('click', () => resolvePrompt(true));
+    panel.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')?.addEventListener('click', () => resolvePrompt(false));
     const form = panel.querySelector<HTMLFormElement>('[data-composer]')!;
     const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
     const resize = () => { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`; };
