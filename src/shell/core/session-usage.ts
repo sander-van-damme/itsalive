@@ -1,6 +1,15 @@
 import type { GenerateResult } from "./types";
 import type { OpenRouterKeyInfo } from "./openrouter-account";
 
+export interface SessionUsageState {
+  requests: number;
+  inputTokens: number;
+  outputTokens: number;
+  knownCost: number;
+  pricedRequests: number;
+  unpricedRequests: number;
+}
+
 export interface SessionUsageSnapshot {
   requests: number;
   inputTokens: number;
@@ -28,6 +37,16 @@ export class SessionUsageTracker {
   private latestContextTokens?: number;
   private contextCapacity?: number;
   private keyInfo?: OpenRouterKeyInfo;
+
+  constructor(initial?: Partial<SessionUsageState>) {
+    if (!initial) return;
+    this.requests = Math.floor(finiteNonNegative(initial.requests) ?? 0);
+    this.inputTokens = finiteNonNegative(initial.inputTokens) ?? 0;
+    this.outputTokens = finiteNonNegative(initial.outputTokens) ?? 0;
+    this.knownCost = finiteNonNegative(initial.knownCost) ?? 0;
+    this.pricedRequests = Math.floor(finiteNonNegative(initial.pricedRequests) ?? 0);
+    this.unpricedRequests = Math.floor(finiteNonNegative(initial.unpricedRequests) ?? 0);
+  }
 
   recordGeneration(usage: GenerateResult["usage"]): void {
     this.requests++;
@@ -65,6 +84,17 @@ export class SessionUsageTracker {
     this.latestContextTokens = undefined;
     this.contextCapacity = undefined;
     this.keyInfo = undefined;
+  }
+
+  state(): SessionUsageState {
+    return {
+      requests: this.requests,
+      inputTokens: this.inputTokens,
+      outputTokens: this.outputTokens,
+      knownCost: this.knownCost,
+      pricedRequests: this.pricedRequests,
+      unpricedRequests: this.unpricedRequests,
+    };
   }
 
   snapshot(): SessionUsageSnapshot {
