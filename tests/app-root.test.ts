@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from "vitest";
-import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "../src/app/app-root";
+import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "../src/runtime/app-root";
 
 describe("canonical app root", () => {
   beforeEach(() => { document.body.innerHTML = ""; });
