@@ -136,11 +136,11 @@ window.addEventListener('error', event => { void log('error', 'shell', event.mes
 setInterval(() => { void fireDueSchedules(); }, 30_000);
 
 function agentProgressLabel(phase: AgentProgressPhase, initialBuild: boolean): string {
-  if (phase === 'executing') return initialBuild ? 'Building the interface…' : 'Updating the app…';
-  if (phase === 'repairing') return 'Fixing a build error…';
-  if (phase === 'verifying') return 'Checking the result…';
-  if (phase === 'finishing') return 'Finishing up…';
-  return initialBuild ? 'Understanding your app…' : 'Understanding your change…';
+  if (phase === 'executing') return initialBuild ? 'Building the interface…' : 'Applying the change…';
+  if (phase === 'repairing') return 'Fixing something that did not work…';
+  if (phase === 'verifying') return 'Checking that it works…';
+  if (phase === 'finishing') return 'Wrapping up…';
+  return initialBuild ? 'Planning your app…' : 'Working out the change…';
 }
 
 async function refreshApps(select?: string): Promise<void> {
@@ -156,9 +156,10 @@ async function refreshApps(select?: string): Promise<void> {
 
 async function selectApp(id: string): Promise<void> {
   if (!apps.some(a => a.id === id)) return;
-  if (activeId !== id) {
+  if (activeId !== id && running) {
+    ui.setAgentProgress('Pausing work before switching…');
     stopActiveRun('app-switch');
-    ui.setBusy(false);
+    await waitForAgentIdle();
   }
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
@@ -280,6 +281,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     }, app.id);
     if (failure.kind === 'app-switch') {
       const paused = pausedRuns.pause(app.id, trigger);
+      await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'Work paused because you switched apps. Return here when you want to continue.' });
       await log('info', `agent:${app.id}`, 'Agent run paused for app switch', { pausedRunId: paused.id }, app.id);
     } else if (failure.userMessage) {
       await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: failure.userMessage });
