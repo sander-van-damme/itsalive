@@ -149,7 +149,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   ensureCanonicalAppRoot();
   const autosave = installAutosave(options.autosaveDelay);
   const interactions = installInteractionObserver(bridge);
-  bridge.post({ type: "status", status: "ready", detail: appId });
+  bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); interactions.destroy(); bridge.destroy(); autosave.disconnect(); logs.destroy(); } };
 }
 

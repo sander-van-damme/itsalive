@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { decideJevEscalation, JEV_MODEL, OPENROUTER_DECISIONS_URL, OpenRouterJevAdapter } from "../src/shell/core/jev";
 import type { JevState } from "../src/shared";
 
-const credential = { id: "active", type: "api-key" as const, value: "sk-or-test" };
+const credential = { value: "sk-or-test" };
 const state = { interaction: { seq: 1 } };
 const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status, headers: { "content-type": "application/json" } });
 

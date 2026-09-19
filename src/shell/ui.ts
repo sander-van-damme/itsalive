@@ -3,10 +3,10 @@ import { createIcons, icons } from 'lucide';
 declare const __ITSALIVE_COMMIT__: string;
 const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMIT__.trim() ? __ITSALIVE_COMMIT__.trim() : 'development';
 
-export interface AppSummary { id: string; name: string; prompt: string; createdAt: number; updatedAt: number }
-export interface ChatLine { id: string; role: 'user' | 'assistant' | 'system'; content: string; timestamp: number }
+export interface AppSummary { id: string; name: string }
+export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
 export interface SettingsValue { apiKey: string }
-export type RuntimeViewState = 'loading' | 'ready' | 'working' | 'problem';
+export type RuntimeViewState = 'loading' | 'ready' | 'problem';
 type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
 
@@ -41,7 +41,6 @@ export class ShellUI {
   private agentProgress = '';
   private appUpdating = false;
   private runtimeState: RuntimeViewState = 'ready';
-  private runtimeDetail = '';
   private collapsed = localStorage.getItem('itsalive.sidebar') === 'collapsed';
   private theme = localStorage.getItem('itsalive.theme') ?? 'light';
   private switcherOpen = false;
@@ -91,8 +90,7 @@ export class ShellUI {
     if (this.view === 'workspace') this.renderPanel();
   }
 
-  setConnectionStatus(status: string, tone: 'idle' | 'working' | 'connected' | 'error'): void {
-    this.runtimeDetail = status;
+  setConnectionStatus(tone: 'working' | 'connected' | 'error'): void {
     this.runtimeState = tone === 'error' ? 'problem' : tone === 'working' ? 'loading' : 'ready';
     this.renderStageState();
     this.renderRail();
@@ -101,7 +99,7 @@ export class ShellUI {
   showError(error: unknown): void {
     const technical = error instanceof Error ? error.message : String(error);
     console.error('[itsalive] UI operation failed', error);
-    this.messages.push({ id: crypto.randomUUID(), role: 'system', content: friendlyError(technical, this.active?.name), timestamp: Date.now() });
+    this.messages.push({ role: 'system', content: friendlyError(technical, this.active?.name) });
     if (this.active) this.view = 'workspace';
     this.renderRail();
   }

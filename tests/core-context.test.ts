@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildModelContext, conservativeTokenEstimate } from "../src/shell/core/context";
 import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 
-const model = { id: "test", provider: "test", model: "test", maxContextTokens: 4_000, maxOutputTokens: 200 };
+const model = { provider: "test", model: "test", maxContextTokens: 4_000, maxOutputTokens: 200 };
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
@@ -11,9 +11,6 @@ describe("shell context builder", () => {
     }
     expect(SYSTEM_PROMPT).toContain("native browser IndexedDB");
     expect(SYSTEM_PROMPT).toContain("own browser origin");
-    for (const obsolete of [/itsalive\.tools/, /itsalive\.dom\.inspect/, /itsalive\.dom\.ref/, /itsalive\.db/, /itsalive\.reload/, /return\s+done\(/, /itsalive\.ai/, /(^|[^.\w])app\.db/, /(^|[^.\w])app\.ai/, /(^|[^.\w])agent\.wake/, /(^|[^.\w])history\.search/, /(^|[^.\w])getLogs\(/]) {
-      expect(SYSTEM_PROMPT).not.toMatch(obsolete);
-    }
   });
 
   it("defines a streamed multi-command drawing-board contract", () => {
@@ -25,7 +22,6 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
     expect(SYSTEM_PROMPT).toContain("ordinary semantic HTML and browser DOM APIs by default");
     expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
-    expect(SYSTEM_PROMPT).not.toMatch(/MUST be implemented as native Custom Elements/);
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
@@ -35,7 +31,6 @@ describe("shell context builder", () => {
     expect(result.system).toBe(SYSTEM_PROMPT);
     expect(result.messages.at(-1)?.content).toContain("A violin coach");
     expect(result.messages.at(-1)?.content).toContain("Help me");
-    expect(result.messages.at(-1)?.content).not.toContain("CUSTOM TOOLS");
   });
 
   it("includes the current trigger and latest observation only once", () => {

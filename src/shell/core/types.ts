@@ -4,7 +4,6 @@ export interface AppRecord {
   id: string;
   name: string;
   prompt: string;
-  summary: string;
   createdAt: number;
   updatedAt: number;
 }
@@ -15,25 +14,20 @@ export interface HistoryEntry {
   timestamp: number;
   role: HistoryRole;
   content: string;
-  kind?: "chat" | "javascript" | "execution" | "error" | "compaction";
+  kind?: "chat" | "javascript" | "execution" | "error";
 }
 
 export interface ModelConfig {
-  id: string;
   provider: string;
   model: string;
   maxContextTokens: number;
   maxOutputTokens: number;
   observationHeadroomTokens?: number;
-  credentialId?: string;
   options?: Record<string, unknown>;
 }
 
 export interface Credential {
-  id: string;
-  type: "api-key" | "bearer-token" | "oauth" | "custom";
   value: string;
-  metadata?: Record<string, string>;
 }
 
 export interface ModelMessage { role: "user" | "assistant"; content: string }
@@ -61,8 +55,8 @@ export interface LlmAdapter {
 }
 
 export interface DecisionRequest { state: unknown; signal?: AbortSignal; }
-export interface DecisionResult { probability: number; usage?: { inputTokens?: number }; raw?: unknown; }
-export interface DecisionModel { id: string; evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult>; }
+export interface DecisionResult { probability: number; usage?: { inputTokens?: number }; }
+export interface DecisionModel { evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult>; }
 
 export interface LogEntry {
   id?: number;

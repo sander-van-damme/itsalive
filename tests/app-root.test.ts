@@ -5,9 +5,9 @@ import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from
 describe("canonical app root", () => {
   beforeEach(() => { document.body.innerHTML = ""; });
 
-  it("migrates restored rootless UI into one canonical root while leaving runtime-owned nodes outside", () => {
+  it("creates one canonical root and discards visible UI outside it", () => {
     document.body.innerHTML = `
-      <main data-legacy-app>Legacy app</main>
+      <main data-outside-app>Outside app</main>
       <itsalive-history hidden><itsalive-history-summary>summary</itsalive-history-summary></itsalive-history>
       <script data-app-runtime></script>
     `;
@@ -15,7 +15,7 @@ describe("canonical app root", () => {
     const root = ensureCanonicalAppRoot();
 
     expect(root.id).toBe("itsalive-root");
-    expect(root.querySelector("[data-legacy-app]")).toBeTruthy();
+    expect(document.querySelector("[data-outside-app]")).toBeNull();
     expect(document.querySelectorAll('[id="itsalive-root"]')).toHaveLength(1);
     expect(document.querySelector("itsalive-history")?.parentElement).toBe(document.body);
     expect(document.querySelector("[data-app-runtime]")?.parentElement).toBe(document.body);
@@ -32,12 +32,11 @@ describe("canonical app root", () => {
     expect(document.getElementById("itsalive-root")).toBe(root);
   });
 
-  it("recovers visible output into a new canonical root when a command replaces the body", () => {
+  it("recreates the canonical root and discards output from a full body replacement", () => {
     document.body.innerHTML = '<main data-rebuilt>Rebuilt app</main>';
 
     expect(() => enforceCanonicalAppRootAfterAgentCommand()).toThrow(/preserve exactly one direct #itsalive-root/);
-    const root = document.getElementById("itsalive-root");
-    expect(root).toBeTruthy();
-    expect(root?.querySelector("[data-rebuilt]")).toBeTruthy();
+    expect(document.getElementById("itsalive-root")).toBeTruthy();
+    expect(document.querySelector("[data-rebuilt]")).toBeNull();
   });
 });

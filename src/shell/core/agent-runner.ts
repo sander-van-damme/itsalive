@@ -10,7 +10,6 @@ export interface ExecutionResult {
   error?: { message: string; stack?: string; logs?: unknown[] };
   done?: boolean;
   message?: string;
-  screenshot?: string;
 }
 
 export interface AppExecutor {
@@ -26,7 +25,6 @@ export interface RunOptions {
   trigger: string;
   model: ModelConfig;
   credential?: Credential;
-  summary?: string;
   maxTurns?: number;
   maxDurationMs?: number;
   executionTimeoutMs?: number;
@@ -94,7 +92,7 @@ export class AgentRunner {
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, summary: options.summary, observation, environmentObservation, history, countTokens: options.countTokens });
+          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
           console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, hasObservation: Boolean(observation) });
           const commandParser = new StreamedCommandParser();

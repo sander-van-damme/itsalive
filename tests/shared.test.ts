@@ -44,11 +44,10 @@ describe("domain helpers", () => {
   });
 
   it("uses the URL fragment as the canonical client-side app route", () => {
-    const canonical = shellUrlForApp("https://itsalive.org/?app=legacy&mode=full", APP_ID);
+    const canonical = shellUrlForApp("https://itsalive.org/?mode=full", APP_ID);
     expect(canonical.href).toBe(`https://itsalive.org/?mode=full#app=${APP_ID}`);
     expect(appIdFromShellUrl(canonical)).toBe(APP_ID);
-    expect(appIdFromShellUrl(`https://itsalive.org/?app=${APP_ID}`)).toBe(APP_ID);
-    expect(appIdFromShellUrl(`https://itsalive.org/?app=legacy#app=${APP_ID}`)).toBe(APP_ID);
+    expect(appIdFromShellUrl(`https://itsalive.org/?app=${APP_ID}`)).toBeUndefined();
   });
 });
 
@@ -66,13 +65,11 @@ describe("bridge protocol", () => {
     expect(isAppToShellMessage(result)).toBe(true);
   });
 
-  it("uses the LLM request and response protocol without legacy AI message aliases", () => {
+  it("uses the LLM request and response protocol", () => {
     const request = createBridgeMessage(APP_ID, "req_llm123", { type: "llm.request", prompt: "compose" });
     const response = createBridgeMessage(APP_ID, "req_llm123", { type: "llm.response", result: "done" });
     expect(isAppToShellMessage(request)).toBe(true);
     expect(isShellToAppMessage(response)).toBe(true);
-    expect(isBridgeMessage({ ...request, type: "ai.request" })).toBe(false);
-    expect(isBridgeMessage({ ...response, type: "ai.response" })).toBe(false);
     expect(isBridgeMessage({ ...request, options: { temperature: 1 } })).toBe(false);
   });
 
@@ -97,12 +94,6 @@ describe("bridge protocol", () => {
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, paidProviderOption: true } })).toBe(false);
   });
 
-  it("rejects removed legacy message types", () => {
-    const envelope = createBridgeMessage(APP_ID, "req_legacy", { type: "execute", code: "" });
-    for (const type of ["ready.request", "ready", "metadata.request", "metadata", "logs.request", "logs.response", "app.meta.update", "app.meta.response", "screenshot.request", "screenshot"]) {
-      expect(isBridgeMessage({ ...envelope, type })).toBe(false);
-    }
-  });
 
   it("rejects malformed, unknown, and mismatched messages", () => {
     const valid = createBridgeMessage(APP_ID, "req_1234", { type: "execute", code: "return 2" });

@@ -36,12 +36,10 @@ export function ensureCanonicalAppRoot(ownerDocument: Document = document): HTML
   }
 
   for (const duplicate of roots(ownerDocument)) {
-    if (duplicate === root) continue;
-    while (duplicate.firstChild) root.append(duplicate.firstChild);
-    duplicate.remove();
+    if (duplicate !== root) duplicate.remove();
   }
 
-  for (const node of outsideAppNodes(ownerDocument, root)) root.append(node);
+  for (const node of outsideAppNodes(ownerDocument, root)) node.parentNode?.removeChild(node);
   return root;
 }
 

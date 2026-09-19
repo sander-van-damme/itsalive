@@ -2,6 +2,12 @@
 
 A browser-native platform for applications that keep building themselves while they are used. The root-domain shell owns the AI agent, history, configuration, and credentials. Every app runs as a persistent HTML document on its own wildcard subdomain and browser origin.
 
+## Beta compatibility policy
+
+itsalive.org is currently in beta. Until the project owner explicitly declares that the product is out of beta and ready for release, breaking changes are expected and preferred over compatibility layers. Beta app data, history, settings, database schemas, URLs, bridge messages, and runtime APIs may be reset or changed without migration. Do not add migration code, deprecated aliases, fallback readers, or other backward-compatibility shims unless they are specifically requested for a current product need.
+
+Once the project owner explicitly declares the product release-ready, compatibility and migration requirements must be reconsidered before making breaking changes.
+
 ## Architecture
 
 This repository produces two independent static builds:
@@ -20,7 +26,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Persistent app HTML with debounced autosave, live form-control normalization, restore, and script re-execution.
 - JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, repair turns, and streamed multi-command responses whose completed commands execute immediately while generation continues.
 - Context budgeting that always retains the immutable system prompt, app prompt, and current trigger.
-- OpenRouter-only provider registry for the product runtime, backed by a generic HTTP adapter that can support additional providers later.
+- OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
 - Native DOM inspection through ordinary browser APIs and execution results, plus literal history search, in-frame screenshots, and app log retrieval.
 - App-to-shell LLM requests and agent wake-ups.
 - Stable cron registrations and callback dispatch protocol. Cron callbacks run only while the relevant app runtime and shell are active; this is not server-side or background scheduling.

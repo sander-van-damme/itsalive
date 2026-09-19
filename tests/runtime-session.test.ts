@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { beforeEach, describe, expect, it } from 'vitest';
-import { RuntimeSession, runtimePresentation } from '../src/shell/core/runtime-session';
+import { RuntimeSession } from '../src/shell/core/runtime-session';
 
 describe('RuntimeSession', () => {
   beforeEach(() => { document.body.innerHTML = '<div id="stage"></div>'; });
@@ -27,10 +27,4 @@ describe('RuntimeSession', () => {
     expect(session.requireReady()).toBe(session.executor);
   });
 
-  it('does not describe an errored runtime as connected after an agent run', () => {
-    expect(runtimePresentation('error')).toEqual({ status: 'App runtime error', tone: 'error' });
-    expect(runtimePresentation('disposed')).toEqual({ status: 'App disconnected', tone: 'error' });
-    expect(runtimePresentation('ready')).toEqual({ status: 'App connected', tone: 'connected' });
-    expect(runtimePresentation('loading')).toEqual({ status: 'App connecting', tone: 'working' });
-  });
 });
