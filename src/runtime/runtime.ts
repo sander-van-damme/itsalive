@@ -1,8 +1,7 @@
 import { AppBridge } from "./bridge";
 import { installLogging } from "./logs";
-import { installAutosave, loadSavedDocument } from "./persistence";
+import { installAutosave, restoreInitialDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
-import { clearOriginStorage } from "./storage";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
@@ -99,6 +98,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
     return new AsyncFunction(`"use strict";\n${code}`).call(window);
   };
 
+  let autosave: ReturnType<typeof installAutosave> | undefined;
+  const persistDocument = async (html: string) => {
+    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "document.save", html }, 30_000);
+    if (response.type !== "document.saved") throw new Error(`Unexpected document save response: ${response.type}`);
+  };
+
   const listener = async (event: MessageEvent<unknown>) => {
     const message = bridge.validate(event);
     if (!message) return;
@@ -125,14 +130,17 @@ export async function startAppRuntime(options: RuntimeOptions) {
         bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
       }
     } else if (message.type === "reload") {
-      bridge.post({ type: "result", result: { reloading: true } }, message.requestId);
-      location.reload();
-    } else if (message.type === "storage.clear") {
-      autosave.suspend();
-      autosave.disconnect();
       try {
-        await clearOriginStorage();
-        bridge.post({ type: "result", result: { cleared: true } }, message.requestId);
+        await autosave?.save();
+        bridge.post({ type: "result", result: { reloading: true } }, message.requestId);
+        location.reload();
+      } catch (error) {
+        bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
+      }
+    } else if (message.type === "document.flush") {
+      try {
+        await autosave?.save();
+        bridge.post({ type: "result", result: { saved: true } }, message.requestId);
       } catch (error) {
         bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
       }
@@ -149,9 +157,9 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
   bridge.addMessageListener(listener);
 
-  await loadSavedDocument();
+  await restoreInitialDocument(options.documentHtml);
   ensureCanonicalAppRoot();
-  const autosave = installAutosave(options.autosaveDelay);
+  autosave = installAutosave(persistDocument, options.autosaveDelay);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => {
@@ -159,7 +167,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     interactions.destroy();
     durability.destroy();
     bridge.destroy();
-    autosave.disconnect();
+    autosave?.disconnect();
     logs.destroy();
   } };
 }
