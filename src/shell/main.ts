@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -12,7 +12,8 @@ let runtimeEpoch = 0;
 const jevControllers = new Set<AbortController>();
 const diagnostics = new DiagnosticLog(db, () => activeId);
 diagnostics.installConsoleCapture();
-const registry = createDefaultRegistry();
+const sessionUsage = new SessionUsageTracker();
+const registry = createDefaultRegistry(usage => sessionUsage.recordGeneration(usage));
 let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
@@ -98,7 +99,9 @@ const ui = new ShellUI(root, {
     localStorage.setItem('itsalive.settings', JSON.stringify(candidate));
     ui.setSettings(candidate);
     ui.setModelContextCapacity(modelContextTokens);
+    syncUsage();
   },
+  refreshUsage: async () => { await refreshOpenRouterUsage(); },
   exportLogs: async () => {
     await diagnostics.flush();
     const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
@@ -114,10 +117,17 @@ const ui = new ShellUI(root, {
 });
 const runtime = new RuntimeSession(frame => ui.mountFrame(frame));
 ui.setSettings(settings);
+syncUsage();
 if (settings.apiKey) {
-  void loadModelContextCapacity({ value: settings.apiKey })
-    .then(capacity => ui.setModelContextCapacity(capacity))
-    .catch(error => console.warn('[itsalive] Could not refresh OpenRouter model metadata yet', error));
+  const startupKey = { value: settings.apiKey };
+  void Promise.all([
+    loadModelContextCapacity(startupKey),
+    fetchOpenRouterKeyInfo(startupKey),
+  ]).then(([capacity, keyInfo]) => {
+    ui.setModelContextCapacity(capacity);
+    sessionUsage.setKeyInfo(keyInfo);
+    syncUsage();
+  }).catch(error => console.warn('[itsalive] Could not refresh OpenRouter metadata yet', error));
 }
 
 window.addEventListener('message', event => { void handleRuntimeMessage(event); });
@@ -206,6 +216,19 @@ async function loadModelContextCapacity(key: Credential): Promise<number> {
   return modelContextTokens;
 }
 
+function syncUsage(): void { ui.setUsage(sessionUsage.snapshot()); }
+
+async function refreshOpenRouterUsage(): Promise<void> {
+  const key = credential();
+  if (!key) return;
+  try {
+    sessionUsage.setKeyInfo(await fetchOpenRouterKeyInfo(key));
+    syncUsage();
+  } catch (error) {
+    console.warn('[itsalive] Could not refresh OpenRouter key usage', error);
+  }
+}
+
 async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
   const app = currentApp();
   if (!app || running) return false;
@@ -239,6 +262,10 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
       onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild), progress.phase === 'executing'),
+      onContext: context => {
+        sessionUsage.setContext(context.estimatedInputTokens, context.maxContextTokens);
+        syncUsage();
+      },
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
@@ -277,6 +304,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     } finally {
       resolveRunFinished();
       if (activeRunFinished === runFinished) activeRunFinished = undefined;
+      syncUsage();
     }
   }
   return true;
@@ -475,8 +503,11 @@ async function fireDueSchedules(): Promise<void> {
 }
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
-  try { const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: await modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }] }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
-  catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
+  try {
+    const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: await modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }] }, credential());
+    syncUsage();
+    respond(message, { type: 'llm.response', result: result.text });
+  } catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
 function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appId, message.requestId, payload), currentOrigin()); }
@@ -505,13 +536,13 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   if (!apiKey) throw new Error('OpenRouter API key is required');
   if (!Number.isFinite(historyContextTokens)) throw new Error('History context budget must be a number');
   const key = { value: apiKey };
-  const testRegistry = createDefaultRegistry();
-  const model = connectionTestModelConfig(OPENROUTER_PROVIDER, OPENROUTER_MODEL);
-  const [capacity] = await Promise.all([
+  const [capacity, keyInfo] = await Promise.all([
     fetchOpenRouterContextCapacity(OPENROUTER_MODEL, key),
-    testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }] }, key),
+    fetchOpenRouterKeyInfo(key),
   ]);
+  if (apiKey !== settings.apiKey) sessionUsage.reset();
   modelContextTokens = capacity;
+  sessionUsage.setKeyInfo(keyInfo);
   return { apiKey, historyContextTokens };
 }
 
