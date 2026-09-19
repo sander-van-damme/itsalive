@@ -287,17 +287,19 @@ export class ShellUI {
     };
     rail.querySelector<HTMLButtonElement>('[data-usage]')!.onclick = () => {
       this.usageOpen = !this.usageOpen;
+      if (this.usageOpen) { this.switcherOpen = false; this.actionsOpen = false; }
       this.renderRail();
       if (this.usageOpen) void this.actions.refreshUsage();
     };
     rail.querySelector<HTMLButtonElement>('[data-theme]')!.onclick = () => {
+      this.usageOpen = false;
       this.theme = this.theme === 'light' ? 'dark' : 'light';
       localStorage.setItem('itsalive.theme', this.theme);
       this.renderRail();
     };
     rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.usageOpen = false; this.view = this.view === 'settings' && this.active ? 'workspace' : 'settings'; this.collapsed = false; this.renderRail(); };
-    rail.querySelector<HTMLButtonElement>('[data-switcher]')?.addEventListener('click', () => { this.switcherOpen = !this.switcherOpen; this.actionsOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
-    rail.querySelector<HTMLButtonElement>('[data-app-menu]')?.addEventListener('click', () => { this.actionsOpen = !this.actionsOpen; this.switcherOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
+    rail.querySelector<HTMLButtonElement>('[data-switcher]')?.addEventListener('click', () => { this.switcherOpen = !this.switcherOpen; this.actionsOpen = false; this.usageOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
+    rail.querySelector<HTMLButtonElement>('[data-app-menu]')?.addEventListener('click', () => { this.actionsOpen = !this.actionsOpen; this.switcherOpen = false; this.usageOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
     rail.querySelector<HTMLButtonElement>('[data-launcher]')?.addEventListener('click', () => { this.view = 'launcher'; this.renderRail(); });
     rail.querySelector<HTMLButtonElement>('[data-mobile-app]')!.onclick = () => { this.mobileView = 'app'; this.renderRail(); };
     this.mount.querySelector<HTMLButtonElement>('[data-mobile-chat]')!.onclick = () => { this.mobileView = 'chat'; this.renderRail(); };
