@@ -4,6 +4,7 @@ import type { ShellDatabase } from "./database";
 import type { Credential, ModelConfig } from "./types";
 import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
+import { createAgentTimeout } from "./run-lifecycle";
 
 export interface ExecutionResult {
   value?: unknown;
@@ -27,6 +28,7 @@ export interface RunOptions {
   credential?: Credential;
   maxTurns?: number;
   maxDurationMs?: number;
+  idleTimeoutMs?: number;
   executionTimeoutMs?: number;
   maxObservationCharacters?: number;
   countTokens?: TokenCounter;
@@ -40,6 +42,8 @@ export interface RunOptions {
 
 export interface RunResult { status: "done" | "turn-limit" | "stalled"; message?: string; turns: number }
 
+export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 120_000;
+export const DEFAULT_AGENT_MAX_DURATION_MS = 10 * 60_000;
 const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
 const PROGRESS_INSPECTION = 'return document.getElementById("itsalive-root")?.outerHTML ?? document.body.innerHTML;';
 const COMPLETION_INSPECTION = `
@@ -72,7 +76,16 @@ export class AgentRunner {
     const abort = () => controller.abort(options.signal?.reason);
     if (options.signal?.aborted) abort();
     else options.signal?.addEventListener("abort", abort, { once: true });
-    const deadline = setTimeout(() => controller.abort(new DOMException("Agent run timed out", "TimeoutError")), options.maxDurationMs ?? 120_000);
+    const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS;
+    const maxDurationMs = options.maxDurationMs ?? DEFAULT_AGENT_MAX_DURATION_MS;
+    let idleDeadline: ReturnType<typeof setTimeout> | undefined;
+    const touchProgress = () => {
+      if (controller.signal.aborted) return;
+      if (idleDeadline) clearTimeout(idleDeadline);
+      idleDeadline = setTimeout(() => controller.abort(createAgentTimeout("idle-timeout")), idleTimeoutMs);
+    };
+    touchProgress();
+    const safetyDeadline = setTimeout(() => controller.abort(createAgentTimeout("safety-timeout")), maxDurationMs);
     const maxTurns = options.maxTurns ?? 12;
     let observation: string | undefined;
     let environmentObservation: string | undefined;
@@ -88,6 +101,7 @@ export class AgentRunner {
         console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
         try {
           if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+          touchProgress();
           reportProgress(options, "generating", turn);
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
@@ -128,8 +142,10 @@ export class AgentRunner {
                 return;
               }
               try {
+                touchProgress();
                 reportProgress(options, "executing", turn);
                 const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+                touchProgress();
                 streamedResult = executed.result;
                 streamedObservation = executed.observation;
               } catch (error) {
@@ -145,14 +161,18 @@ export class AgentRunner {
               { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, signal: controller.signal },
               options.credential,
               delta => {
+                if (delta) touchProgress();
                 for (const code of commandParser.push(delta)) enqueueCommand(code);
               },
             );
             await executionQueue;
+            touchProgress();
           } catch (error) {
             console.error('Model request failed', diagnosticError(error));
+            if (controller.signal.aborted) throw controller.signal.reason ?? error;
             throw error;
           }
+          if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
           if (streamedRuntimeError) throw streamedRuntimeError;
 
           let result: ExecutionResult;
@@ -214,8 +234,10 @@ export class AgentRunner {
               console.info('Continuing to next turn for code repair');
               continue;
             }
+            touchProgress();
             reportProgress(options, "executing", turn);
             const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+            touchProgress();
             result = executed.result;
             observation = executed.observation;
           }
@@ -290,9 +312,11 @@ export class AgentRunner {
       return { status: "turn-limit", turns: maxTurns };
     } catch (error) {
       console.error('Agent run failed', diagnosticError(error));
+      if (controller.signal.aborted) throw controller.signal.reason ?? error;
       throw error;
     } finally {
-      clearTimeout(deadline);
+      if (idleDeadline) clearTimeout(idleDeadline);
+      clearTimeout(safetyDeadline);
       options.signal?.removeEventListener("abort", abort);
       console.info(`Run finished (${Math.round(performance.now() - startedAt)}ms)`, { aborted: controller.signal.aborted });
       console.groupEnd();
