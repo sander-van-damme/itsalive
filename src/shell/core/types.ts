@@ -28,6 +28,8 @@ export interface ModelConfig extends ProviderModel {
   maxContextTokens: number;
   /** Local response headroom for context pruning; never serialized as a provider generation limit. */
   outputHeadroomTokens: number;
+  /** Experiment control: maximum prior-history tokens to include in one model turn. */
+  historyContextTokens: number;
   observationHeadroomTokens?: number;
 }
 

@@ -3,7 +3,7 @@ import { AgentRunner, type ExecutionResult } from '../src/shell/core/agent-runne
 import type { HistoryEntry } from '../src/shell/core/types';
 
 const appId = '550e8400-e29b-41d4-a716-446655440000';
-const model = { provider: 'local', model: 'test-model', maxContextTokens: 10_000, outputHeadroomTokens: 100 };
+const model = { provider: 'local', model: 'test-model', maxContextTokens: 10_000, outputHeadroomTokens: 100, historyContextTokens: 2_000 };
 
 describe('AgentRunner lifecycle', () => {
   afterEach(() => vi.restoreAllMocks());

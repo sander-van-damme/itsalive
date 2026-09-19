@@ -94,7 +94,19 @@ export class AgentRunner {
           const history = await this.db.history.forApp(options.appId);
           const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
-          console.info('Context', { provider: options.model.provider, model: options.model.model, estimatedInputTokens: context.estimatedInputTokens, messageCount: context.messages.length, includedHistoryCount: context.includedHistoryIds.length, omittedHistoryCount: context.omittedHistoryCount, hasObservation: Boolean(observation) });
+          console.info('Context', {
+            provider: options.model.provider,
+            model: options.model.model,
+            modelContextTokens: options.model.maxContextTokens,
+            configuredHistoryTokens: options.model.historyContextTokens,
+            selectedHistoryTokens: context.historyTokens,
+            effectiveHistoryBudget: context.historyTokenBudget,
+            estimatedInputTokens: context.estimatedInputTokens,
+            messageCount: context.messages.length,
+            includedHistoryCount: context.includedHistoryIds.length,
+            omittedHistoryCount: context.omittedHistoryCount,
+            hasObservation: Boolean(observation),
+          });
           const commandParser = new StreamedCommandParser();
           let streamedResult: ExecutionResult | undefined;
           let streamedObservation: string | undefined;

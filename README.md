@@ -59,7 +59,7 @@ npm run lint         # ESLint
 
 ## Provider configuration
 
-Open **Settings** in the shell, add your OpenRouter API key, and press **Save**. The shell tests the key before saving it. All product LLM requests use OpenRouter's `openrouter/auto` model. The shell does not send a client-side generation-token ceiling; OpenRouter and the routed model determine generation length. The shell still budgets and prunes input context/history so requests remain within the model context window.
+Open **Settings** in the shell, add your OpenRouter API key, and press **Save**. The shell tests the key before saving it. All product LLM requests use OpenRouter's `openrouter/auto` model. The shell does not send a client-side generation-token ceiling; OpenRouter and the routed model determine generation length. The shell loads Auto Router's current context capacity from OpenRouter's authenticated user model catalogue instead of hardcoding it.\n\nFor context experiments, Settings exposes a **History budget (tokens)** value. It controls only how many tokens of prior shell history may be included in an agent turn; the system prompt, app prompt, current trigger, and current observations are separate. The effective request remains bounded by the live model context capacity. Diagnostic logs record the configured history budget, selected history tokens, estimated total input, omitted-history count, model capacity, and provider-reported token usage so test runs can be compared.
 
 OpenRouter requests happen directly from root-origin browser JavaScript. Credentials are saved only in root-origin `localStorage`; use the runtime only on a trusted device and origin.
 

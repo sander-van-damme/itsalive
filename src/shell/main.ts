@@ -1,6 +1,6 @@
 import './styles.css';
-import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, fetchOpenRouterContextCapacity, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -22,10 +22,10 @@ const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
 
 const OPENROUTER_PROVIDER = 'openrouter';
 const OPENROUTER_MODEL = 'openrouter/auto';
-const MODEL_CONTEXT_TOKENS = 2_000_000;
 const MODEL_OUTPUT_HEADROOM_TOKENS = 8_192;
 
-const defaultSettings: SettingsValue = { apiKey: '' };
+const defaultSettings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
+let modelContextTokens: number | undefined;
 const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
 if (stored) {
@@ -33,8 +33,12 @@ if (stored) {
     const parsed = JSON.parse(stored) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Settings must be an object');
     const record = parsed as Record<string, unknown>;
-    if (Object.keys(record).length !== 1 || typeof record.apiKey !== 'string') throw new Error('Settings schema does not match this beta build');
-    settings = { apiKey: record.apiKey };
+    if (Object.keys(record).length !== 2
+      || typeof record.apiKey !== 'string'
+      || typeof record.historyContextTokens !== 'number'
+      || !Number.isFinite(record.historyContextTokens)
+      || record.historyContextTokens < 0) throw new Error('Settings schema does not match this beta build');
+    settings = { apiKey: record.apiKey, historyContextTokens: Math.floor(record.historyContextTokens) };
   } catch (error) {
     console.warn('[itsalive] Ignoring incompatible saved settings', error);
     localStorage.removeItem('itsalive.settings');
@@ -74,6 +78,7 @@ const ui = new ShellUI(root, {
     settings = candidate;
     localStorage.setItem('itsalive.settings', JSON.stringify(candidate));
     ui.setSettings(candidate);
+    ui.setModelContextCapacity(modelContextTokens);
   },
   exportLogs: async () => {
     await diagnostics.flush();
@@ -90,6 +95,11 @@ const ui = new ShellUI(root, {
 });
 const runtime = new RuntimeSession(frame => ui.mountFrame(frame));
 ui.setSettings(settings);
+if (settings.apiKey) {
+  void loadModelContextCapacity({ value: settings.apiKey })
+    .then(capacity => ui.setModelContextCapacity(capacity))
+    .catch(error => console.warn('[itsalive] Could not refresh OpenRouter model metadata yet', error));
+}
 
 window.addEventListener('message', event => { void handleRuntimeMessage(event); });
 window.addEventListener('unhandledrejection', event => { void log('error', 'shell', String(event.reason), event.reason); });
@@ -139,8 +149,24 @@ async function refreshMessages(): Promise<void> {
   ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map(e => ({ role: e.role as ChatLine['role'], content: e.content })));
 }
 
-function modelConfig(): ModelConfig { return { provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, outputHeadroomTokens: MODEL_OUTPUT_HEADROOM_TOKENS }; }
+async function modelConfig(): Promise<ModelConfig> {
+  const key = credential();
+  if (!key) throw new Error('OpenRouter is not configured');
+  return {
+    provider: OPENROUTER_PROVIDER,
+    model: OPENROUTER_MODEL,
+    maxContextTokens: await loadModelContextCapacity(key),
+    outputHeadroomTokens: MODEL_OUTPUT_HEADROOM_TOKENS,
+    historyContextTokens: settings.historyContextTokens,
+  };
+}
 function credential(): Credential | undefined { return settings.apiKey ? { value: settings.apiKey } : undefined; }
+
+async function loadModelContextCapacity(key: Credential): Promise<number> {
+  if (modelContextTokens != null) return modelContextTokens;
+  modelContextTokens = await fetchOpenRouterContextCapacity(OPENROUTER_MODEL, key);
+  return modelContextTokens;
+}
 
 async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
   const app = currentApp();
@@ -161,12 +187,13 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     }
     await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
     const runner = new AgentRunner(db, registry, executor);
+    const model = await modelConfig();
     const result = await runner.run({
       appId: app.id,
       appPrompt: app.prompt,
       trigger,
       persistTrigger: false,
-      model: modelConfig(),
+      model,
       credential: credential(),
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
@@ -291,7 +318,7 @@ async function fireDueSchedules(): Promise<void> {
 }
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
-  try { const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }] }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
+  try { const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: await modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }] }, credential()); respond(message, { type: 'llm.response', result: result.text }); }
   catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
@@ -317,11 +344,18 @@ function downloadText(name: string, value: string): void { const url = URL.creat
 
 async function testModelConnection(candidate: SettingsValue): Promise<SettingsValue> {
   const apiKey = candidate.apiKey.trim();
+  const historyContextTokens = Math.max(0, Math.floor(candidate.historyContextTokens));
   if (!apiKey) throw new Error('OpenRouter API key is required');
+  if (!Number.isFinite(historyContextTokens)) throw new Error('History context budget must be a number');
+  const key = { value: apiKey };
   const testRegistry = createDefaultRegistry();
   const model = connectionTestModelConfig(OPENROUTER_PROVIDER, OPENROUTER_MODEL);
-  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }] }, { value: apiKey });
-  return { apiKey };
+  const [capacity] = await Promise.all([
+    fetchOpenRouterContextCapacity(OPENROUTER_MODEL, key),
+    testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }] }, key),
+  ]);
+  modelContextTokens = capacity;
+  return { apiKey, historyContextTokens };
 }
 
 void refreshApps(appIdFromShellUrl(location.href)).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));

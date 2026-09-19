@@ -5,7 +5,8 @@ const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMI
 
 export interface AppSummary { id: string; name: string }
 export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
-export interface SettingsValue { apiKey: string }
+export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
+export interface SettingsValue { apiKey: string; historyContextTokens: number }
 export type RuntimeViewState = 'loading' | 'ready' | 'problem';
 type RailView = 'workspace' | 'launcher' | 'creation' | 'settings';
 type MobileView = 'app' | 'chat';
@@ -36,7 +37,8 @@ export class ShellUI {
   private apps: AppSummary[] = [];
   private active?: AppSummary;
   private messages: ChatLine[] = [];
-  private settings: SettingsValue = { apiKey: '' };
+  private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
+  private modelContextTokens?: number;
   private busy = false;
   private agentProgress = '';
   private appUpdating = false;
@@ -75,6 +77,11 @@ export class ShellUI {
   }
 
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
+  setModelContextCapacity(tokens: number | undefined): void {
+    this.modelContextTokens = tokens;
+    const node = this.mount.querySelector<HTMLElement>('[data-model-context]');
+    if (node) node.textContent = `Auto Router context capacity: ${tokens == null ? 'Not loaded yet' : `${tokens.toLocaleString()} tokens`}. This is loaded from OpenRouter rather than hardcoded.`;
+  }
 
   setBusy(busy: boolean): void {
     this.busy = busy;
@@ -300,12 +307,19 @@ export class ShellUI {
   }
 
   private renderSettings(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>${esc(this.settingsNotice || 'Add your OpenRouter API key.')}</p></div></header>
+    const contextCapacity = this.modelContextTokens == null ? 'Not loaded yet' : `${this.modelContextTokens.toLocaleString()} tokens`;
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-close-settings type="button" aria-label="Close settings"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>Settings</h1><p>${esc(this.settingsNotice || 'Configure OpenRouter and testing controls.')}</p></div></header>
       <form class="scroll settings-form" data-settings-form>
         <section class="settings-section" aria-labelledby="openrouter-heading"><h2 id="openrouter-heading">OpenRouter</h2>
           <p>All AI requests use OpenRouter Auto.</p>
           <div class="field"><label for="apiKey">OpenRouter API key</label><input id="apiKey" type="password" required value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Paste your OpenRouter API key"></div>
           <p class="security-note">The key is stored by this site in your browser and is never shared with generated apps. Avoid saving a key on a shared device.</p>
+          <p class="security-note" data-model-context>Auto Router context capacity: ${esc(contextCapacity)}. This is loaded from OpenRouter rather than hardcoded.</p>
+        </section>
+        <section class="settings-section" aria-labelledby="context-test-heading"><h2 id="context-test-heading">Context testing</h2>
+          <p>Use this while testing to vary how much prior shell history can be sent on each agent turn.</p>
+          <div class="field"><label for="historyContextTokens">History budget (tokens)</label><input id="historyContextTokens" type="number" min="0" step="1000" required value="${this.settings.historyContextTokens}"></div>
+          <p class="security-note">This budget applies only to prior history. The system prompt, app prompt, current request and latest observations are handled separately. The live model context capacity remains the hard safety ceiling.</p>
           <button class="action primary full-width" type="submit">Save</button><div class="settings-result" data-result role="status"></div>
         </section>
         <section class="settings-section build-info"><h2>Build</h2><p>Commit <code data-build-commit>${esc(BUILD_COMMIT)}</code></p></section>
@@ -320,7 +334,11 @@ export class ShellUI {
     const result = panel.querySelector<HTMLElement>('[data-result]')!;
     const button = panel.querySelector<HTMLButtonElement>('button[type=submit]')!;
     result.className = 'settings-result pending'; result.textContent = 'Testing…'; button.disabled = true;
-    const value: SettingsValue = { apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim() };
+    const historyContextTokens = Number(panel.querySelector<HTMLInputElement>('#historyContextTokens')!.value);
+    const value: SettingsValue = {
+      apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim(),
+      historyContextTokens: Number.isFinite(historyContextTokens) ? Math.max(0, Math.floor(historyContextTokens)) : DEFAULT_HISTORY_CONTEXT_TOKENS,
+    };
     try {
       await this.actions.saveSettings(value);
       this.settings = value;

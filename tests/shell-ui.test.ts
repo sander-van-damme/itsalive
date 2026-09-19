@@ -91,12 +91,12 @@ describe('ShellUI workspace', () => {
     apiKey.value = 'test-key';
     document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
 
-    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'test-key' }));
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'test-key', historyContextTokens: 12_000 }));
     await vi.waitFor(() => expect(document.querySelector('h1')?.textContent).toBe('What do you want to make?'));
   });
 
-  it('shows only OpenRouter API key configuration', async () => {
-    const { callbacks } = mounted();
+  it('exposes the history budget experiment without exposing provider internals', async () => {
+    const { callbacks, ui } = mounted();
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
 
     expect(document.querySelector('h2')?.textContent).toBe('OpenRouter');
@@ -105,16 +105,20 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('#endpoint')).toBeNull();
     expect(document.querySelector('#contextTokens')).toBeNull();
     expect(document.querySelector('#outputTokens')).toBeNull();
+    expect(document.querySelector<HTMLInputElement>('#historyContextTokens')?.value).toBe('12000');
     expect(document.querySelector<HTMLButtonElement>('button[type=submit]')?.textContent).toBe('Save');
     expect(document.querySelector('[data-build-commit]')?.textContent).toBe('development');
 
     const apiKey = document.querySelector<HTMLInputElement>('#apiKey')!;
     apiKey.value = 'sk-or-v1-test';
+    document.querySelector<HTMLInputElement>('#historyContextTokens')!.value = '4000';
     document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
 
-    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'sk-or-v1-test' }));
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'sk-or-v1-test', historyContextTokens: 4000 }));
     expect(document.querySelector('h1')?.textContent).toBe('Settings');
     expect(document.querySelector('[data-result]')?.textContent).toContain('OpenRouter connection works');
+    ui.setModelContextCapacity(1_000_000);
+    expect(document.querySelector('[data-model-context]')?.textContent).toContain('1,000,000 tokens');
   });
 
   it('routes creation to Settings until an LLM is configured', () => {
