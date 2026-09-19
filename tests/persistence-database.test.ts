@@ -40,14 +40,14 @@ describe('runtime-private persistence', () => {
 });
 
 describe('shell persistence', () => {
-  it('persists apps, history, logs, and schedules without legacy stores', async () => {
+  it('persists the current apps, history, logs, and schedules stores', async () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
     const connection = await db.open();
     expect([...connection.objectStoreNames]).toEqual(['apps', 'history', 'logs', 'schedules']);
     expect([...connection.transaction('history').objectStore('history').indexNames]).toEqual(['appId']);
     expect([...connection.transaction('logs').objectStore('logs').indexNames]).toEqual(['appId']);
 
-    await db.apps.put({ id: APP_ID, name: 'Test', prompt: 'Build', summary: '', createdAt: 1, updatedAt: 1 });
+    await db.apps.put({ id: APP_ID, name: 'Test', prompt: 'Build', createdAt: 1, updatedAt: 1 });
     await db.history.add({ appId: APP_ID, timestamp: 2, role: 'user', kind: 'chat', content: 'hello' });
     await db.logs.add({ appId: APP_ID, timestamp: 3, level: 'info', source: 'test', message: 'saved' });
     await db.schedules.put({ id: `${APP_ID}:daily`, appId: APP_ID, expression: '0 8 * * *', registeredAt: 4, nextRun: 5 });
@@ -62,7 +62,7 @@ describe('shell persistence', () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
     const otherId = '650e8400-e29b-41d4-a716-446655440000';
     for (const id of [APP_ID, otherId]) {
-      await db.apps.put({ id, name: id, prompt: 'Build', summary: '', createdAt: 1, updatedAt: 1 });
+      await db.apps.put({ id, name: id, prompt: 'Build', createdAt: 1, updatedAt: 1 });
       await db.history.add({ appId: id, timestamp: 2, role: 'user', kind: 'chat', content: id });
       await db.logs.add({ appId: id, timestamp: 3, level: 'info', source: 'test', message: id });
       await db.schedules.put({ id: `${id}:daily`, appId: id, expression: '0 8 * * *', registeredAt: 4 });
@@ -82,7 +82,7 @@ describe('shell persistence', () => {
 
   it('continues app deletion when origin cleanup fails', async () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
-    await db.apps.put({ id: APP_ID, name: 'Test', prompt: 'Build', summary: '', createdAt: 1, updatedAt: 1 });
+    await db.apps.put({ id: APP_ID, name: 'Test', prompt: 'Build', createdAt: 1, updatedAt: 1 });
     const report = vi.fn();
     await deleteApp(db, APP_ID, async () => { throw new Error('blocked'); }, report);
     expect(report).toHaveBeenCalledOnce();
