@@ -287,7 +287,7 @@ describe("Jev decisions and reaction batching", () => {
   });
 
   it("deduplicates the same behavioral episode while confirmation is pending", () => {
-    let now = 1_000;
+    const now = 1_000;
     let id = 0;
     const gate = new ReactionConfirmationGate(5_000, () => now, () => `prompt-${++id}`);
     const batch = { events: [state(7)], createdAt: now };
