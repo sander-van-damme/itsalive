@@ -321,7 +321,7 @@ export class ShellUI {
   }
 
   private renderLauncher(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-heading"><p class="eyebrow">Workspace</p><h1>Your apps</h1><p>Choose an app or start something new.</p></header>
+    panel.innerHTML = `<header class="panel-heading"><h1>Your apps</h1><p>Choose an app or start something new.</p></header>
       <div class="scroll launcher-content">
         <div class="launcher-list">${this.apps.map(app => `<button class="launcher-item" data-launch-app="${esc(app.id)}" type="button"><span class="app-icon">${esc(initials(app.name))}</span><strong>${esc(app.name)}</strong><i data-lucide="arrow-right" aria-hidden="true"></i></button>`).join('')}</div>
         <button class="action primary full-width" data-create type="button"><i data-lucide="plus" aria-hidden="true"></i>Create new app</button>
@@ -427,7 +427,7 @@ export class ShellUI {
         <section class="settings-section" aria-labelledby="openrouter-heading"><h2 id="openrouter-heading">OpenRouter</h2>
           <p>All AI requests use OpenRouter Auto.</p>
           <div class="field"><label for="apiKey">OpenRouter API key</label><input id="apiKey" type="password" required value="${esc(this.settings.apiKey)}" autocomplete="off" placeholder="Paste your OpenRouter API key"></div>
-          <p class="security-note">The key is stored by this site in your browser and is never shared with generated apps. Avoid saving a key on a shared device.</p>
+          <p class="security-note">Stored locally in this browser and never shared with generated apps. Avoid saving it on shared devices.</p>
           <p class="security-note" data-model-context>Auto Router context capacity: ${esc(contextCapacity)}. This is loaded from OpenRouter rather than hardcoded.</p>
           <p class="security-note">Session usage and key spend are shown in the usage control at the bottom of the sidebar.</p>
         </section>
