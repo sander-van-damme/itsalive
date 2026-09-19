@@ -6,6 +6,7 @@ export interface SessionUsageSnapshot {
   inputTokens: number;
   outputTokens: number;
   cost?: number;
+  costComplete: boolean;
   latestContextTokens?: number;
   contextCapacity?: number;
   keyUsage?: number;
@@ -21,20 +22,30 @@ export class SessionUsageTracker {
   private requests = 0;
   private inputTokens = 0;
   private outputTokens = 0;
-  private cost = 0;
-  private completeCost = true;
+  private knownCost = 0;
+  private pricedRequests = 0;
+  private unpricedRequests = 0;
   private latestContextTokens?: number;
   private contextCapacity?: number;
   private keyInfo?: OpenRouterKeyInfo;
 
   recordGeneration(usage: GenerateResult["usage"]): void {
-    if (!usage) return;
     this.requests++;
-    this.inputTokens += finiteNonNegative(usage.inputTokens) ?? 0;
-    this.outputTokens += finiteNonNegative(usage.outputTokens) ?? 0;
-    const cost = finiteNonNegative(usage.cost);
-    if (cost === undefined) this.completeCost = false;
-    else this.cost += cost;
+    this.inputTokens += finiteNonNegative(usage?.inputTokens) ?? 0;
+    this.outputTokens += finiteNonNegative(usage?.outputTokens) ?? 0;
+    const cost = finiteNonNegative(usage?.cost);
+    if (cost === undefined) this.unpricedRequests++;
+    else {
+      this.knownCost += cost;
+      this.pricedRequests++;
+    }
+  }
+
+  recordUnpricedUsage(usage?: { inputTokens?: number; outputTokens?: number }): void {
+    this.requests++;
+    this.inputTokens += finiteNonNegative(usage?.inputTokens) ?? 0;
+    this.outputTokens += finiteNonNegative(usage?.outputTokens) ?? 0;
+    this.unpricedRequests++;
   }
 
   setContext(inputTokens: number, capacity: number): void {
@@ -48,8 +59,9 @@ export class SessionUsageTracker {
     this.requests = 0;
     this.inputTokens = 0;
     this.outputTokens = 0;
-    this.cost = 0;
-    this.completeCost = true;
+    this.knownCost = 0;
+    this.pricedRequests = 0;
+    this.unpricedRequests = 0;
     this.latestContextTokens = undefined;
     this.contextCapacity = undefined;
     this.keyInfo = undefined;
@@ -60,7 +72,8 @@ export class SessionUsageTracker {
       requests: this.requests,
       inputTokens: this.inputTokens,
       outputTokens: this.outputTokens,
-      ...(this.requests > 0 && this.completeCost ? { cost: this.cost } : {}),
+      ...(this.pricedRequests > 0 ? { cost: this.knownCost } : {}),
+      costComplete: this.unpricedRequests === 0,
       ...(this.latestContextTokens !== undefined ? { latestContextTokens: this.latestContextTokens } : {}),
       ...(this.contextCapacity !== undefined ? { contextCapacity: this.contextCapacity } : {}),
       ...(this.keyInfo?.usage !== undefined ? { keyUsage: this.keyInfo.usage } : {}),
