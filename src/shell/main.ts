@@ -1,6 +1,6 @@
 import './styles.css';
-import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, fetchOpenRouterContextCapacity, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -16,6 +16,7 @@ const registry = createDefaultRegistry();
 let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
+let activeRunFinished: Promise<void> | undefined;
 let connectionTimer: number | undefined;
 const initialBuild = new InitialBuildIntent();
 const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
@@ -49,6 +50,7 @@ const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
 const confirmedReactionQueue = new Map<string, ReactionBatch>();
+const pausedRuns = new PausedRunStore();
 let jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 };
 
 const ui = new ShellUI(root, {
@@ -65,11 +67,23 @@ const ui = new ShellUI(root, {
   deleteApp: async id => {
     reactionConfirmationGates.delete(id);
     confirmedReactionQueue.delete(id);
+    pausedRuns.clear(id);
     const clearOrigin = activeId === id && runtime.state === 'ready' ? () => requestRuntime({ type: 'storage.clear' }) : undefined;
     await deleteApp(db, id, clearOrigin, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
     initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
   },
-  sendMessage: async content => { await runAgent(content); },
+  sendMessage: async content => {
+    const targetAppId = activeId;
+    if (targetAppId) {
+      pausedRuns.clear(targetAppId);
+      syncResumePrompt();
+    }
+    await waitForAgentIdle();
+    if (activeId !== targetAppId) return;
+    await runAgent(content);
+  },
+  stopAgent: () => { stopActiveRun('user-stop'); },
+  resumePausedRun: async id => { await resumePausedRun(id); },
   resolveInteractionPrompt: async (id, accepted) => { await resolveInteractionPrompt(id, accepted); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
@@ -125,13 +139,17 @@ async function refreshApps(select?: string): Promise<void> {
     if (activeId && !apps.some(a => a.id === activeId)) activeId = undefined;
     ui.setApps(apps as AppSummary[], activeId);
     syncInteractionPrompt();
+    syncResumePrompt();
     await refreshMessages();
   }
 }
 
 async function selectApp(id: string): Promise<void> {
   if (!apps.some(a => a.id === id)) return;
-  if (activeId !== id) stopActiveRun('App selection changed');
+  if (activeId !== id) {
+    stopActiveRun('app-switch');
+    ui.setBusy(false);
+  }
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
@@ -139,14 +157,27 @@ async function selectApp(id: string): Promise<void> {
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
+  syncResumePrompt();
   const frame = runtime.switchTo(id, currentOrigin());
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
 }
 
-function stopActiveRun(reason: string): void { activeRun?.abort(new DOMException(reason, 'AbortError')); ui.setBusy(false); }
-function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(new DOMException('App runtime disposed', 'AbortError')); jevControllers.clear(); stopActiveRun('App runtime disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 }; if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
+async function waitForAgentIdle(): Promise<void> {
+  while (running) {
+    const pending = activeRunFinished;
+    if (!pending) return;
+    await pending;
+  }
+}
+
+function stopActiveRun(kind: ExternalAgentAbortKind): boolean {
+  if (!activeRun || activeRun.signal.aborted) return false;
+  activeRun.abort(createAgentAbort(kind));
+  return true;
+}
+function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(createAgentAbort('runtime-disposed')); jevControllers.clear(); stopActiveRun('runtime-disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 }; if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
 function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
 
@@ -182,7 +213,10 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   try { executor = runtime.requireReady(); }
   catch (error) { ui.setBusy(false); ui.setConnectionStatus('error'); ui.showError(error instanceof Error ? error.message : String(error)); return false; }
   const runController = new AbortController();
+  let resolveRunFinished!: () => void;
+  const runFinished = new Promise<void>(resolve => { resolveRunFinished = resolve; });
   activeRun = runController;
+  activeRunFinished = runFinished;
   running = true;
   const isInitialBuild = trigger === INITIAL_BUILD_TRIGGER;
   ui.setBusy(true);
@@ -210,20 +244,39 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
     if (result.status === 'stalled') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I stopped a repeated verification loop because it was no longer changing the app. Your changes were preserved; ask me to continue if you want another repair attempt.' });
   } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    await log('error', `agent:${app.id}`, message, error, app.id);
-    await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: `Agent stopped: ${message}` });
+    const failure = normalizeAgentRunFailure(error, runController.signal);
+    await log(failure.kind === 'run-error' ? 'error' : 'info', `agent:${app.id}`, 'Agent run stopped', {
+      kind: failure.kind,
+      resumable: failure.resumable,
+      technical: failure.technical,
+      error,
+    }, app.id);
+    if (failure.kind === 'app-switch') {
+      const paused = pausedRuns.pause(app.id, trigger);
+      await log('info', `agent:${app.id}`, 'Agent run paused for app switch', { pausedRunId: paused.id }, app.id);
+    } else if (failure.userMessage) {
+      await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: failure.userMessage });
+    }
   } finally {
     if (activeRun === runController) activeRun = undefined;
     running = false;
-    ui.setBusy(false);
-    ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
-    await refreshMessages();
-    void startPendingInitialBuild();
-    void startQueuedConfirmedReaction();
-    if (environmentalObservations.length && runtime.state === 'ready') {
-      const trigger = environmentalObservations.splice(0).join('\n\n');
-      void runAgent(trigger, false);
+    try {
+      const stillActive = activeId === app.id;
+      if (stillActive) {
+        ui.setBusy(false);
+        ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
+        syncResumePrompt();
+        await refreshMessages();
+      }
+      void startPendingInitialBuild();
+      void startQueuedConfirmedReaction();
+      if (stillActive && environmentalObservations.length && runtime.state === 'ready') {
+        const trigger = environmentalObservations.splice(0).join('\n\n');
+        void runAgent(trigger, false);
+      }
+    } finally {
+      resolveRunFinished();
+      if (activeRunFinished === runFinished) activeRunFinished = undefined;
     }
   }
   return true;
@@ -312,6 +365,38 @@ function reactionConfirmationGate(appId: string): ReactionConfirmationGate {
     reactionConfirmationGates.set(appId, gate);
   }
   return gate;
+}
+
+function syncResumePrompt(): void {
+  const appId = activeId;
+  const paused = appId ? pausedRuns.current(appId) : undefined;
+  const prompt: ResumePrompt | undefined = paused
+    ? {
+        id: paused.id,
+        content: 'Work paused because you switched apps. Changes already applied were kept.',
+        actionLabel: 'Continue change',
+      }
+    : undefined;
+  ui.setResumePrompt(prompt);
+}
+
+async function resumePausedRun(id: string): Promise<void> {
+  const appId = activeId;
+  if (!appId) return;
+  await waitForAgentIdle();
+  if (activeId !== appId || runtime.state !== 'ready') return;
+  const paused = pausedRuns.take(appId, id);
+  if (!paused) {
+    syncResumePrompt();
+    return;
+  }
+  syncResumePrompt();
+  await log('info', `agent:${appId}`, 'Resuming paused agent run', { pausedRunId: paused.id }, appId);
+  const started = await runAgent(paused.trigger, false);
+  if (!started) {
+    pausedRuns.restore(paused);
+    syncResumePrompt();
+  }
 }
 
 function syncInteractionPrompt(): void {
