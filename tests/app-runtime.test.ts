@@ -101,6 +101,29 @@ describe("app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
   });
 
+  it("tracks listeners installed only by transient agent commands", async () => {
+    window.dispatchEvent(new MessageEvent("message", { data: {
+      type: "execute",
+      code: "const button = document.createElement('button'); button.dataset.ephemeral = 'yes'; document.getElementById('itsalive-root').append(button); button.addEventListener('click', () => {}); return 'wired';",
+      requestId: "ephemeral-listener",
+    } }));
+    await nextTask();
+
+    window.dispatchEvent(new MessageEvent("message", { data: {
+      type: "execute",
+      code: "return window['__itsaliveRuntimeDurabilityAuditV1']();",
+      requestId: "durability-audit",
+    } }));
+    await nextTask();
+
+    expect(state.posts).toContainEqual({
+      payload: { type: "result", result: { runtimeOnlyEventListenerCount: 1 } },
+      requestId: "durability-audit",
+    });
+
+    document.querySelector("[data-ephemeral]")?.remove();
+  });
+
   it("rejects UI appended beside the canonical app root and removes the duplicate surface", async () => {
     const root = document.getElementById("itsalive-root");
     expect(root).toBeTruthy();

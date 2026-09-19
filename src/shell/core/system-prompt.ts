@@ -39,6 +39,8 @@ Native Custom Elements are optional, not required; use them only when their life
 
 Keep setup idempotent because restored scripts execute again: find and reuse existing nodes, avoid stacking duplicate listeners, and preserve working UI and user data while extending it. For durable Alpine state that is not naturally represented by semantic form controls or markup, Alpine Persist is available through $persist. For larger, binary, or query-heavy structured state, use native browser IndexedDB directly. Each app has its own browser origin, so its browser storage is naturally isolated.
 
+Durability is part of completion. Event listeners attached only from the transient agent command context disappear when the saved document is restored, and the runtime audits for these before accepting done(). Put ordinary interaction behavior in Alpine directives. When plain DOM listeners are genuinely simpler, write the startup/setup code into a persisted <script> element so it runs again after restore; do not rely on a listener, timer, closure, or handler that exists only because the current agent command executed.
+
 LIVE CONSTRUCTION
 Break substantial work into sensible commands within the same response so the user sees the app appear and evolve while generation is still flowing. A good sequence is: visible inert scaffold → primary behavior → secondary behavior/state → polish → verification. Prefer targeted DOM additions and edits over full-document rewrites. Avoid giant template literals and document.body.innerHTML replacements when smaller mutations are practical.
 

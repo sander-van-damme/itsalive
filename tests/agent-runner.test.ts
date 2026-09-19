@@ -232,6 +232,40 @@ describe('AgentRunner lifecycle', () => {
     ]));
   });
 
+  it('does not accept done while app behavior depends on transient agent listeners', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn()
+      .mockResolvedValueOnce({ text: 'return itsalive.done("too early");' })
+      .mockResolvedValueOnce({ text: 'return itsalive.done("durable");' }) };
+    let inspections = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        inspections++;
+        return inspections === 1
+          ? { value: { rootHtml: '<main><button>Play</button></main>', rootCount: 1, outsideUiCount: 0, runtimeOnlyEventListenerCount: 1 } }
+          : { value: { rootHtml: '<main x-data><button @click="playing = true">Play</button></main>', rootCount: 1, outsideUiCount: 0, runtimeOnlyEventListenerCount: 0 } };
+      }
+      return { done: true, message: inspections ? 'durable' : 'candidate' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Make the button durable', model, maxTurns: 3,
+    });
+
+    expect(result).toMatchObject({ status: 'done', turns: 2 });
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('runtime-only event listener') }),
+    ]));
+  });
+
   it('stops a repeated low-signal verification loop after one diagnostic repair turn', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {

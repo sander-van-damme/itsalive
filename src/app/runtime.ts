@@ -10,6 +10,7 @@ import { serializeError, shellUrlForApp } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 import { COMPONENTS } from "./components";
+import { installAgentDurabilityAudit } from "./durability";
 
 const DONE = Symbol("agent-done");
 
@@ -91,6 +92,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     done,
   });
   installRuntimeApi(window, runtimeApi);
+  const durability = installAgentDurabilityAudit();
 
   const run = async (code: string) => {
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
@@ -106,7 +108,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
         ensureCanonicalAppRoot();
         let result: unknown;
         try {
-          result = await run(message.code);
+          result = await durability.runAgentCommand(() => run(message.code));
         } catch (error) {
           try {
             enforceCanonicalAppRootAfterAgentCommand();
@@ -152,7 +154,14 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const autosave = installAutosave(options.autosaveDelay);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
-  return { bridge, appId, autosave, destroy: () => { removeEventListener("message", listener); interactions.destroy(); bridge.destroy(); autosave.disconnect(); logs.destroy(); } };
+  return { bridge, appId, autosave, destroy: () => {
+    removeEventListener("message", listener);
+    interactions.destroy();
+    durability.destroy();
+    bridge.destroy();
+    autosave.disconnect();
+    logs.destroy();
+  } };
 }
 
 export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {
