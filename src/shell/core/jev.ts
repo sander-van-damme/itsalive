@@ -18,7 +18,6 @@ export const GENERIC_JEV_QUESTION = {
 
 /** Narrow typed-decision adapter; deliberately separate from text generation. */
 export class OpenRouterJevAdapter implements DecisionModel {
-  readonly id = "openrouter-jev";
   constructor(private readonly fetcher: typeof fetch = fetch) {}
   async evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult> {
     if (!credential?.value) throw new Error("Jev credential is not configured");
@@ -38,12 +37,6 @@ export class OpenRouterJevAdapter implements DecisionModel {
     const usage = body.usage as Record<string, unknown> | undefined;
     return { probability, ...(typeof usage?.input_tokens === "number" ? { usage: { inputTokens: usage.input_tokens } } : {}) };
   }
-}
-
-export class MockDecisionModel implements DecisionModel {
-  readonly id = "mock-jev";
-  constructor(private readonly decide: (request: DecisionRequest) => number | Promise<number>) {}
-  async evaluate(request: DecisionRequest): Promise<DecisionResult> { return { probability: await this.decide(request) }; }
 }
 
 
