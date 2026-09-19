@@ -1,7 +1,8 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
 import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
-import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
+import { loadRuntimeSource } from './runtime-source';
+import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -145,13 +146,22 @@ const ui = new ShellUI(root, {
     downloadText(`itsalive-logs-${Date.now()}.log`, contents);
   },
   reloadApp: () => {
-    if (!activeId || !runtime.frame?.contentWindow) return;
+    if (!activeId || runtime.state !== 'ready') return;
     runtime.setState('loading');
     ui.setConnectionStatus('working');
-    runtime.frame?.contentWindow?.postMessage(createBridgeMessage(activeId, createRequestId(), { type: 'reload' }), currentOrigin());
+    runtime.post({ type: 'reload' });
   }
 });
-const runtime = new RuntimeSession(frame => ui.mountFrame(frame));
+const runtime = new RuntimeSession(
+  frame => ui.mountFrame(frame),
+  message => { void handleRuntimeMessage(message); },
+  error => {
+    if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
+    ui.setBusy(false);
+    ui.setConnectionStatus('error');
+    ui.showError(error.message);
+  },
+);
 ui.setSettings(settings);
 syncUsage();
 if (settings.apiKey) {
@@ -166,7 +176,6 @@ if (settings.apiKey) {
   }).catch(error => console.warn('[itsalive] Could not refresh OpenRouter metadata yet', error));
 }
 
-window.addEventListener('message', event => { void handleRuntimeMessage(event); });
 window.addEventListener('unhandledrejection', event => { void log('error', 'shell', String(event.reason), event.reason); });
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
@@ -204,11 +213,12 @@ async function selectApp(id: string): Promise<void> {
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
   ui.setConnectionStatus('working');
-  connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
-  const frame = runtime.switchTo(id, currentOrigin());
+  const runtimeSource = await loadRuntimeSource();
+  connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
+  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
@@ -365,10 +375,8 @@ async function startPendingInitialBuild(): Promise<void> {
   await run;
 }
 
-async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void> {
-  if (!activeId || !runtime.frame?.contentWindow) return;
-  const message = validateMessageEvent(event, { expectedOrigin: currentOrigin(), expectedAppId: activeId, expectedSource: runtime.frame.contentWindow, direction: 'to-shell' });
-  if (!message || !isAppToShellMessage(message)) return;
+async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): Promise<void> {
+  if (!activeId || message.appId !== activeId) return;
   switch (message.type) {
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
@@ -542,9 +550,9 @@ async function startQueuedConfirmedReaction(): Promise<void> {
 async function fireDueSchedules(): Promise<void> {
   const now = Date.now();
   for (const schedule of await db.schedules.list()) {
-    if (!schedule.nextRun || schedule.nextRun > now || schedule.appId !== activeId || runtime.state !== 'ready' || !runtime.frame?.contentWindow) continue;
+    if (!schedule.nextRun || schedule.nextRun > now || schedule.appId !== activeId || runtime.state !== 'ready') continue;
     const callbackId = schedule.id.slice(schedule.appId.length + 1);
-    runtime.frame.contentWindow.postMessage(createBridgeMessage(schedule.appId, createRequestId(), { type: 'cron.fire', callbackId }), currentOrigin());
+    runtime.post({ type: 'cron.fire', callbackId });
     await db.schedules.put({ ...schedule, lastFired: now, nextRun: nextCronRun(schedule.expression, now) });
   }
 }
@@ -557,22 +565,13 @@ async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; 
   } catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
 }
 
-function respond(message: BridgeMessage, payload: Parameters<typeof createBridgeMessage>[2]): void { runtime.frame?.contentWindow?.postMessage(createBridgeMessage(message.appId, message.requestId, payload), currentOrigin()); }
+function respond(message: BridgeMessage<AppToShellPayload>, payload: Parameters<RuntimeSession['post']>[0]): void { runtime.respond(message, payload); }
 async function log(level: LogEntry['level'], source: string, message: string, details?: unknown, appId?: string) {
   await diagnostics.write(level, source, message, details, appId);
 }
 
-async function requestRuntime<T>(payload: Parameters<typeof createBridgeMessage>[2], timeoutMs = 10_000): Promise<T> {
-  const frame = runtime.frame;
-  const requestAppId = activeId;
-  const requestOrigin = runtime.origin;
-  if (!frame?.contentWindow || !requestAppId || !requestOrigin || runtime.state !== 'ready') throw new Error('App is not connected');
-  const requestId = createRequestId();
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => { window.removeEventListener('message', listener); reject(new Error('Runtime request timed out')); }, timeoutMs);
-    const listener = (event: MessageEvent) => { const msg = validateMessageEvent(event, { expectedOrigin: requestOrigin, expectedAppId: requestAppId, expectedSource: frame.contentWindow, direction: 'to-shell' }); if (!msg || msg.requestId !== requestId || (msg.type !== 'result' && msg.type !== 'execution.error')) return; clearTimeout(timer); window.removeEventListener('message', listener); if (msg.type === 'execution.error') reject(new Error(msg.error.message)); else resolve(msg.result as T); };
-    window.addEventListener('message', listener); frame.contentWindow!.postMessage(createBridgeMessage(requestAppId, requestId, payload), requestOrigin);
-  });
+async function requestRuntime<T>(payload: Parameters<RuntimeSession['post']>[0], timeoutMs = 10_000): Promise<T> {
+  return runtime.request<T>(payload, timeoutMs);
 }
 
 function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
