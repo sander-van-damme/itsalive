@@ -130,7 +130,7 @@ export class AgentRunner {
           try {
             generated = await generateWithStreaming(
               this.providers,
-              { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, maxOutputTokens: options.model.maxOutputTokens, signal: controller.signal },
+              { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, signal: controller.signal },
               options.credential,
               delta => {
                 for (const code of commandParser.push(delta)) enqueueCommand(code);
