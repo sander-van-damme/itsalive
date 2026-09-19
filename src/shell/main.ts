@@ -87,9 +87,17 @@ const ui = new ShellUI(root, {
     reactionConfirmationGates.delete(id);
     confirmedReactionQueue.delete(id);
     pausedRuns.clear(id);
+    if (activeId === id) {
+      if (runtime.state === 'ready') {
+        try { await requestRuntime({ type: 'document.flush' }); }
+        catch (error) { console.warn(`[itsalive] Could not flush ${id} before deletion; continuing deletion`, error); }
+      }
+      disposeFrame();
+    }
     const origin = appOrigin(id, ROOT_DOMAIN, 'https:');
     await deleteApp(db, id, () => clearAppOrigin(origin), error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
-    initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
+    initialBuild.clear(id);
+    await refreshApps(apps.find(a => a.id !== id)?.id);
   },
   sendMessage: async content => {
     const targetAppId = activeId;
