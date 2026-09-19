@@ -12,6 +12,7 @@ export * from "./diagnostic-log";
 export * from "./history";
 export * from "./initial-build";
 export * from "./jev";
+export * from "./model-capabilities";
 export * from "./providers";
 export * from "./reactions";
 export * from "./schedules";
