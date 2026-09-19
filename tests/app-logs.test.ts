@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installLogging } from "../src/app/logs";
+import { installLogging } from "../src/runtime/logs";
 
 describe("app console logging", () => {
   afterEach(() => vi.restoreAllMocks());
