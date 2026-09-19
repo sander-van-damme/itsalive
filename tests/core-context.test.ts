@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildModelContext, conservativeTokenEstimate } from "../src/shell/core/context";
 import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 
-const model = { provider: "test", model: "test", maxContextTokens: 4_000, outputHeadroomTokens: 200 };
+const model = { provider: "test", model: "test", maxContextTokens: 4_000, outputHeadroomTokens: 200, historyContextTokens: 1_000 };
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
@@ -59,24 +59,35 @@ describe("shell context builder", () => {
     expect(result.includedHistoryIds).not.toContain(0);
   });
 
-  it("hard-bounds operational trace history even with a very large context window", () => {
-    const history = Array.from({ length: 30 }, (_, index) => ({
+  it("uses the configured history budget as the experiment variable", () => {
+    const history = Array.from({ length: 20 }, (_, index) => ({
       id: index + 1,
       appId: "app",
       timestamp: index,
-      role: index % 2 ? "observation" as const : "agent" as const,
-      kind: index % 2 ? "execution" as const : "javascript" as const,
-      content: `operation-${index} ${"x".repeat(1_000)}`,
+      role: "user" as const,
+      kind: "chat" as const,
+      content: `message-${index} ${"x".repeat(80)}`,
     }));
-    const result = buildModelContext({
-      model: { ...model, maxContextTokens: 128_000, outputHeadroomTokens: 8_192 },
+    const small = buildModelContext({
+      model: { ...model, maxContextTokens: 128_000, historyContextTokens: 220 },
       appPrompt: "coach",
-      trigger: "tiny follow-up",
+      trigger: "follow-up",
       history,
+      countTokens: value => value.length,
+    });
+    const large = buildModelContext({
+      model: { ...model, maxContextTokens: 128_000, historyContextTokens: 660 },
+      appPrompt: "coach",
+      trigger: "follow-up",
+      history,
+      countTokens: value => value.length,
     });
 
-    expect(result.includedHistoryIds).toEqual([25, 26, 27, 28, 29, 30]);
-    expect(result.estimatedInputTokens).toBeLessThan(10_000);
+    expect(small.historyTokenBudget).toBe(220);
+    expect(large.historyTokenBudget).toBe(660);
+    expect(large.includedHistoryIds.length).toBeGreaterThan(small.includedHistoryIds.length);
+    expect(small.includedHistoryIds).toContain(20);
+    expect(large.includedHistoryIds).toContain(20);
   });
 
   it("rejects mandatory context that cannot fit rather than truncating system prompt", () => {
