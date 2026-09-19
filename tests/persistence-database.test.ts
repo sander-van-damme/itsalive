@@ -58,7 +58,7 @@ describe('shell persistence', () => {
     expect(await db.schedules.forApp(APP_ID)).toHaveLength(1);
   });
 
-  it('atomically deletes one app and its shell-owned data without touching another app', async () => {
+  it('deletes product data while retaining diagnostics for postmortem export', async () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
     const otherId = '650e8400-e29b-41d4-a716-446655440000';
     for (const id of [APP_ID, otherId]) {
@@ -72,7 +72,7 @@ describe('shell persistence', () => {
 
     expect(await db.apps.get(APP_ID)).toBeUndefined();
     expect(await db.history.forApp(APP_ID)).toEqual([]);
-    expect(await db.logs.forApp(APP_ID)).toEqual([]);
+    expect(await db.logs.forApp(APP_ID)).toHaveLength(1);
     expect(await db.schedules.forApp(APP_ID)).toEqual([]);
     expect(await db.apps.get(otherId)).toBeDefined();
     expect(await db.history.forApp(otherId)).toHaveLength(1);
