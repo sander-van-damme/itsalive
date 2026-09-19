@@ -6,6 +6,7 @@ const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMI
 export interface AppSummary { id: string; name: string }
 export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
 export interface InteractionPrompt { id: string; content: string; confirmLabel: string; dismissLabel: string }
+export interface ResumePrompt { id: string; content: string; actionLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
 export type RuntimeViewState = 'loading' | 'ready' | 'problem';
@@ -17,6 +18,8 @@ export interface ShellActions {
   selectApp(id: string): Promise<void>;
   deleteApp(id: string): Promise<void>;
   sendMessage(content: string): Promise<void>;
+  stopAgent(): void;
+  resumePausedRun(id: string): Promise<void>;
   resolveInteractionPrompt(id: string, accepted: boolean): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
@@ -40,6 +43,7 @@ export class ShellUI {
   private active?: AppSummary;
   private messages: ChatLine[] = [];
   private interactionPrompt?: InteractionPrompt;
+  private resumePrompt?: ResumePrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
   private busy = false;
@@ -69,6 +73,7 @@ export class ShellUI {
       this.actionsOpen = false;
       this.mobileView = 'chat';
       this.interactionPrompt = undefined;
+      this.resumePrompt = undefined;
     }
     this.renderStagePlaceholder();
     this.renderRail();
@@ -82,6 +87,11 @@ export class ShellUI {
 
   setInteractionPrompt(prompt: InteractionPrompt | undefined): void {
     this.interactionPrompt = prompt;
+    if (this.view === 'workspace') this.renderPanel();
+  }
+
+  setResumePrompt(prompt: ResumePrompt | undefined): void {
+    this.resumePrompt = prompt;
     if (this.view === 'workspace') this.renderPanel();
   }
 
@@ -267,7 +277,7 @@ export class ShellUI {
   }
 
   private renderChat(panel: HTMLElement): void {
-    const prompt = this.interactionPrompt
+    const interactionPrompt = this.interactionPrompt
       ? `<div class="message assistant interaction-prompt" data-interaction-prompt="${esc(this.interactionPrompt.id)}">
           <span>${esc(this.interactionPrompt.content)}</span>
           <div class="prompt-actions">
@@ -276,12 +286,24 @@ export class ShellUI {
           </div>
         </div>`
       : '';
-    const messages = this.messages.length || prompt
-      ? `${this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')}${prompt}`
+    const resumePrompt = this.resumePrompt
+      ? `<div class="message assistant interaction-prompt" data-resume-prompt="${esc(this.resumePrompt.id)}">
+          <span>${esc(this.resumePrompt.content)}</span>
+          <div class="prompt-actions">
+            <button class="action primary" data-resume-run type="button" ${this.busy ? 'disabled' : ''}>${esc(this.resumePrompt.actionLabel)}</button>
+          </div>
+        </div>`
+      : '';
+    const prompts = `${resumePrompt}${interactionPrompt}`;
+    const messages = this.messages.length || prompts
+      ? `${this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')}${prompts}`
       : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>What should we change?</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
+    const composerAction = this.busy
+      ? `<button class="send stop" data-stop type="button" aria-label="Stop agent"><i data-lucide="square" aria-hidden="true"></i></button>`
+      : `<button class="send" type="submit" aria-label="Send message"><i data-lucide="arrow-up" aria-hidden="true"></i></button>`;
     panel.innerHTML = `${this.busy ? `<div class="working-state" role="status"><span class="spinner" aria-hidden="true"></span>${esc(this.agentProgress || 'Working…')}</div>` : ''}
       <div class="chat-stream" data-stream aria-live="polite">${messages}</div>
-      <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" rows="1" placeholder="Ask me to change anything…" ${this.busy ? 'disabled' : ''}></textarea><button class="send" type="submit" aria-label="Send message" ${this.busy ? 'disabled' : ''}><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
+      <form class="composer" data-composer><div class="composer-box"><label class="sr-only" for="message">Message</label><textarea id="message" rows="1" placeholder="Ask me to change anything…" ${this.busy ? 'disabled' : ''}></textarea>${composerAction}</div></form>`;
     const stream = panel.querySelector<HTMLElement>('[data-stream]')!;
     if (this.chatNearBottom) stream.scrollTop = stream.scrollHeight;
     stream.onscroll = () => { this.chatNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80; };
@@ -293,12 +315,22 @@ export class ShellUI {
     };
     panel.querySelector<HTMLButtonElement>('[data-prompt-confirm]')?.addEventListener('click', () => resolvePrompt(true));
     panel.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')?.addEventListener('click', () => resolvePrompt(false));
+    panel.querySelector<HTMLButtonElement>('[data-resume-run]')?.addEventListener('click', event => {
+      const current = this.resumePrompt;
+      if (!current) return;
+      (event.currentTarget as HTMLButtonElement).disabled = true;
+      void this.actions.resumePausedRun(current.id);
+    });
+    panel.querySelector<HTMLButtonElement>('[data-stop]')?.addEventListener('click', event => {
+      (event.currentTarget as HTMLButtonElement).disabled = true;
+      this.actions.stopAgent();
+    });
     const form = panel.querySelector<HTMLFormElement>('[data-composer]')!;
     const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
     const resize = () => { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`; };
     textarea.oninput = resize;
-    form.onsubmit = event => { event.preventDefault(); const content = textarea.value.trim(); if (!content) return; textarea.value = ''; resize(); this.chatNearBottom = true; void this.actions.sendMessage(content); };
-    textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
+    form.onsubmit = event => { event.preventDefault(); if (this.busy) return; const content = textarea.value.trim(); if (!content) return; textarea.value = ''; resize(); this.chatNearBottom = true; void this.actions.sendMessage(content); };
+    textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !this.busy) { event.preventDefault(); form.requestSubmit(); } };
   }
 
   private renderCreation(panel: HTMLElement): void {
