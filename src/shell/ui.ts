@@ -43,7 +43,7 @@ export interface ShellActions {
 const esc = (value: string) => value.replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase() || 'IA';
 const compactTokens = (value: number) => value < 1_000 ? String(Math.round(value)) : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-const money = (value: number) => '
+const money = (value: number) => String.fromCharCode(36) + (value > 0 && value < 1 ? value.toFixed(4) : value.toFixed(2));
 export function friendlyError(error: unknown, appName = 'This app'): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/iframe|not connected|not available|not ready/i.test(message)) return `${appName} isn't ready yet. Try reloading it.`;
