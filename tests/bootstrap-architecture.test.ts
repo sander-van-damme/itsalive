@@ -15,6 +15,13 @@ describe("wildcard bootstrap architecture", () => {
     expect(bootstrap).toContain("new Function");
   });
 
+  it("routes only the destructive cleanup path through the wildcard worker", () => {
+    const wrangler = readFileSync(resolve(root, "wrangler.app.toml"), "utf8");
+    expect(wrangler).toContain('main = "src/app-worker.ts"');
+    expect(wrangler).toContain('binding = "ASSETS"');
+    expect(wrangler).toContain('run_worker_first = ["/__clear"]');
+  });
+
   it("keeps platform runtime and library policy out of the wildcard static page", () => {
     const html = readFileSync(resolve(root, "sites/app/index.html"), "utf8");
     expect(html).not.toContain("cdnjs.cloudflare.com");
