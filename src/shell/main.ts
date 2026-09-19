@@ -1,6 +1,6 @@
 import './styles.css';
 import { ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, CONNECTION_TEST_OUTPUT_TOKENS, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, runtimePresentation, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { AgentRunner, OpenRouterJevAdapter, CONNECTION_TEST_OUTPUT_TOKENS, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -30,11 +30,13 @@ const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
 if (stored) {
   try {
-    const parsed = JSON.parse(stored) as { apiKey?: unknown };
-    settings = { apiKey: typeof parsed.apiKey === 'string' ? parsed.apiKey : '' };
-    localStorage.setItem('itsalive.settings', JSON.stringify(settings));
+    const parsed = JSON.parse(stored) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Settings must be an object');
+    const record = parsed as Record<string, unknown>;
+    if (Object.keys(record).length !== 1 || typeof record.apiKey !== 'string') throw new Error('Settings schema does not match this beta build');
+    settings = { apiKey: record.apiKey };
   } catch (error) {
-    console.warn('[itsalive] Ignoring invalid saved settings', error);
+    console.warn('[itsalive] Ignoring incompatible saved settings', error);
     localStorage.removeItem('itsalive.settings');
   }
 }
@@ -50,7 +52,7 @@ const ui = new ShellUI(root, {
     const id = crypto.randomUUID();
     await persistNewApp(db, id, prompt);
     initialBuild.schedule(id);
-    ui.setConnectionStatus('Preparing your app…', 'working');
+    ui.setConnectionStatus('working');
     await refreshApps(id);
   },
   selectApp: async id => { await selectApp(id); },
@@ -82,7 +84,7 @@ const ui = new ShellUI(root, {
   reloadApp: () => {
     if (!activeId || !runtime.frame?.contentWindow) return;
     runtime.setState('loading');
-    ui.setConnectionStatus('Reloading app…', 'working');
+    ui.setConnectionStatus('working');
     runtime.frame?.contentWindow?.postMessage(createBridgeMessage(activeId, createRequestId(), { type: 'reload' }), currentOrigin());
   }
 });
@@ -117,12 +119,12 @@ async function selectApp(id: string): Promise<void> {
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
-  ui.setConnectionStatus('Connecting…', 'working');
-  connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('App unavailable', 'error'); }, 10_000);
+  ui.setConnectionStatus('working');
+  connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   ui.setApps(apps as AppSummary[], id);
   const frame = runtime.switchTo(id, currentOrigin());
-  frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('Connection failed', 'error'); });
-  frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('Starting app…', 'working'); });
+  frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
+  frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
 }
 
@@ -134,18 +136,18 @@ function currentOrigin(): string { if (!activeId) throw new Error('No active app
 async function refreshMessages(): Promise<void> {
   if (!activeId) return ui.setMessages([]);
   const entries = (await db.history.forApp(activeId)).filter(e => e.kind === 'chat' && (e.role === 'user' || e.role === 'assistant'));
-  ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map((e,i) => ({ id: String(e.id ?? i), role: e.role as ChatLine['role'], content: e.content, timestamp: e.timestamp })));
+  ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map(e => ({ role: e.role as ChatLine['role'], content: e.content })));
 }
 
-function modelConfig(): ModelConfig { return { id: 'active', provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS, credentialId: 'active', options: { reasoning: { enabled: false } } }; }
-function credential(): Credential | undefined { return settings.apiKey ? { id: 'active', type: 'api-key', value: settings.apiKey } : undefined; }
+function modelConfig(): ModelConfig { return { provider: OPENROUTER_PROVIDER, model: OPENROUTER_MODEL, maxContextTokens: MODEL_CONTEXT_TOKENS, maxOutputTokens: MODEL_OUTPUT_TOKENS, options: { reasoning: { enabled: false } } }; }
+function credential(): Credential | undefined { return settings.apiKey ? { value: settings.apiKey } : undefined; }
 
 async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
   const app = currentApp();
   if (!app || running) return false;
   let executor: ReturnType<RuntimeSession['requireReady']>;
   try { executor = runtime.requireReady(); }
-  catch (error) { ui.setBusy(false); ui.setConnectionStatus(error instanceof Error ? error.message : String(error), 'error'); ui.showError(error instanceof Error ? error.message : String(error)); return false; }
+  catch (error) { ui.setBusy(false); ui.setConnectionStatus('error'); ui.showError(error instanceof Error ? error.message : String(error)); return false; }
   const runController = new AbortController();
   activeRun = runController;
   running = true;
@@ -166,7 +168,6 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       persistTrigger: false,
       model: modelConfig(),
       credential: credential(),
-      summary: app.summary,
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
       onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild), progress.phase === 'executing'),
@@ -181,9 +182,8 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   } finally {
     if (activeRun === runController) activeRun = undefined;
     running = false;
-    const connection = runtimePresentation(runtime.state);
     ui.setBusy(false);
-    ui.setConnectionStatus(connection.status, connection.tone);
+    ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
     await refreshMessages();
     void startPendingInitialBuild();
     if (environmentalObservations.length && runtime.state === 'ready') {
@@ -197,7 +197,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
 async function startPendingInitialBuild(): Promise<void> {
   const id = initialBuild.candidate(activeId, runtime.state === 'ready', running);
   if (!id) return;
-  ui.setConnectionStatus('Building your first version…', 'working');
+  ui.setConnectionStatus('working');
   // runAgent marks the run active before its first await. Clear only after that
   // synchronous acceptance; otherwise retain the intent for a later retry.
   const run = runAgent(INITIAL_BUILD_TRIGGER, false);
@@ -223,7 +223,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
     case 'status':
       runtime.setState('ready');
       if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
-      ui.setConnectionStatus('Ready', 'connected');
+      ui.setConnectionStatus('connected');
       void startPendingInitialBuild();
       break;
   }
@@ -320,7 +320,7 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   if (!apiKey) throw new Error('OpenRouter API key is required');
   const testRegistry = createDefaultRegistry();
   const model = connectionTestModelConfig(OPENROUTER_PROVIDER, OPENROUTER_MODEL, MODEL_CONTEXT_TOKENS);
-  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: CONNECTION_TEST_OUTPUT_TOKENS }, { id: 'connection-test', type: 'api-key', value: apiKey });
+  await testRegistry.generate({ purpose: 'OpenRouter connection test', model, system: 'This is a connection test. Reply with OK.', messages: [{ role: 'user', content: 'OK' }], maxOutputTokens: CONNECTION_TEST_OUTPUT_TOKENS }, { value: apiKey });
   return { apiKey };
 }
 
