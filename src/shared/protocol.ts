@@ -9,6 +9,7 @@ export const BRIDGE_PROTOCOL = "itsalive" as const;
 export const BRIDGE_VERSION = 4 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
+export const MAX_PERSISTED_DOCUMENT_CHARACTERS = 10_000_000;
 
 export type BootstrapReadyMessage = {
   protocol: typeof BOOTSTRAP_PROTOCOL;
@@ -23,6 +24,7 @@ export type BootstrapInitMessage = {
   type: "init";
   appId: string;
   runtimeSource: string;
+  documentHtml?: string;
 };
 
 export type BootstrapErrorMessage = {
@@ -57,7 +59,8 @@ export interface JevState { interaction: InteractionSnapshot; recentInteractions
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
   | { type: "reload" }
-  | { type: "storage.clear" }
+  | { type: "document.flush" }
+  | { type: "document.saved" }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
   | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError }
@@ -67,6 +70,7 @@ export type AppToShellPayload =
   | { type: "result"; result?: unknown; done?: boolean; message?: string }
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
+  | { type: "document.save"; html: string }
   | { type: "llm.request"; prompt: string }
   | { type: "history.request"; query: string; limit?: number }
   | { type: "jev.request"; state: JevState }
@@ -82,8 +86,8 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "storage.clear", "llm.response", "history.response", "jev.response", "cron.fire"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "wake", "llm.request", "history.request", "jev.request", "log", "cron.register", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "reload", "document.flush", "document.saved", "llm.response", "history.response", "jev.response", "cron.fire"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "wake", "document.save", "llm.request", "history.request", "jev.request", "log", "cron.register", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -94,10 +98,11 @@ export function createBootstrapReady(appId: string): BootstrapReadyMessage {
   return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "ready", appId };
 }
 
-export function createBootstrapInit(appId: string, runtimeSource: string): BootstrapInitMessage {
+export function createBootstrapInit(appId: string, runtimeSource: string, documentHtml?: string): BootstrapInitMessage {
   if (!isValidAppId(appId)) throw new Error("Invalid app id");
   if (!runtimeSource.trim()) throw new Error("Runtime source must not be empty");
-  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "init", appId, runtimeSource };
+  if (documentHtml !== undefined && documentHtml.length > MAX_PERSISTED_DOCUMENT_CHARACTERS) throw new Error("Persisted document is too large");
+  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "init", appId, runtimeSource, ...(documentHtml !== undefined ? { documentHtml } : {}) };
 }
 
 export function createBootstrapError(appId: string, error: SerializedError): BootstrapErrorMessage {
@@ -116,13 +121,14 @@ export function isBootstrapReadyMessage(value: unknown): value is BootstrapReady
 
 export function isBootstrapInitMessage(value: unknown): value is BootstrapInitMessage {
   return isObject(value)
-    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource"])
+    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource", "documentHtml"])
     && value.protocol === BOOTSTRAP_PROTOCOL
     && value.version === BOOTSTRAP_VERSION
     && value.type === "init"
     && isValidAppId(value.appId)
     && typeof value.runtimeSource === "string"
-    && value.runtimeSource.length > 0;
+    && value.runtimeSource.length > 0
+    && (value.documentHtml === undefined || typeof value.documentHtml === "string" && value.documentHtml.length <= MAX_PERSISTED_DOCUMENT_CHARACTERS);
 }
 
 export function isBootstrapErrorMessage(value: unknown): value is BootstrapErrorMessage {
@@ -141,6 +147,7 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
       !isValidAppId(value.appId) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
   switch (value.type) {
     case "execute": return typeof value.code === "string";
+    case "document.save": return typeof value.html === "string" && value.html.length <= MAX_PERSISTED_DOCUMENT_CHARACTERS;
     case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
     case "history.request": return typeof value.query === "string";
     case "jev.request": return isJevState(value.state);
