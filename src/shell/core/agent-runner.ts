@@ -50,6 +50,8 @@ const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
 const PROGRESS_INSPECTION = 'return document.getElementById("itsalive-root")?.outerHTML ?? document.body.innerHTML;';
 const COMPLETION_INSPECTION = `
 const root = document.getElementById("itsalive-root");
+const durabilityAudit = window["__itsaliveRuntimeDurabilityAuditV1"];
+const durability = typeof durabilityAudit === "function" ? durabilityAudit() : undefined;
 const outsideUiCount = Array.from(document.body.childNodes).filter(node => {
   if (node === root || node.nodeType === Node.COMMENT_NODE) return false;
   if (node.nodeType === Node.TEXT_NODE) return Boolean(node.textContent?.trim());
@@ -61,6 +63,7 @@ return {
   rootCount: document.querySelectorAll('[id="itsalive-root"]').length,
   outsideUiCount,
   buildingCount: root ? root.querySelectorAll('[data-itsalive-building]').length + (root.matches('[data-itsalive-building]') ? 1 : 0) : 0,
+  runtimeOnlyEventListenerCount: durability?.runtimeOnlyEventListenerCount ?? 0,
 };
 `;
 
@@ -492,6 +495,10 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
       if ((inspection.value.buildingCount ?? 0) > 0) {
         return { ok: false, reason: "the app still contains a data-itsalive-building scaffold; activate it before calling done()" };
       }
+      if ((inspection.value.runtimeOnlyEventListenerCount ?? 0) > 0) {
+        const count = inspection.value.runtimeOnlyEventListenerCount ?? 0;
+        return { ok: false, reason: `the app still depends on ${count} runtime-only event listener${count === 1 ? "" : "s"} installed by an agent command; move that behavior into Alpine directives or persisted <script> setup that runs again after restore` };
+      }
       return assessCompletionTree(inspection.value.rootHtml);
     }
     if (typeof inspection.value === "string") return assessCompletionTree(inspection.value);
@@ -502,13 +509,14 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
   }
 }
 
-function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number; buildingCount?: number } {
+function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number; buildingCount?: number; runtimeOnlyEventListenerCount?: number } {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   return (typeof candidate.rootHtml === "string" || candidate.rootHtml === null)
     && typeof candidate.rootCount === "number"
     && typeof candidate.outsideUiCount === "number"
-    && (candidate.buildingCount === undefined || typeof candidate.buildingCount === "number");
+    && (candidate.buildingCount === undefined || typeof candidate.buildingCount === "number")
+    && (candidate.runtimeOnlyEventListenerCount === undefined || typeof candidate.runtimeOnlyEventListenerCount === "number");
 }
 
 function isLowSignalObservation(observation: string): boolean {
