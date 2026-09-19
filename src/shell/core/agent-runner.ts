@@ -38,6 +38,8 @@ export interface RunOptions {
   consumeEnvironmentObservations?: () => string[];
   /** Safe lifecycle signal for shell UI. Never contains model reasoning or generated text. */
   onProgress?: (progress: AgentProgress) => void;
+  /** Latest estimated input size for user-facing context diagnostics. */
+  onContext?: (context: { estimatedInputTokens: number; maxContextTokens: number }) => void;
 }
 
 export interface RunResult { status: "done" | "turn-limit" | "stalled"; message?: string; turns: number }
@@ -121,6 +123,7 @@ export class AgentRunner {
           const history = await this.db.history.forApp(options.appId);
           const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
+          options.onContext?.({ estimatedInputTokens: context.estimatedInputTokens, maxContextTokens: options.model.maxContextTokens });
           console.info('Context', {
             provider: options.model.provider,
             model: options.model.model,
