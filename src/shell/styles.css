@@ -229,3 +229,5 @@ button:disabled { cursor: not-allowed; opacity: .45; }
   .mobile-view-button svg { width: 17px; }
   .panel-heading { padding-top: 22px; }
 }
+
+.diagnostics-actions { display: flex; flex-wrap: wrap; gap: 8px; }
