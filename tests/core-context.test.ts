@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildModelContext, conservativeTokenEstimate } from "../src/shell/core/context";
 import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 
-const model = { provider: "test", model: "test", maxContextTokens: 4_000, maxOutputTokens: 200 };
+const model = { provider: "test", model: "test", maxContextTokens: 4_000, outputHeadroomTokens: 200 };
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
@@ -51,7 +51,7 @@ describe("shell context builder", () => {
   });
 
   it("keeps newest fitting history rather than a fixed message count", () => {
-    const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, maxOutputTokens: 100, observationHeadroomTokens: 100 };
+    const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, outputHeadroomTokens: 100, observationHeadroomTokens: 100 };
     const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "user" as const, content: `message-${index} ${"x".repeat(80)}` }));
     const result = buildModelContext({ model: tinyModel, appPrompt: "coach", trigger: "go", history });
     expect(result.omittedHistoryCount).toBeGreaterThan(0);
@@ -69,7 +69,7 @@ describe("shell context builder", () => {
       content: `operation-${index} ${"x".repeat(1_000)}`,
     }));
     const result = buildModelContext({
-      model: { ...model, maxContextTokens: 128_000, maxOutputTokens: 8_192 },
+      model: { ...model, maxContextTokens: 128_000, outputHeadroomTokens: 8_192 },
       appPrompt: "coach",
       trigger: "tiny follow-up",
       history,
