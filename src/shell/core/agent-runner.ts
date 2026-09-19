@@ -58,6 +58,7 @@ return {
   rootHtml: root?.innerHTML ?? null,
   rootCount: document.querySelectorAll('[id="itsalive-root"]').length,
   outsideUiCount,
+  buildingCount: root ? root.querySelectorAll('[data-itsalive-building]').length + (root.matches('[data-itsalive-building]') ? 1 : 0) : 0,
 };
 `;
 
@@ -457,6 +458,9 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
       if (inspection.value.outsideUiCount > 0) {
         return { ok: false, reason: "user-visible UI exists outside the canonical #itsalive-root" };
       }
+      if ((inspection.value.buildingCount ?? 0) > 0) {
+        return { ok: false, reason: "the app still contains a data-itsalive-building scaffold; activate it before calling done()" };
+      }
       return assessCompletionTree(inspection.value.rootHtml);
     }
     if (typeof inspection.value === "string") return assessCompletionTree(inspection.value);
@@ -467,12 +471,13 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
   }
 }
 
-function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number } {
+function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number; buildingCount?: number } {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   return (typeof candidate.rootHtml === "string" || candidate.rootHtml === null)
     && typeof candidate.rootCount === "number"
-    && typeof candidate.outsideUiCount === "number";
+    && typeof candidate.outsideUiCount === "number"
+    && (candidate.buildingCount === undefined || typeof candidate.buildingCount === "number");
 }
 
 function isLowSignalObservation(observation: string): boolean {
