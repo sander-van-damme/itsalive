@@ -18,7 +18,13 @@ function takeBootstrapContext(): RuntimeBootstrapContext {
   if (!isValidAppId(record.appId)) throw new Error("Injected runtime app ID is invalid");
   if (typeof record.rootOrigin !== "string" || new URL(record.rootOrigin).origin !== record.rootOrigin) throw new Error("Injected runtime root origin is invalid");
   if (!(record.port instanceof MessagePort)) throw new Error("Injected runtime MessagePort is missing");
-  return { appId: record.appId, rootOrigin: record.rootOrigin, port: record.port };
+  if (record.documentHtml !== undefined && typeof record.documentHtml !== "string") throw new Error("Injected runtime document is invalid");
+  return {
+    appId: record.appId,
+    rootOrigin: record.rootOrigin,
+    port: record.port,
+    ...(typeof record.documentHtml === "string" ? { documentHtml: record.documentHtml } : {}),
+  };
 }
 
 const context = takeBootstrapContext();
