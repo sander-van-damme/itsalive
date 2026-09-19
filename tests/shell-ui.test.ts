@@ -162,7 +162,7 @@ describe('ShellUI workspace', () => {
   });
 
   it('keeps launcher and API-key copy concise', () => {
-    const { ui } = mounted(false);
+    mounted(false);
     expect(document.querySelector('.panel-heading')?.textContent).not.toContain('Workspace');
     expect(document.querySelector('h1')?.textContent).toBe('Your apps');
 
