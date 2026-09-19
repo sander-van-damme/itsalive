@@ -102,6 +102,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const persistDocument = async (html: string) => {
     const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "document.save", html }, 30_000);
     if (response.type !== "document.saved") throw new Error(`Unexpected document save response: ${response.type}`);
+    if (response.error) throw new Error(response.error.message);
   };
 
   const listener = async (event: MessageEvent<unknown>) => {
