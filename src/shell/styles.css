@@ -139,6 +139,9 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .message { max-width: 90%; padding: 10px 12px; border-radius: var(--radius-md); font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
 .message.user { align-self: flex-end; border-bottom-right-radius: 4px; background: var(--soft-strong); }
 .message.assistant { align-self: flex-start; padding-left: 2px; background: transparent; }
+.interaction-prompt { max-width: 100%; padding: 12px !important; border: 1px solid var(--border); background: var(--soft) !important; white-space: normal; }
+.prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
+.prompt-actions .action { min-height: 34px; padding: 7px 10px; font-size: 12px; }
 .message.system { align-self: center; max-width: 100%; padding: 7px 10px; color: var(--muted); background: var(--soft); font-size: 12px; text-align: center; }
 .empty-chat { margin: auto; padding: 30px 18px; color: var(--muted); text-align: center; }
 .empty-chat svg { width: 25px; }

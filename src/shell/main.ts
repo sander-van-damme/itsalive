@@ -1,6 +1,6 @@
 import './styles.css';
-import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, fetchOpenRouterContextCapacity, decideJevEscalation, deleteApp, formatReactionBatch, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type SettingsValue } from './ui';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, ShellDatabase, appendHistory, buildDiagnosticExport, connectionTestModelConfig, createDefaultRegistry, fetchOpenRouterContextCapacity, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type LogEntry, type ModelConfig, type ReactionBatch } from './core';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, createBridgeMessage, isAppToShellMessage, createRequestId, serializeError, shellUrlForApp, validateMessageEvent, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -47,6 +47,8 @@ if (stored) {
 
 const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
+const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
+const confirmedReactionQueue = new Map<string, ReactionBatch>();
 let jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 };
 
 const ui = new ShellUI(root, {
@@ -61,11 +63,14 @@ const ui = new ShellUI(root, {
   },
   selectApp: async id => { await selectApp(id); },
   deleteApp: async id => {
+    reactionConfirmationGates.delete(id);
+    confirmedReactionQueue.delete(id);
     const clearOrigin = activeId === id && runtime.state === 'ready' ? () => requestRuntime({ type: 'storage.clear' }) : undefined;
     await deleteApp(db, id, clearOrigin, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
     initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
   },
   sendMessage: async content => { await runAgent(content); },
+  resolveInteractionPrompt: async (id, accepted) => { await resolveInteractionPrompt(id, accepted); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -119,6 +124,7 @@ async function refreshApps(select?: string): Promise<void> {
   if (select) await selectApp(select); else {
     if (activeId && !apps.some(a => a.id === activeId)) activeId = undefined;
     ui.setApps(apps as AppSummary[], activeId);
+    syncInteractionPrompt();
     await refreshMessages();
   }
 }
@@ -132,6 +138,7 @@ async function selectApp(id: string): Promise<void> {
   ui.setConnectionStatus('working');
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   ui.setApps(apps as AppSummary[], id);
+  syncInteractionPrompt();
   const frame = runtime.switchTo(id, currentOrigin());
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
@@ -213,6 +220,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
     await refreshMessages();
     void startPendingInitialBuild();
+    void startQueuedConfirmedReaction();
     if (environmentalObservations.length && runtime.state === 'ready') {
       const trigger = environmentalObservations.splice(0).join('\n\n');
       void runAgent(trigger, false);
@@ -252,6 +260,7 @@ async function handleRuntimeMessage(event: MessageEvent<unknown>): Promise<void>
       if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
       ui.setConnectionStatus('connected');
       void startPendingInitialBuild();
+      void startQueuedConfirmedReaction();
       break;
   }
 }
@@ -296,15 +305,78 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   } finally { jevControllers.delete(controller); }
 }
 
+function reactionConfirmationGate(appId: string): ReactionConfirmationGate {
+  let gate = reactionConfirmationGates.get(appId);
+  if (!gate) {
+    gate = new ReactionConfirmationGate();
+    reactionConfirmationGates.set(appId, gate);
+  }
+  return gate;
+}
+
+function syncInteractionPrompt(): void {
+  const appId = activeId;
+  const confirmation = appId ? reactionConfirmationGates.get(appId)?.current() : undefined;
+  const prompt: InteractionPrompt | undefined = confirmation
+    ? {
+        id: confirmation.id,
+        content: interactionConfirmationMessage(confirmation.batch),
+        confirmLabel: 'Adapt app',
+        dismissLabel: 'Not now',
+      }
+    : undefined;
+  ui.setInteractionPrompt(prompt);
+}
+
 async function deliverReactionBatch(batch: ReactionBatch): Promise<void> {
-  const observation = formatReactionBatch(batch);
-  if (running) {
-    environmentalObservations.push(observation);
-    await log('info', 'reaction', 'Attached reaction batch to active agent', { size: batch.events.length }, activeId);
+  const appId = activeId;
+  if (!appId || !batch.events.length) return;
+  const offer = reactionConfirmationGate(appId).offer(batch);
+  if (offer.kind !== 'prompt') {
+    await log('info', 'reaction', 'Interaction adaptation confirmation suppressed', {
+      reason: offer.kind,
+      size: batch.events.length,
+      ...(offer.kind === 'cooldown' ? { cooldownUntil: offer.until } : {}),
+    }, appId);
     return;
   }
-  await log('info', 'reaction', 'Starting agent for reaction batch', { size: batch.events.length }, activeId);
-  await runAgent(observation, false);
+  await log('info', 'reaction', 'Interaction adaptation confirmation requested', {
+    promptId: offer.confirmation.id,
+    size: batch.events.length,
+    pattern: batch.events.at(-1)?.pattern,
+  }, appId);
+  if (activeId === appId) syncInteractionPrompt();
+}
+
+async function resolveInteractionPrompt(id: string, accepted: boolean): Promise<void> {
+  const appId = activeId;
+  if (!appId) return;
+  const resolution = reactionConfirmationGates.get(appId)?.resolve(id, accepted) ?? { kind: 'missing' as const };
+  if (resolution.kind === 'missing') {
+    await log('warn', 'reaction', 'Ignored stale interaction confirmation response', { promptId: id }, appId);
+    syncInteractionPrompt();
+    return;
+  }
+
+  syncInteractionPrompt();
+  await log('info', 'reaction', accepted ? 'Interaction adaptation confirmed' : 'Interaction adaptation dismissed', {
+    promptId: resolution.confirmation.id,
+    size: resolution.confirmation.batch.events.length,
+  }, appId);
+  if (!accepted) return;
+
+  confirmedReactionQueue.set(appId, resolution.confirmation.batch);
+  void startQueuedConfirmedReaction();
+}
+
+async function startQueuedConfirmedReaction(): Promise<void> {
+  const appId = activeId;
+  if (!appId || running || runtime.state !== 'ready') return;
+  const batch = confirmedReactionQueue.get(appId);
+  if (!batch) return;
+  confirmedReactionQueue.delete(appId);
+  const accepted = await runAgent(formatReactionBatch(batch), false);
+  if (!accepted) confirmedReactionQueue.set(appId, batch);
 }
 
 async function fireDueSchedules(): Promise<void> {

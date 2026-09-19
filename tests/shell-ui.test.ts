@@ -8,7 +8,7 @@ const other: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440004', name: 'B
 function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
-    sendMessage: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
+    sendMessage: vi.fn().mockResolvedValue(undefined), resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     renameApp: vi.fn().mockResolvedValue(undefined),
     exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
@@ -136,6 +136,35 @@ describe('ShellUI workspace', () => {
     expect(prompt).toHaveBeenCalledWith('Rename app', app.name);
     expect(callbacks.renameApp).toHaveBeenCalledWith('New Fiddle Name');
     expect(callbacks.selectApp).not.toHaveBeenCalled();
+  });
+
+  it('renders one interaction confirmation with explicit quick replies', () => {
+    const { ui, callbacks } = mounted();
+    ui.setInteractionPrompt({
+      id: 'reaction-1',
+      content: 'It looks like that interaction did not work. Adapt the app?',
+      confirmLabel: 'Adapt app',
+      dismissLabel: 'Not now',
+    });
+
+    expect(document.querySelectorAll('[data-interaction-prompt]')).toHaveLength(1);
+    expect(document.querySelector('[data-interaction-prompt]')?.textContent).toContain('Adapt the app');
+    document.querySelector<HTMLButtonElement>('[data-prompt-confirm]')!.click();
+    expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-1', true);
+  });
+
+  it('lets an interaction confirmation be dismissed without sending a normal chat message', () => {
+    const { ui, callbacks } = mounted();
+    ui.setInteractionPrompt({
+      id: 'reaction-2',
+      content: 'Want me to inspect this interaction?',
+      confirmLabel: 'Adapt app',
+      dismissLabel: 'Not now',
+    });
+
+    document.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')!.click();
+    expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-2', false);
+    expect(callbacks.sendMessage).not.toHaveBeenCalled();
   });
 
   it('shows one primary busy status plus a subtle app-update badge', () => {
