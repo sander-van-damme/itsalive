@@ -44,7 +44,7 @@ export type AppToShellPayload =
   | { type: "jev.request"; state: JevState }
   | { type: "log"; record: LogRecord }
   | { type: "cron.register"; registration: CronRegistration }
-  | { type: "status"; status: RuntimeStatus; detail?: string };
+  | { type: "status"; status: RuntimeStatus };
 
 export type BridgePayload = ShellToAppPayload | AppToShellPayload;
 export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
@@ -138,6 +138,3 @@ export function validateMessageEvent(event: MessageEvent<unknown>, options: Mess
   return validDirection ? event.data : null;
 }
 
-export function isResponseTo(message: BridgeMessage, requestId: string): boolean {
-  return isValidId(requestId) && message.requestId === requestId;
-}
