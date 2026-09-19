@@ -13,7 +13,7 @@ import {
 
 describe("shell-triggered app-origin cleanup", () => {
   it("uses a credentialed non-simple POST to the app cleanup endpoint", async () => {
-    const request = vi.fn(async () => new Response(null, { status: 204 }));
+    const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }));
 
     await clearAppOrigin("https://550e8400-e29b-41d4-a716-446655440000.itsalive.org", request as typeof fetch);
 
@@ -28,7 +28,7 @@ describe("shell-triggered app-origin cleanup", () => {
   });
 
   it("reports a non-success cleanup response", async () => {
-    const request = vi.fn(async () => new Response(null, { status: 403 }));
+    const request = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 403 }));
     await expect(clearAppOrigin("https://app.itsalive.org", request as typeof fetch))
       .rejects.toThrow("App-origin cleanup failed (403)");
   });
