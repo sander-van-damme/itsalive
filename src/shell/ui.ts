@@ -637,6 +637,7 @@ export class ShellUI {
       await this.actions.deleteApp(id);
       this.appDialog = undefined;
       this.dialogError = '';
+      this.renderRail();
     } catch {
       this.dialogError = 'Couldn’t delete the app. Try again.';
       this.renderRail();
