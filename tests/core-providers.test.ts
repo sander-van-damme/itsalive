@@ -119,7 +119,8 @@ describe("ProviderRegistry", () => {
     expect(result.text).toBe("first second");
     expect(result.usage).toEqual({ inputTokens: 4, outputTokens: 2 });
     const request = JSON.parse(String(fetchMock.mock.calls[0]![1]?.body));
-    expect(request.stream).toBe(true);\n    expect(request).not.toHaveProperty("max_tokens");
+    expect(request.stream).toBe(true);
+    expect(request).not.toHaveProperty("max_tokens");
   });
 
 });
