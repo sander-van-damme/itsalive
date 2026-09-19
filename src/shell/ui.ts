@@ -36,6 +36,7 @@ export interface ShellActions {
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
   refreshUsage(): Promise<void>;
+  checkDiagnostics(): Promise<number>;
   exportLogs(): Promise<void>;
   reloadApp(): void;
 }
@@ -453,11 +454,51 @@ export class ShellUI {
           <button class="action primary full-width" type="submit">Save</button><div class="settings-result" data-result role="status"></div>
         </section>
         <section class="settings-section build-info"><h2>Build</h2><p>Commit <code data-build-commit>${esc(BUILD_COMMIT)}</code></p></section>
-        <section class="settings-section diagnostics"><h2>Diagnostics</h2><p>Download technical session details for troubleshooting.</p><button class="action" type="button" data-export><i data-lucide="download" aria-hidden="true"></i>Export session logs</button></section>
+        <section class="settings-section diagnostics">
+          <h2>Diagnostics</h2>
+          <p data-diagnostics-status role="status">Check logging before a test to confirm diagnostics are being saved locally.</p>
+          <div class="diagnostics-actions">
+            <button class="action" type="button" data-check-diagnostics>Check logging</button>
+            <button class="action" type="button" data-export><i data-lucide="download" aria-hidden="true"></i>Export session logs</button>
+          </div>
+        </section>
       </form>`;
     panel.querySelector<HTMLButtonElement>('[data-close-settings]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
-    panel.querySelector<HTMLButtonElement>('[data-export]')!.onclick = () => void this.actions.exportLogs();
+    panel.querySelector<HTMLButtonElement>('[data-check-diagnostics]')!.onclick = () => void this.handleCheckDiagnostics(panel);
+    panel.querySelector<HTMLButtonElement>('[data-export]')!.onclick = () => void this.handleExportLogs(panel);
     panel.querySelector<HTMLFormElement>('[data-settings-form]')!.onsubmit = event => { event.preventDefault(); void this.handleSaveSettings(panel); };
+  }
+
+  private async handleCheckDiagnostics(panel: HTMLElement): Promise<void> {
+    const status = panel.querySelector<HTMLElement>('[data-diagnostics-status]')!;
+    const button = panel.querySelector<HTMLButtonElement>('[data-check-diagnostics]')!;
+    button.disabled = true;
+    status.textContent = 'Checking logging…';
+    try {
+      const count = await this.actions.checkDiagnostics();
+      status.textContent = `Logging works — ${count.toLocaleString()} diagnostic ${count === 1 ? 'entry is' : 'entries are'} stored locally.`;
+    } catch (error) {
+      console.error('[itsalive] Diagnostic self-check failed', error);
+      status.textContent = 'Logging check failed. Do not start a test yet.';
+    } finally {
+      button.disabled = false;
+    }
+  }
+
+  private async handleExportLogs(panel: HTMLElement): Promise<void> {
+    const status = panel.querySelector<HTMLElement>('[data-diagnostics-status]')!;
+    const button = panel.querySelector<HTMLButtonElement>('[data-export]')!;
+    button.disabled = true;
+    status.textContent = 'Preparing diagnostic export…';
+    try {
+      await this.actions.exportLogs();
+      status.textContent = 'Diagnostic export created.';
+    } catch (error) {
+      console.error('[itsalive] Diagnostic export failed', error);
+      status.textContent = 'Diagnostic export failed. Do not start a test yet.';
+    } finally {
+      button.disabled = false;
+    }
   }
 
   private async handleSaveSettings(panel: HTMLElement): Promise<void> {
