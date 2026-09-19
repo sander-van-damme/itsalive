@@ -27,8 +27,11 @@ describe("wildcard bootstrap architecture", () => {
       "assets.ts",
       "components.ts",
       "interactions.ts",
+      "persistence.ts",
       "runtime.ts",
       "screenshot.ts",
     ]));
+    expect(runtimeFiles).not.toContain("db.ts");
+    expect(runtimeFiles).not.toContain("storage.ts");
   });
 });
