@@ -1,4 +1,4 @@
-import { AppBridge, idFromHostname } from "./bridge";
+import { AppBridge } from "./bridge";
 import { installLogging } from "./logs";
 import { installAutosave, loadSavedDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
@@ -6,7 +6,7 @@ import { clearOriginStorage } from "./storage";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
-import { serializeError, shellUrlForApp } from "../shared";
+import { serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 import { COMPONENTS } from "./components";
@@ -44,8 +44,8 @@ function bounded(value: unknown, maxBytes: number): unknown {
 
 export async function startAppRuntime(options: RuntimeOptions) {
   const rootOrigin = new URL(options.rootOrigin).origin;
-  const appId = options.appId ?? idFromHostname(rootOrigin);
-  const bridge = new AppBridge(rootOrigin, appId);
+  const appId = options.appId;
+  const bridge = new AppBridge(rootOrigin, appId, options.port);
   const logs = installLogging(bridge);
   const cronCallbacks = new Map<string, () => unknown>();
   const screenshot = async (input: { scale?: number } = {}) => {
@@ -99,7 +99,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     return new AsyncFunction(`"use strict";\n${code}`).call(window);
   };
 
-  const listener = async (event: MessageEvent) => {
+  const listener = async (event: MessageEvent<unknown>) => {
     const message = bridge.validate(event);
     if (!message) return;
     if (bridge.acceptResponse(message)) return;
@@ -147,7 +147,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
       }
     }
   };
-  addEventListener("message", listener);
+  bridge.addMessageListener(listener);
 
   await loadSavedDocument();
   ensureCanonicalAppRoot();
@@ -155,7 +155,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => {
-    removeEventListener("message", listener);
+    bridge.removeMessageListener(listener);
     interactions.destroy();
     durability.destroy();
     bridge.destroy();
@@ -176,9 +176,3 @@ export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi
   });
 }
 
-export function redirectStandaloneToShell(rootOrigin: string) {
-  if (window.parent !== window) return false;
-  const id = idFromHostname(rootOrigin);
-  location.replace(shellUrlForApp(`${new URL(rootOrigin).origin}/`, id).href);
-  return true;
-}
