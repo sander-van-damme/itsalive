@@ -9,6 +9,13 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).not.toMatch(/\s+as\s+[A-Z][A-Za-z0-9_$]*(?:<[^>]+>)?/);
   });
 
+  it('requires completion messages to use plain user-facing language', () => {
+    expect(SYSTEM_PROMPT).toContain('shown directly to the user');
+    expect(SYSTEM_PROMPT).toContain('Do not mention implementation details');
+    expect(SYSTEM_PROMPT).toContain('AudioContext');
+    expect(SYSTEM_PROMPT).toContain('prefers-reduced-motion');
+  });
+
   it('defines the canonical generated-app root as an invariant', () => {
     expect(SYSTEM_PROMPT).toContain('#itsalive-root');
     expect(SYSTEM_PROMPT).toContain('Do not remove or replace #itsalive-root');

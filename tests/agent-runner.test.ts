@@ -44,6 +44,7 @@ describe('AgentRunner lifecycle', () => {
     } };
     const events: string[] = [];
     const progress: string[] = [];
+    const executionSteps: number[] = [];
     let releaseFirst!: () => void;
     const firstExecuted = new Promise<void>(resolve => { releaseFirst = resolve; });
     const first = '/* itsalive:command */\ndocument.body.dataset.first = "yes";\n/* itsalive:end */\n';
@@ -81,7 +82,10 @@ describe('AgentRunner lifecycle', () => {
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
-      onProgress: update => progress.push(update.phase),
+      onProgress: update => {
+        progress.push(update.phase);
+        if (update.phase === 'executing' && update.step != null) executionSteps.push(update.step);
+      },
     });
 
     expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
@@ -89,6 +93,7 @@ describe('AgentRunner lifecycle', () => {
     expect(events.indexOf('execute:first')).toBeLessThan(events.indexOf('emit:second'));
     expect(events).toEqual(['emit:first', 'execute:first', 'emit:second', 'execute:done']);
     expect(progress).toEqual(expect.arrayContaining(['generating', 'executing', 'verifying', 'finishing']));
+    expect(executionSteps).toEqual([1, 2]);
     const milestones = info.mock.calls.filter(call => call[0] === 'Timing milestone').map(call => (call[1] as { milestone: string }).milestone);
     expect(milestones).toEqual(expect.arrayContaining(['request-started', 'first-stream-text', 'first-complete-command', 'first-runtime-execution']));
     const timingSummary = info.mock.calls.find(call => call[0] === 'Timing summary')?.[1] as Record<string, number | undefined>;
@@ -167,6 +172,57 @@ describe('AgentRunner lifecycle', () => {
 
     expect(providers.generate).toHaveBeenCalledTimes(3);
     expect(executor.execute).not.toHaveBeenCalled();
+  });
+
+  it('replaces technical completion reports with a plain user-facing fallback', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done("AudioContext now resumes before scheduling and shows a confirmation toast while respecting prefers-reduced-motion.");' })) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
+      return { done: true, message: 'AudioContext now resumes before scheduling and shows a confirmation toast while respecting prefers-reduced-motion.' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Fix audio', model, maxTurns: 1,
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'Done — it’s ready.', turns: 1 });
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'assistant', kind: 'chat', content: 'Done — it’s ready.' }),
+    ]));
+    expect(entries.filter(entry => entry.role === 'assistant').map(entry => entry.content).join('\n')).not.toContain('AudioContext');
+  });
+
+  it('keeps concise non-technical completion messages intact', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done("There’s your zebra — it runs while the timer is going.");' })) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
+      return { done: true, message: 'There’s your zebra — it runs while the timer is going.' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Add a zebra', model, maxTurns: 1,
+    });
+
+    expect(result.message).toBe('There’s your zebra — it runs while the timer is going.');
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'assistant', content: 'There’s your zebra — it runs while the timer is going.' }),
+    ]));
   });
 
   it('does not accept done() when the rendered app is still empty', async () => {

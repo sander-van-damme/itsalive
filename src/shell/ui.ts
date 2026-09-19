@@ -72,7 +72,6 @@ export class ShellUI {
   private usageOpen = false;
   private busy = false;
   private agentProgress = '';
-  private appUpdating = false;
   private runtimeState: RuntimeViewState = 'ready';
   private collapsed = localStorage.getItem('itsalive.sidebar') === 'collapsed';
   private theme = localStorage.getItem('itsalive.theme') ?? 'light';
@@ -137,15 +136,13 @@ export class ShellUI {
 
   setBusy(busy: boolean): void {
     this.busy = busy;
-    if (!busy) { this.agentProgress = ''; this.appUpdating = false; }
+    if (!busy) this.agentProgress = '';
     this.renderStageState();
     this.renderRail();
   }
 
-  setAgentProgress(message: string, appUpdating = false): void {
+  setAgentProgress(message: string): void {
     this.agentProgress = message.trim() || 'Working…';
-    this.appUpdating = appUpdating;
-    this.renderStageState();
     if (this.view === 'workspace') this.renderPanel();
   }
 
@@ -192,11 +189,9 @@ export class ShellUI {
     const node = this.mount.querySelector<HTMLElement>('[data-stage-state]');
     if (!node) return;
     const isProblem = Boolean(this.active) && this.runtimeState === 'problem';
-    const isUpdating = Boolean(this.active) && this.busy && this.appUpdating && !isProblem;
-    node.className = isUpdating ? 'stage-state updating' : 'stage-state';
-    node.hidden = !isProblem && !isUpdating;
+    node.className = 'stage-state';
+    node.hidden = !isProblem;
     if (isProblem) node.innerHTML = `<strong>${esc(this.active!.name)} couldn't load.</strong><p>Try reloading the app.</p><button class="action" data-stage-retry type="button">Try again</button>`;
-    else if (isUpdating) node.innerHTML = `<span class="spinner" aria-hidden="true"></span><span>${esc(this.agentProgress || 'Updating the app…')}</span>`;
     else node.replaceChildren();
     node.querySelector<HTMLButtonElement>('[data-stage-retry]')?.addEventListener('click', () => this.actions.reloadApp());
   }

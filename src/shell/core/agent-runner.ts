@@ -18,7 +18,7 @@ export interface AppExecutor {
 }
 
 export type AgentProgressPhase = "generating" | "executing" | "repairing" | "verifying" | "finishing";
-export interface AgentProgress { phase: AgentProgressPhase; turn: number; }
+export interface AgentProgress { phase: AgentProgressPhase; turn: number; step?: number; }
 
 export interface RunOptions {
   appId: string;
@@ -151,6 +151,7 @@ export class AgentRunner {
 
           const enqueueCommand = (code: string) => {
             streamedCommands++;
+            const commandNumber = streamedCommands;
             executionQueue = executionQueue.then(async () => {
               if (streamedCodeError || streamedRuntimeError || streamedResult?.done || streamedResult?.error) return;
               try {
@@ -164,7 +165,7 @@ export class AgentRunner {
               try {
                 touchProgress();
                 if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
-                reportProgress(options, "executing", turn);
+                reportProgress(options, "executing", turn, commandNumber);
                 const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
                 touchProgress();
                 streamedResult = executed.result;
@@ -267,7 +268,7 @@ export class AgentRunner {
             touchProgress();
             if (firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
             if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
-            reportProgress(options, "executing", turn);
+            reportProgress(options, "executing", turn, 1);
             const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
             touchProgress();
             result = executed.result;
@@ -303,11 +304,12 @@ export class AgentRunner {
               console.info('Continuing to next turn after incomplete done()');
               continue;
             }
-            if (result.message) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: result.message });
+            const completionMessage = userFacingCompletionMessage(result.message);
+            if (completionMessage) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: completionMessage });
             reportProgress(options, "finishing", turn);
             console.info('Turn outcome', { kind: 'done' });
-            console.info('Run done', sanitizeDiagnostic({ turn, message: result.message }));
-            return { status: "done", message: result.message, turns: turn };
+            console.info('Run done', sanitizeDiagnostic({ turn, message: completionMessage }));
+            return { status: "done", message: completionMessage, turns: turn };
           }
 
           const rawObservation = observation;
@@ -365,8 +367,17 @@ export class AgentRunner {
   }
 }
 
-function reportProgress(options: RunOptions, phase: AgentProgressPhase, turn: number): void {
-  try { options.onProgress?.({ phase, turn }); }
+const TECHNICAL_COMPLETION = /(?:\b(?:AudioContext|DOM|API|JavaScript|Alpine|Tailwind|IndexedDB|localStorage|event listener|browser API|CSS|HTML)\b|prefers-reduced-motion|confirmation toast|aria-[\w-]+|x-[\w-]+)/i;
+
+function userFacingCompletionMessage(message: string | undefined): string | undefined {
+  const normalized = message?.replace(/\s+/g, ' ').trim();
+  if (!normalized) return undefined;
+  if (normalized.length > 240 || TECHNICAL_COMPLETION.test(normalized)) return 'Done — it’s ready.';
+  return normalized;
+}
+
+function reportProgress(options: RunOptions, phase: AgentProgressPhase, turn: number, step?: number): void {
+  try { options.onProgress?.({ phase, turn, ...(step == null ? {} : { step }) }); }
   catch (error) { console.warn("Agent progress callback failed", diagnosticError(error)); }
 }
 
