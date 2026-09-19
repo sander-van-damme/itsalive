@@ -7,14 +7,17 @@ const state = vi.hoisted(() => ({
   restoredWithApi: false,
   requests: [] as Record<string, unknown>[],
   screenshotError: undefined as Error | undefined,
+  listener: undefined as ((event: MessageEvent<unknown>) => void) | undefined,
 }));
 
-vi.mock("../src/app/bridge", () => ({
-  idFromHostname: () => "550e8400-e29b-41d4-a716-446655440000",
+vi.mock("../src/runtime/bridge", () => ({
   AppBridge: class {
     post(payload: Record<string, unknown>, requestId?: string) { state.posts.push({ payload, requestId }); }
-    validate(event: MessageEvent) { return event.data; }
+    validate(event: MessageEvent<unknown>) { return event.data; }
     acceptResponse() { return false; }
+    addMessageListener(listener: (event: MessageEvent<unknown>) => void) { state.listener = listener; }
+    removeMessageListener(listener: (event: MessageEvent<unknown>) => void) { if (state.listener === listener) state.listener = undefined; }
+    destroy() { state.listener = undefined; }
     async request(payload: Record<string, unknown>) {
       state.requests.push(payload);
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
@@ -24,36 +27,47 @@ vi.mock("../src/app/bridge", () => ({
   },
 }));
 
-vi.mock("../src/app/db", () => ({
+vi.mock("../src/runtime/db", () => ({
   STORES: { document: "document" },
   dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
   dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
   closeAppDatabase: async () => undefined,
 }));
 
-vi.mock("../src/app/logs", () => ({
+vi.mock("../src/runtime/logs", () => ({
   installLogging: () => {
     const entries: unknown[] = [];
-    return { add: (...entry: unknown[]) => entries.push(entry), get: () => entries };
+    return { add: (...entry: unknown[]) => entries.push(entry), get: () => entries, destroy: vi.fn() };
   },
 }));
 
-vi.mock("../src/app/persistence", () => ({
+vi.mock("../src/runtime/persistence", () => ({
   loadSavedDocument: async () => { state.restoredWithApi = window.itsalive?.apiVersion === 2; },
   installAutosave: () => ({ suspend: vi.fn(), disconnect: vi.fn() }),
 }));
 
 const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
 const nativeHistory = window.history;
+const emit = (data: Record<string, unknown>) => {
+  const listener = state.listener;
+  if (!listener) throw new Error("Runtime listener is not installed");
+  listener(new MessageEvent("message", { data }));
+};
 
-describe("app runtime namespace", () => {
+describe("injected app runtime namespace", () => {
   beforeAll(async () => {
     state.posts.length = 0;
-    const { startAppRuntime } = await import("../src/app/runtime");
-    await startAppRuntime({ rootOrigin: "https://itsalive.test", appId: "550e8400-e29b-41d4-a716-446655440000", screenshot: async element => {
-      if (state.screenshotError) throw state.screenshotError;
-      return element.tagName;
-    } });
+    state.requests.length = 0;
+    const { startAppRuntime } = await import("../src/runtime/runtime");
+    await startAppRuntime({
+      rootOrigin: "https://itsalive.test",
+      appId: "550e8400-e29b-41d4-a716-446655440000",
+      port: {} as MessagePort,
+      screenshot: async element => {
+        if (state.screenshotError) throw state.screenshotError;
+        return element.tagName;
+      },
+    });
   });
 
   it("installs one immutable, versioned facade without replacing native history", () => {
@@ -87,11 +101,11 @@ describe("app runtime namespace", () => {
     expect(window.itsalive.logs.get()).toEqual([]);
 
     document.getElementById("itsalive-root")!.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return itsalive.apiVersion;", requestId: "version" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector('main[data-native-dom]');", requestId: "native-dom" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'return itsalive.done("ok");', requestId: "done" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "cron.fire", callbackId: "daily", requestId: "cron" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" } }));
+    emit({ type: "execute", code: "return itsalive.apiVersion;", requestId: "version" });
+    emit({ type: "execute", code: "return document.querySelector('main[data-native-dom]');", requestId: "native-dom" });
+    emit({ type: "execute", code: 'return itsalive.done("ok");', requestId: "done" });
+    emit({ type: "cron.fire", callbackId: "daily", requestId: "cron" });
+    emit({ type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" });
     await nextTask();
     expect(state.posts).toContainEqual({ payload: { type: "result", result: 2 }, requestId: "version" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: '<main data-native-dom="yes"><h1>Native DOM</h1></main>' }, requestId: "native-dom" });
@@ -102,18 +116,18 @@ describe("app runtime namespace", () => {
   });
 
   it("tracks listeners installed only by transient agent commands", async () => {
-    window.dispatchEvent(new MessageEvent("message", { data: {
+    emit({
       type: "execute",
       code: "const button = document.createElement('button'); button.dataset.ephemeral = 'yes'; document.getElementById('itsalive-root').append(button); button.addEventListener('click', () => {}); return 'wired';",
       requestId: "ephemeral-listener",
-    } }));
+    });
     await nextTask();
 
-    window.dispatchEvent(new MessageEvent("message", { data: {
+    emit({
       type: "execute",
       code: "return window['__itsaliveRuntimeDurabilityAuditV1']();",
       requestId: "durability-audit",
-    } }));
+    });
     await nextTask();
 
     expect(state.posts).toContainEqual({
@@ -127,11 +141,11 @@ describe("app runtime namespace", () => {
   it("rejects UI appended beside the canonical app root and removes the duplicate surface", async () => {
     const root = document.getElementById("itsalive-root");
     expect(root).toBeTruthy();
-    window.dispatchEvent(new MessageEvent("message", { data: {
+    emit({
       type: "execute",
       code: "document.body.insertAdjacentHTML('beforeend', '<main data-duplicate-app>Duplicate</main>'); return 'added';",
       requestId: "duplicate-root",
-    } }));
+    });
     await nextTask();
 
     const response = state.posts.find(({ requestId }) => requestId === "duplicate-root");
@@ -143,7 +157,7 @@ describe("app runtime namespace", () => {
 
   it("keeps screenshot verification failures non-fatal", async () => {
     state.screenshotError = new Error("canvas export blocked");
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot-failure" } }));
+    emit({ type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot-failure" });
     await nextTask();
     state.screenshotError = undefined;
 
@@ -154,8 +168,8 @@ describe("app runtime namespace", () => {
   });
 
   it("returns only the current execution error instead of recursively embedding prior logs", async () => {
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'throw new Error("first failure");', requestId: "error-one" } }));
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'throw new Error("second failure");', requestId: "error-two" } }));
+    emit({ type: "execute", code: 'throw new Error("first failure");', requestId: "error-one" });
+    emit({ type: "execute", code: 'throw new Error("second failure");', requestId: "error-two" });
     await nextTask();
 
     const second = state.posts.find(({ requestId }) => requestId === "error-two");
@@ -168,7 +182,7 @@ describe("app runtime namespace", () => {
   it("clears origin storage through the private shell command", async () => {
     localStorage.setItem("app", "state");
     sessionStorage.setItem("app", "session");
-    window.dispatchEvent(new MessageEvent("message", { data: { type: "storage.clear", requestId: "clear" } }));
+    emit({ type: "storage.clear", requestId: "clear" });
     await nextTask();
     expect(localStorage.getItem("app")).toBeNull();
     expect(sessionStorage.getItem("app")).toBeNull();
@@ -176,12 +190,10 @@ describe("app runtime namespace", () => {
   });
 
   it("fails clearly instead of overwriting an existing namespace", async () => {
-    const { installRuntimeApi } = await import("../src/app/runtime");
+    const { installRuntimeApi } = await import("../src/runtime/runtime");
     const target = {} as Window;
     Object.defineProperty(target, "itsalive", { value: { unrelated: true }, configurable: true });
     expect(() => installRuntimeApi(target, window.itsalive)).toThrow("window.itsalive already exists");
     expect((target.itsalive as unknown as { unrelated: boolean }).unrelated).toBe(true);
   });
-
-
 });
