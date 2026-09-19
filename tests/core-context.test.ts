@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import { buildModelContext, conservativeTokenEstimate } from "../src/shell/core/context";
 import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 
-const model = { provider: "test", model: "test", maxContextTokens: 4_000, outputHeadroomTokens: 200, historyContextTokens: 1_000 };
+const model = { provider: "test", model: "test", maxContextTokens: 8_000, outputHeadroomTokens: 200, historyContextTokens: 1_000 };
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
