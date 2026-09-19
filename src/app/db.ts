@@ -1,5 +1,5 @@
-const DB_NAME = "itsalive-app-v2";
-const DB_VERSION = 2;
+const DB_NAME = "itsalive-app-v3";
+const DB_VERSION = 1;
 export const STORES = { document: "document" } as const;
 export type AppStore = typeof STORES[keyof typeof STORES];
 
@@ -24,10 +24,7 @@ export function openAppDatabase(): Promise<IDBDatabase> {
   if (database) return database;
   database = new Promise((resolve, reject) => {
     const opening = indexedDB.open(DB_NAME, DB_VERSION);
-    opening.onupgradeneeded = () => {
-      if (!opening.result.objectStoreNames.contains(STORES.document)) opening.result.createObjectStore(STORES.document);
-      if (opening.result.objectStoreNames.contains("tools")) opening.result.deleteObjectStore("tools");
-    };
+    opening.onupgradeneeded = () => { opening.result.createObjectStore(STORES.document); };
     opening.onsuccess = () => resolve(opening.result);
     opening.onerror = () => reject(opening.error ?? new Error("Unable to open app database"));
     opening.onblocked = () => reject(new Error("App database open is blocked by another tab"));
@@ -53,17 +50,4 @@ export async function dbSet<T>(store: AppStore, key: IDBValidKey, value: T): Pro
   tx.objectStore(store).put(value, key);
   await completed;
   return value;
-}
-
-export async function dbDelete(store: AppStore, key: IDBValidKey): Promise<void> {
-  const db = await openAppDatabase();
-  const tx = db.transaction(store, "readwrite");
-  const completed = transactionDone(tx);
-  tx.objectStore(store).delete(key);
-  await completed;
-}
-
-export async function dbAll<T>(store: AppStore): Promise<T[]> {
-  const db = await openAppDatabase();
-  return request(db.transaction(store).objectStore(store).getAll());
 }
