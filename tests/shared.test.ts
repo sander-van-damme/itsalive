@@ -6,6 +6,7 @@ import {
   shellUrlForApp,
   BOOTSTRAP_VERSION,
   BRIDGE_VERSION,
+  MAX_PERSISTED_DOCUMENT_CHARACTERS,
   MAX_SEMANTIC_DOCUMENT_CHARACTERS,
   createBootstrapError,
   createBootstrapInit,
@@ -62,16 +63,18 @@ describe("bootstrap protocol", () => {
   it("uses a separate strict one-shot bootstrap envelope", () => {
     expect(BOOTSTRAP_VERSION).toBe(1);
     const ready = createBootstrapReady(APP_ID);
-    const init = createBootstrapInit(APP_ID, "runtime();");
+    const init = createBootstrapInit(APP_ID, "runtime();", "<!doctype html><main>saved</main>");
     const failure = createBootstrapError(APP_ID, serializeError(new Error("boom")));
 
     expect(isBootstrapReadyMessage(ready)).toBe(true);
     expect(isBootstrapInitMessage(init)).toBe(true);
+    expect(init.documentHtml).toContain("<main>saved</main>");
     expect(isBootstrapErrorMessage(failure)).toBe(true);
 
     expect(isBootstrapReadyMessage({ ...ready, extra: true })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, runtimeSource: "" })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, appId: APP_ID.toUpperCase() })).toBe(false);
+    expect(isBootstrapInitMessage({ ...init, documentHtml: "x".repeat(MAX_PERSISTED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
     expect(isBootstrapErrorMessage({ ...failure, version: 2 })).toBe(false);
   });
 });
@@ -88,6 +91,18 @@ describe("bridge protocol", () => {
     expect(isShellToAppMessage(execute)).toBe(true);
     expect(isAppToShellMessage(execute)).toBe(false);
     expect(isAppToShellMessage(result)).toBe(true);
+  });
+
+  it("validates shell-owned document save and flush messages", () => {
+    const save = createBridgeMessage(APP_ID, "req_save123", { type: "document.save", html: "<main>saved</main>" });
+    const saved = createBridgeMessage(APP_ID, "req_save123", { type: "document.saved" });
+    const flush = createBridgeMessage(APP_ID, "req_flush123", { type: "document.flush" });
+
+    expect(isAppToShellMessage(save)).toBe(true);
+    expect(isShellToAppMessage(saved)).toBe(true);
+    expect(isShellToAppMessage(flush)).toBe(true);
+    expect(isBridgeMessage({ ...save, html: "x".repeat(MAX_PERSISTED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
+    expect(isBridgeMessage({ ...saved, error: serializeError(new Error("disk full")) })).toBe(true);
   });
 
   it("uses the LLM request and response protocol", () => {
