@@ -24,7 +24,9 @@ export interface ProviderModel {
 }
 
 export interface ModelConfig extends ProviderModel {
+  /** Actual model/router context capacity used only for local input budgeting. */
   maxContextTokens: number;
+  /** Local response headroom for context pruning; never serialized as a provider generation limit. */
   outputHeadroomTokens: number;
   observationHeadroomTokens?: number;
 }
