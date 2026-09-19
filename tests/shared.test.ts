@@ -4,11 +4,18 @@ import {
   appIdFromShellUrl,
   appOrigin,
   shellUrlForApp,
+  BOOTSTRAP_VERSION,
   BRIDGE_VERSION,
   MAX_SEMANTIC_DOCUMENT_CHARACTERS,
+  createBootstrapError,
+  createBootstrapInit,
+  createBootstrapReady,
   createBridgeMessage,
   createRequestId,
   isAppToShellMessage,
+  isBootstrapErrorMessage,
+  isBootstrapInitMessage,
+  isBootstrapReadyMessage,
   isBridgeMessage,
   isShellToAppMessage,
   isValidAppId,
@@ -48,6 +55,24 @@ describe("domain helpers", () => {
     expect(canonical.href).toBe(`https://itsalive.org/?mode=full#app=${APP_ID}`);
     expect(appIdFromShellUrl(canonical)).toBe(APP_ID);
     expect(appIdFromShellUrl(`https://itsalive.org/?app=${APP_ID}`)).toBeUndefined();
+  });
+});
+
+describe("bootstrap protocol", () => {
+  it("uses a separate strict one-shot bootstrap envelope", () => {
+    expect(BOOTSTRAP_VERSION).toBe(1);
+    const ready = createBootstrapReady(APP_ID);
+    const init = createBootstrapInit(APP_ID, "runtime();");
+    const failure = createBootstrapError(APP_ID, serializeError(new Error("boom")));
+
+    expect(isBootstrapReadyMessage(ready)).toBe(true);
+    expect(isBootstrapInitMessage(init)).toBe(true);
+    expect(isBootstrapErrorMessage(failure)).toBe(true);
+
+    expect(isBootstrapReadyMessage({ ...ready, extra: true })).toBe(false);
+    expect(isBootstrapInitMessage({ ...init, runtimeSource: "" })).toBe(false);
+    expect(isBootstrapInitMessage({ ...init, appId: APP_ID.toUpperCase() })).toBe(false);
+    expect(isBootstrapErrorMessage({ ...failure, version: 2 })).toBe(false);
   });
 });
 
