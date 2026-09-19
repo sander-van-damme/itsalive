@@ -3,8 +3,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 
 const state = vi.hoisted(() => ({
   posts: [] as Array<{ payload: Record<string, unknown>; requestId?: string }>,
-  rows: new Map<string, unknown>(),
   restoredWithApi: false,
+  restoredHtml: undefined as string | undefined,
   requests: [] as Record<string, unknown>[],
   screenshotError: undefined as Error | undefined,
   listener: undefined as ((event: MessageEvent<unknown>) => void) | undefined,
@@ -22,16 +22,10 @@ vi.mock("../src/runtime/bridge", () => ({
       state.requests.push(payload);
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
       if (payload.type === "history.request") return { type: "history.response", results: ["match"] };
+      if (payload.type === "document.save") return { type: "document.saved" };
       throw new Error(`Unexpected request: ${String(payload.type)}`);
     }
   },
-}));
-
-vi.mock("../src/runtime/db", () => ({
-  STORES: { document: "document" },
-  dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
-  dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
-  closeAppDatabase: async () => undefined,
 }));
 
 vi.mock("../src/runtime/logs", () => ({
@@ -42,8 +36,16 @@ vi.mock("../src/runtime/logs", () => ({
 }));
 
 vi.mock("../src/runtime/persistence", () => ({
-  loadSavedDocument: async () => { state.restoredWithApi = window.itsalive?.apiVersion === 2; },
-  installAutosave: () => ({ suspend: vi.fn(), disconnect: vi.fn() }),
+  restoreInitialDocument: async (html?: string) => {
+    state.restoredWithApi = window.itsalive?.apiVersion === 2;
+    state.restoredHtml = html;
+    return Boolean(html);
+  },
+  installAutosave: (writeDocument: (html: string) => Promise<void>) => ({
+    save: () => writeDocument("<!doctype html><html><body><main>latest</main></body></html>"),
+    suspend: vi.fn(),
+    disconnect: vi.fn(),
+  }),
 }));
 
 const nextTask = () => new Promise(resolve => setTimeout(resolve, 0));
@@ -63,6 +65,7 @@ describe("injected app runtime namespace", () => {
       rootOrigin: "https://itsalive.test",
       appId: "550e8400-e29b-41d4-a716-446655440000",
       port: {} as MessagePort,
+      documentHtml: "<!doctype html><html><body><main>saved</main></body></html>",
       screenshot: async element => {
         if (state.screenshotError) throw state.screenshotError;
         return element.tagName;
@@ -87,6 +90,7 @@ describe("injected app runtime namespace", () => {
     expect(window.itsalive.components).toHaveProperty("modal/example-01");
     expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(state.restoredWithApi).toBe(true);
+    expect(state.restoredHtml).toContain("<main>saved</main>");
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
 
@@ -179,14 +183,18 @@ describe("injected app runtime namespace", () => {
     expect(JSON.stringify(second)).not.toContain("first failure");
   });
 
-  it("clears origin storage through the private shell command", async () => {
-    localStorage.setItem("app", "state");
-    sessionStorage.setItem("app", "session");
-    emit({ type: "storage.clear", requestId: "clear" });
+  it("flushes the live document through shell-owned persistence", async () => {
+    emit({ type: "document.flush", requestId: "flush" });
     await nextTask();
-    expect(localStorage.getItem("app")).toBeNull();
-    expect(sessionStorage.getItem("app")).toBeNull();
-    await vi.waitFor(() => expect(state.posts).toContainEqual({ payload: { type: "result", result: { cleared: true } }, requestId: "clear" }));
+
+    expect(state.requests).toContainEqual({
+      type: "document.save",
+      html: "<!doctype html><html><body><main>latest</main></body></html>",
+    });
+    expect(state.posts).toContainEqual({
+      payload: { type: "result", result: { saved: true } },
+      requestId: "flush",
+    });
   });
 
   it("fails clearly instead of overwriting an existing namespace", async () => {
