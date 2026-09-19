@@ -60,7 +60,7 @@ export function normalizeAgentRunFailure(error: unknown, signal?: AbortSignal): 
     return {
       kind: marked,
       resumable: false,
-      userMessage: "I stopped because no useful progress was detected for a while. Changes already applied were kept.",
+      userMessage: "The model stopped sending activity for a while, so I stopped this run. Changes already applied were kept.",
       technical,
     };
   }
@@ -68,7 +68,7 @@ export function normalizeAgentRunFailure(error: unknown, signal?: AbortSignal): 
     return {
       kind: marked,
       resumable: false,
-      userMessage: "I stopped after reaching the agent safety limit. Changes already applied were kept.",
+      userMessage: "This run reached the maximum working time, so I stopped it. Changes already applied were kept.",
       technical,
     };
   }
