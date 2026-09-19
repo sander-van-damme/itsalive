@@ -17,13 +17,16 @@ export interface HistoryEntry {
   kind?: "chat" | "javascript" | "execution" | "error";
 }
 
-export interface ModelConfig {
+export interface ProviderModel {
   provider: string;
   model: string;
-  maxContextTokens: number;
-  maxOutputTokens: number;
-  observationHeadroomTokens?: number;
   options?: Record<string, unknown>;
+}
+
+export interface ModelConfig extends ProviderModel {
+  maxContextTokens: number;
+  outputHeadroomTokens: number;
+  observationHeadroomTokens?: number;
 }
 
 export interface Credential {
@@ -35,10 +38,9 @@ export interface ModelMessage { role: "user" | "assistant"; content: string }
 export interface GenerateRequest {
   /** Console diagnostic label; never sent to the provider. */
   purpose?: string;
-  model: ModelConfig;
+  model: ProviderModel;
   system: string;
   messages: ModelMessage[];
-  maxOutputTokens: number;
   signal?: AbortSignal;
 }
 
