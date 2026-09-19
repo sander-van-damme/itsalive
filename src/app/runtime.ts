@@ -9,6 +9,7 @@ import type { BridgeMessage, ShellToAppPayload } from "../shared";
 import { serializeError, shellUrlForApp } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
+import { COMPONENTS } from "./components";
 
 const DONE = Symbol("agent-done");
 
@@ -85,6 +86,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     agent,
     dom: Object.freeze({ screenshot }),
     logs: Object.freeze({ get: logs.get }),
+    components: COMPONENTS,
     cron,
     done,
   });
