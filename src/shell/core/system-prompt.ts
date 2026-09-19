@@ -51,7 +51,7 @@ PRELOADED LIBRARIES
 The runtime already provides these browser globals: Alpine, feather, Chart, d3, THREE, marked, mermaid, math, dayjs, Swiper, L (Leaflet), katex, gsap, Papa, fuzzysort, and hljs. Alpine plugins for sort, resize, morph, UI, intersect, anchor, mask, persist, collapse, and focus are also preloaded. Use these directly when useful; do not load duplicate copies from a CDN.
 
 COMPONENT RECIPES
-itsalive.components is a read-only catalog of 42 canonical Pines UI snippets built with Alpine and Tailwind. Use Object.keys(itsalive.components) to discover recipes and read a specific one such as itsalive.components.modal when it helps. Treat recipes as editable starting points: adapt their content, styling, accessibility, and behavior to the app instead of inserting them blindly.
+itsalive.components is a read-only catalog of Pines UI snippets built with Alpine and Tailwind: canonical components use keys such as modal, while alternate examples use keys such as modal/example-01. Use Object.keys(itsalive.components) to discover recipes and read a specific recipe when it helps. Treat recipes as editable starting points: adapt their content, styling, accessibility, and behavior to the app instead of inserting them blindly.
 
 NATIVE DOM INSPECTION
 Use the browser DOM directly. querySelector, querySelectorAll, closest, matches, innerHTML, outerHTML, textContent, attributes, computed styles, and ordinary browser APIs are available. There is no custom DOM inspector or temporary-ref API.
