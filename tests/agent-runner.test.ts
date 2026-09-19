@@ -338,6 +338,36 @@ describe('AgentRunner lifecycle', () => {
     await assertion;
   });
 
+  it('treats provider activity without visible text as liveness until the safety ceiling', async () => {
+    vi.useFakeTimers();
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = {
+      generateStreaming: vi.fn((request: { signal?: AbortSignal }, _onText: (delta: string) => void, _credential: unknown, onActivity?: () => void) => new Promise((_resolve, reject) => {
+        const timer = setInterval(() => onActivity?.(), 30);
+        request.signal?.addEventListener('abort', () => {
+          clearInterval(timer);
+          reject(new Error('stream transport aborted'));
+        }, { once: true });
+      })),
+      generate: vi.fn(),
+    };
+    const executor = { execute: vi.fn() };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const run = new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Reason before coding', model,
+      idleTimeoutMs: 50, maxDurationMs: 125,
+    });
+    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_SAFETY_TIMEOUT_REASON });
+    await vi.advanceTimersByTimeAsync(126);
+    await assertion;
+
+    expect(info.mock.calls.some(call => call[0] === 'Timing milestone' && (call[1] as { milestone?: string })?.milestone === 'first-provider-activity')).toBe(true);
+  });
+
   it('lets streamed progress outlive the idle watchdog until the safety ceiling', async () => {
     vi.useFakeTimers();
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
