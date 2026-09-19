@@ -1,6 +1,6 @@
 export type ExternalAgentAbortKind = "user-stop" | "app-switch" | "runtime-disposed";
 export type AgentTimeoutKind = "idle-timeout" | "safety-timeout";
-export type AgentRunFailureKind = ExternalAgentAbortKind | AgentTimeoutKind | "provider-error";
+export type AgentRunFailureKind = ExternalAgentAbortKind | AgentTimeoutKind | "run-error";
 
 const REASON_PREFIX = "itsalive:";
 export const AGENT_IDLE_TIMEOUT_REASON = `${REASON_PREFIX}idle-timeout`;
@@ -74,9 +74,9 @@ export function normalizeAgentRunFailure(error: unknown, signal?: AbortSignal): 
   }
 
   return {
-    kind: "provider-error",
+    kind: "run-error",
     resumable: false,
-    userMessage: "The model connection failed while I was working. Changes already applied were kept. Try again.",
+    userMessage: "I hit a problem while working. Changes already applied were kept. Try again.",
     technical,
   };
 }
