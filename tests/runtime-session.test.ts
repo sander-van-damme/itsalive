@@ -16,14 +16,14 @@ const RUNTIME_SOURCE = "globalThis.__runtimeInjected = true;";
 function bootstrap(session: RuntimeSession) {
   const frame = session.frame;
   if (!frame?.contentWindow) throw new Error("frame missing");
-  const post = vi.spyOn(frame.contentWindow, "postMessage");
+  const post = vi.spyOn(frame.contentWindow, "postMessage").mockImplementation(() => undefined);
   window.dispatchEvent(new MessageEvent("message", {
     data: createBootstrapReady(APP_ID),
     origin: ORIGIN,
     source: frame.contentWindow,
   }));
   expect(post).toHaveBeenCalledOnce();
-  const [message, targetOrigin, transfer] = post.mock.calls[0]!;
+  const [message, targetOrigin, transfer] = post.mock.calls[0]! as unknown as [unknown, string, Transferable[]];
   expect(isBootstrapInitMessage(message)).toBe(true);
   expect(message).toMatchObject({ appId: APP_ID, runtimeSource: RUNTIME_SOURCE });
   expect(targetOrigin).toBe(ORIGIN);
@@ -48,7 +48,7 @@ describe("RuntimeSession", () => {
   it("accepts exactly one bootstrap from the expected app window and origin", () => {
     const { session } = createSession();
     const frame = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE);
-    const post = vi.spyOn(frame.contentWindow!, "postMessage");
+    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
 
     window.dispatchEvent(new MessageEvent("message", {
       data: createBootstrapReady(APP_ID),
