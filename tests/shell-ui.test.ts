@@ -8,7 +8,8 @@ const other: AppSummary = { id: '550e8400-e29b-41d4-a716-446655440004', name: 'B
 function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
-    sendMessage: vi.fn().mockResolvedValue(undefined), resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
+    sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
+    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     renameApp: vi.fn().mockResolvedValue(undefined),
     exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
@@ -165,6 +166,31 @@ describe('ShellUI workspace', () => {
     document.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')!.click();
     expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-2', false);
     expect(callbacks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('replaces Send with a Stop control while the agent is busy', () => {
+    const { ui, callbacks } = mounted();
+    ui.setBusy(true);
+    ui.setAgentProgress('Planning your change…');
+
+    expect(document.querySelector<HTMLButtonElement>('[data-stop]')).not.toBeNull();
+    expect(document.querySelector<HTMLButtonElement>('.send[type=submit]')).toBeNull();
+    document.querySelector<HTMLButtonElement>('[data-stop]')!.click();
+    expect(callbacks.stopAgent).toHaveBeenCalledOnce();
+    expect(document.querySelector<HTMLButtonElement>('[data-stop]')!.disabled).toBe(true);
+  });
+
+  it('offers Continue change for a paused app run', () => {
+    const { ui, callbacks } = mounted();
+    ui.setResumePrompt({
+      id: 'paused-1',
+      content: 'Work paused because you switched apps. Changes already applied were kept.',
+      actionLabel: 'Continue change',
+    });
+
+    expect(document.querySelector('[data-resume-prompt]')?.textContent).toContain('Work paused');
+    document.querySelector<HTMLButtonElement>('[data-resume-run]')!.click();
+    expect(callbacks.resumePausedRun).toHaveBeenCalledWith('paused-1');
   });
 
   it('shows one primary busy status plus a subtle app-update badge', () => {
