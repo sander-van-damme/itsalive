@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installInteractionObserver } from "../src/app/interactions";
 import { serializeSemanticDocument } from "../src/app/semantic-document";
-import { ReactionBatcher, formatReactionBatch } from "../src/shell/core/reactions";
+import { ReactionBatcher, ReactionConfirmationGate, formatReactionBatch, reactionBatchFingerprint } from "../src/shell/core/reactions";
 import { MAX_SEMANTIC_DOCUMENT_CHARACTERS, type AppToShellPayload, type JevState } from "../src/shared";
 
 const response = (probability: number) => Promise.resolve({ type: "jev.response", probability, escalated: probability >= .7 });
@@ -275,14 +275,61 @@ describe("Jev decisions and reaction batching", () => {
     expect(deliver).toHaveBeenCalledOnce();
   });
 
-  it("includes local interaction patterns in automatic reaction context", async () => {
+  it("includes local interaction patterns only in user-confirmed reaction context", async () => {
     const patterned: JevState = {
       ...state(5),
       pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0, likelyBenign: false, frustrationSignal: true },
     };
     const text = formatReactionBatch({ events: [patterned], createdAt: Date.now() });
+    expect(text).toContain("USER CONFIRMED INTERACTION ADAPTATION");
     expect(text).toContain('"frustrationSignal": true');
     expect(text).toContain('"actionCount": 5');
+  });
+
+  it("deduplicates the same behavioral episode while confirmation is pending", () => {
+    let now = 1_000;
+    let id = 0;
+    const gate = new ReactionConfirmationGate(5_000, () => now, () => `prompt-${++id}`);
+    const batch = { events: [state(7)], createdAt: now };
+
+    const first = gate.offer(batch);
+    const duplicate = gate.offer({ events: [state(7)], createdAt: now + 10 });
+
+    expect(first.kind).toBe("prompt");
+    expect(duplicate.kind).toBe("duplicate");
+    expect(gate.current()?.id).toBe("prompt-1");
+  });
+
+  it("requires explicit confirmation before yielding a mutation-capable reaction batch", () => {
+    const gate = new ReactionConfirmationGate(5_000, () => 1_000, () => "prompt-1");
+    const batch = { events: [state(8)], createdAt: 1_000 };
+    const offer = gate.offer(batch);
+    expect(offer.kind).toBe("prompt");
+
+    expect(gate.resolve("prompt-1", false).kind).toBe("dismissed");
+    expect(gate.current()).toBeUndefined();
+
+    const secondGate = new ReactionConfirmationGate(5_000, () => 1_000, () => "prompt-2");
+    secondGate.offer(batch);
+    const confirmed = secondGate.resolve("prompt-2", true);
+    expect(confirmed.kind).toBe("confirmed");
+    if (confirmed.kind === "confirmed") expect(confirmed.confirmation.batch).toBe(batch);
+  });
+
+  it("cooldowns a handled episode but allows a materially changed document to prompt", () => {
+    const gate = new ReactionConfirmationGate(5_000, () => 1_000, () => "prompt-1");
+    const original = { events: [state(9)], createdAt: 1_000 };
+    const first = gate.offer(original);
+    expect(first.kind).toBe("prompt");
+    if (first.kind !== "prompt") throw new Error("expected prompt");
+    gate.resolve(first.confirmation.id, false);
+
+    expect(gate.offer(original).kind).toBe("cooldown");
+
+    const changedState = { ...state(9), document: "<html><body><section>changed</section></body></html>" };
+    const changed = { events: [changedState], createdAt: 1_001 };
+    expect(reactionBatchFingerprint(changed)).not.toBe(reactionBatchFingerprint(original));
+    expect(gate.offer(changed).kind).toBe("prompt");
   });
 
   it("orders concurrent results by sequence and selects the newest document", async () => {
