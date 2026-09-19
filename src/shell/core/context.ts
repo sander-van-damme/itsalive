@@ -8,7 +8,6 @@ export interface ContextInput {
   model: ModelConfig;
   appPrompt: string;
   trigger: string;
-  summary?: string;
   observation?: string;
   environmentObservation?: string;
   history: HistoryEntry[];
@@ -48,11 +47,6 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     const content = section("NEW ENVIRONMENT OBSERVATION", truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count));
     if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
   }
-  if (input.summary) {
-    const content = section("ROLLING SUMMARY", input.summary);
-    if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
-  }
-
   const candidates = recentHistory(input.history, input.trigger, input.observation);
   const historyBudget = Math.min(
     Math.max(0, budget - used),
@@ -97,13 +91,11 @@ function recentHistory(history: HistoryEntry[], trigger: string, observation?: s
 
   const remaining = history.filter((_entry, index) => !excluded.has(index));
   const chat = remaining
-    .filter(entry => !isOperational(entry) && entry.kind !== "compaction")
+    .filter(entry => !isOperational(entry))
     .slice(-MAX_RECENT_CHAT_ENTRIES);
   const operations = remaining.filter(isOperational).slice(-MAX_RECENT_OPERATION_ENTRIES);
-  const compaction = remaining.filter(entry => entry.kind === "compaction").slice(-1);
-
   const unique = new Map<string | number, HistoryEntry>();
-  for (const entry of [...chat, ...operations, ...compaction]) {
+  for (const entry of [...chat, ...operations]) {
     unique.set(entry.id ?? `${entry.timestamp}:${entry.role}:${entry.content}`, entry);
   }
   return [...unique.values()].sort((a, b) => a.timestamp - b.timestamp);
