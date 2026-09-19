@@ -14,6 +14,7 @@ describe("SessionUsageTracker", () => {
       inputTokens: 150,
       outputTokens: 30,
       cost: 0.015,
+      costComplete: true,
       latestContextTokens: 2_400,
       contextCapacity: 1_000_000,
       keyUsage: 3.25,
@@ -22,15 +23,31 @@ describe("SessionUsageTracker", () => {
     });
   });
 
-  it("does not understate session cost when any generation omits authoritative cost", () => {
+  it("keeps known authoritative spend while marking incomplete cost coverage", () => {
     const tracker = new SessionUsageTracker();
     tracker.recordGeneration({ inputTokens: 100, outputTokens: 20, cost: 0.01 });
     tracker.recordGeneration({ inputTokens: 50, outputTokens: 10 });
+    tracker.recordUnpricedUsage({ inputTokens: 25 });
 
-    const snapshot = tracker.snapshot();
-    expect(snapshot.inputTokens).toBe(150);
-    expect(snapshot.outputTokens).toBe(30);
-    expect(snapshot.cost).toBeUndefined();
+    expect(tracker.snapshot()).toEqual({
+      requests: 3,
+      inputTokens: 175,
+      outputTokens: 30,
+      cost: 0.01,
+      costComplete: false,
+    });
+  });
+
+  it("counts a successful provider request even when usage metadata is absent", () => {
+    const tracker = new SessionUsageTracker();
+    tracker.recordGeneration(undefined);
+
+    expect(tracker.snapshot()).toEqual({
+      requests: 1,
+      inputTokens: 0,
+      outputTokens: 0,
+      costComplete: false,
+    });
   });
 
   it("resets totals and account metadata when the active API key changes", () => {
@@ -41,6 +58,6 @@ describe("SessionUsageTracker", () => {
 
     tracker.reset();
 
-    expect(tracker.snapshot()).toEqual({ requests: 0, inputTokens: 0, outputTokens: 0 });
+    expect(tracker.snapshot()).toEqual({ requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true });
   });
 });
