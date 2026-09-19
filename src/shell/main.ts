@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
+import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, clearAppOrigin, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
 
@@ -87,8 +87,8 @@ const ui = new ShellUI(root, {
     reactionConfirmationGates.delete(id);
     confirmedReactionQueue.delete(id);
     pausedRuns.clear(id);
-    const clearOrigin = activeId === id && runtime.state === 'ready' ? () => requestRuntime({ type: 'storage.clear' }) : undefined;
-    await deleteApp(db, id, clearOrigin, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
+    const origin = appOrigin(id, ROOT_DOMAIN, 'https:');
+    await deleteApp(db, id, () => clearAppOrigin(origin), error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
     initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
   },
   sendMessage: async content => {
@@ -209,6 +209,8 @@ async function selectApp(id: string): Promise<void> {
     stopActiveRun('app-switch');
     await waitForAgentIdle();
   }
+  if (runtime.state === 'ready' && !await flushCurrentDocument()) return;
+
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
@@ -216,9 +218,12 @@ async function selectApp(id: string): Promise<void> {
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
-  const runtimeSource = await loadRuntimeSource();
+  const [runtimeSource, savedDocument] = await Promise.all([
+    loadRuntimeSource(),
+    db.documents.get(id),
+  ]);
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
-  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
+  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource, savedDocument?.html);
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
@@ -379,6 +384,15 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
   if (!activeId || message.appId !== activeId) return;
   switch (message.type) {
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
+    case 'document.save': {
+      try {
+        await db.documents.put({ appId: activeId, html: message.html, updatedAt: Date.now() });
+        respond(message, { type: 'document.saved' });
+      } catch (error) {
+        respond(message, { type: 'document.saved', error: serializeError(error) });
+      }
+      break;
+    }
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
     case 'jev.request': await handleJevRequest(message); break;
     case 'llm.request': await handleLlmRequest(message); break;
@@ -572,6 +586,19 @@ async function log(level: LogEntry['level'], source: string, message: string, de
 
 async function requestRuntime<T>(payload: Parameters<RuntimeSession['post']>[0], timeoutMs = 10_000): Promise<T> {
   return runtime.request<T>(payload, timeoutMs);
+}
+
+async function flushCurrentDocument(): Promise<boolean> {
+  const appId = activeId;
+  if (!appId || runtime.state !== 'ready') return true;
+  try {
+    await requestRuntime<{ saved: true }>({ type: 'document.flush' });
+    return true;
+  } catch (error) {
+    await log('error', 'persistence', 'Could not save the current app before leaving it', { error }, appId);
+    ui.showError('Could not save the current app. The app was left open so your latest changes are not discarded.');
+    return false;
+  }
 }
 
 function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
