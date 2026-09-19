@@ -40,7 +40,6 @@ export class ProviderRegistry {
       model: request.model.model,
       systemCharacters: request.system.length,
       messages: request.messages.map(message => ({ role: message.role, characters: message.content.length })),
-      maxOutputTokens: request.maxOutputTokens,
       modelOptions: request.model.options,
       ...(streaming ? { streaming: true } : {}),
     }));
@@ -125,7 +124,6 @@ function bodyFor(request: GenerateRequest): Json {
   return {
     model: request.model.model,
     messages: [{ role: "system", content: request.system }, ...request.messages],
-    max_tokens: request.maxOutputTokens,
     ...request.model.options,
   };
 }
