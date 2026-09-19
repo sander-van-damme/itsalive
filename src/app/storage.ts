@@ -32,7 +32,7 @@ export async function clearOriginStorage(): Promise<void> {
   }
   if (typeof indexedDB !== "undefined") {
     try {
-      const databases = typeof indexedDB.databases === "function" ? await indexedDB.databases() : [{ name: "itsalive-app-v2" }];
+      const databases = typeof indexedDB.databases === "function" ? await indexedDB.databases() : [{ name: "itsalive-app-v3" }];
       const result = await Promise.allSettled(databases.flatMap(item => item.name ? [deleteDatabase(item.name)] : []));
       failures.push(...result.filter(item => item.status === "rejected").map(item => item.reason));
     } catch (error) { failures.push(error); }
