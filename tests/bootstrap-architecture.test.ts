@@ -18,8 +18,8 @@ describe("wildcard bootstrap architecture", () => {
   it("keeps platform runtime and library policy out of the wildcard static page", () => {
     const html = readFileSync(resolve(root, "sites/app/index.html"), "utf8");
     expect(html).not.toContain("cdnjs.cloudflare.com");
-    expect(html).not.toContain("data-app-runtime");
-    expect(html).toContain('src="./main.ts"');
+    expect(html.match(/data-app-runtime/g)).toHaveLength(1);
+    expect(html).toContain('data-app-runtime type="module" src="./main.ts"');
     expect(html.length).toBeLessThan(2_000);
 
     const runtimeFiles = readdirSync(resolve(root, "src/runtime"));
