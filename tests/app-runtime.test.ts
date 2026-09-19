@@ -67,9 +67,10 @@ describe("app runtime namespace", () => {
     expect(Object.isFrozen(window.itsalive)).toBe(true);
     expect(Object.isFrozen(window.itsalive.dom)).toBe(true);
     expect(Object.isFrozen(window.itsalive.components)).toBe(true);
-    expect(Object.keys(window.itsalive.components)).toHaveLength(42);
+    expect(Object.keys(window.itsalive.components)).toHaveLength(94);
     expect(window.itsalive.components).toHaveProperty("modal");
     expect(window.itsalive.components).toHaveProperty("date-picker");
+    expect(window.itsalive.components).toHaveProperty("modal/example-01");
     expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(state.restoredWithApi).toBe(true);
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
