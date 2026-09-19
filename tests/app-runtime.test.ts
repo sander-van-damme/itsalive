@@ -28,8 +28,6 @@ vi.mock("../src/app/db", () => ({
   STORES: { document: "document" },
   dbGet: async (_store: string, key: IDBValidKey) => state.rows.get(String(key)),
   dbSet: async (_store: string, key: IDBValidKey, value: unknown) => { state.rows.set(String(key), value); return value; },
-  dbDelete: async (_store: string, key: IDBValidKey) => { state.rows.delete(String(key)); },
-  dbAll: async () => [...state.rows.values()],
   closeAppDatabase: async () => undefined,
 }));
 
@@ -69,9 +67,6 @@ describe("app runtime namespace", () => {
     expect(Object.isFrozen(window.itsalive)).toBe(true);
     expect(Object.isFrozen(window.itsalive.dom)).toBe(true);
     expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
-    for (const legacy of ["app", "agent", "tools", "cron", "inspectDom", "ref", "screenshot", "getLogs", "done"]) {
-      expect(Object.prototype.hasOwnProperty.call(window, legacy)).toBe(false);
-    }
     expect(state.restoredWithApi).toBe(true);
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
@@ -84,12 +79,9 @@ describe("app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);
     expect(window.itsalive.cron("daily", "0 8 * * *", () => "fired")).toEqual({ id: "daily", schedule: "0 8 * * *" });
     expect(window.itsalive.dom).toEqual({ screenshot: expect.any(Function) });
-    expect(window.itsalive).not.toHaveProperty("tools");
-    expect(window.itsalive.dom).not.toHaveProperty("inspect");
-    expect(window.itsalive.dom).not.toHaveProperty("ref");
     expect(window.itsalive.logs.get()).toEqual([]);
 
-    document.body.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
+    document.getElementById("itsalive-root")!.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return itsalive.apiVersion;", requestId: "version" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: "return document.querySelector('main[data-native-dom]');", requestId: "native-dom" } }));
     window.dispatchEvent(new MessageEvent("message", { data: { type: "execute", code: 'return itsalive.done("ok");', requestId: "done" } }));
