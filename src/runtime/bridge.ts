@@ -1,27 +1,31 @@
-import { createBridgeMessage, createRequestId, validateMessageEvent } from "../shared";
+import { createBridgeMessage, createRequestId, isShellToAppMessage } from "../shared";
 import type { AppToShellPayload, BridgeMessage, ShellToAppPayload } from "../shared";
 
 export class AppBridge {
   private pending = new Map<string, { resolve: (value: BridgeMessage<ShellToAppPayload>) => void; reject: (error: Error) => void; timer: number }>();
 
-  constructor(readonly rootOrigin: string, readonly appId: string) {}
+  constructor(readonly rootOrigin: string, readonly appId: string, private readonly port: MessagePort) {
+    this.port.start();
+  }
 
-  validate(event: MessageEvent): BridgeMessage<ShellToAppPayload> | null {
-    return validateMessageEvent(event, {
-      expectedOrigin: this.rootOrigin,
-      expectedAppId: this.appId,
-      expectedSource: window.parent,
-      direction: "to-app",
-    }) as BridgeMessage<ShellToAppPayload> | null;
+  validate(event: MessageEvent<unknown>): BridgeMessage<ShellToAppPayload> | null {
+    const message = event.data;
+    return isShellToAppMessage(message) && message.appId === this.appId ? message : null;
+  }
+
+  addMessageListener(listener: (event: MessageEvent<unknown>) => void): void {
+    this.port.addEventListener("message", listener as EventListener);
+  }
+
+  removeMessageListener(listener: (event: MessageEvent<unknown>) => void): void {
+    this.port.removeEventListener("message", listener as EventListener);
   }
 
   post(payload: AppToShellPayload, requestId = createRequestId()) {
-    if (window.parent === window) return;
-    window.parent.postMessage(createBridgeMessage(this.appId, requestId, payload), this.rootOrigin);
+    this.port.postMessage(createBridgeMessage(this.appId, requestId, payload));
   }
 
   request<T extends BridgeMessage<ShellToAppPayload>>(payload: AppToShellPayload, timeoutMs = 30_000): Promise<T> {
-    if (window.parent === window) return Promise.reject(new Error(`${payload.type} requires the root shell`));
     const requestId = createRequestId();
     return new Promise<T>((resolve, reject) => {
       const timer = window.setTimeout(() => {
@@ -48,15 +52,6 @@ export class AppBridge {
       pending.reject(new Error("Bridge destroyed"));
     }
     this.pending.clear();
+    this.port.close();
   }
-}
-
-export function idFromHostname(rootOrigin: string): string {
-  const root = new URL(rootOrigin).hostname;
-  const host = location.hostname;
-  const suffix = `.${root}`;
-  if (!host.endsWith(suffix) || host === root) throw new Error(`App hostname ${host} is not a subdomain of ${root}`);
-  const id = host.slice(0, -suffix.length).split(".")[0];
-  if (!id) throw new Error("Unable to determine app id");
-  return id;
 }

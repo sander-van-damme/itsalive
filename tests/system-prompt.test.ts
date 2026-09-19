@@ -30,10 +30,11 @@ describe('SYSTEM_PROMPT code examples', () => {
   });
 
   it('ships a platform-owned frosted treatment for unfinished generated UI', () => {
+    const runtimeAssets = readFileSync(new URL('../src/runtime/assets.ts', import.meta.url), 'utf8');
     const appShell = readFileSync(new URL('../sites/app/index.html', import.meta.url), 'utf8');
-    expect(appShell).toContain('#itsalive-root [data-itsalive-building]');
-    expect(appShell).toContain('content: "Building…"');
-    expect(appShell).toContain('backdrop-filter: blur(4px)');
+    expect(runtimeAssets).toContain('#itsalive-root [data-itsalive-building]');
+    expect(runtimeAssets).toContain('content: "Building…"');
+    expect(runtimeAssets).toContain('backdrop-filter: blur(4px)');
     expect(appShell).toContain('min-height:100dvh');
   });
 });

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, expect, it } from "vitest";
-import { formatScreenshotUnavailable, sanitizeScreenshotClone } from "../src/app/screenshot";
+import { formatScreenshotUnavailable, sanitizeScreenshotClone } from "../src/runtime/screenshot";
 
 describe("screenshot fallback sanitization", () => {
   it("removes external resource loads while preserving ordinary markup", () => {

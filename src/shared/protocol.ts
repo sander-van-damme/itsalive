@@ -2,10 +2,38 @@ import { isValidAppId } from "./domain";
 import { isValidId } from "./ids";
 import type { SerializedError } from "./serialization";
 
+export const BOOTSTRAP_PROTOCOL = "itsalive-bootstrap" as const;
+export const BOOTSTRAP_VERSION = 1 as const;
+export const RUNTIME_BOOTSTRAP_KEY = "__itsaliveShellRuntimeInitV1" as const;
 export const BRIDGE_PROTOCOL = "itsalive" as const;
 export const BRIDGE_VERSION = 4 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
+
+export type BootstrapReadyMessage = {
+  protocol: typeof BOOTSTRAP_PROTOCOL;
+  version: typeof BOOTSTRAP_VERSION;
+  type: "ready";
+  appId: string;
+};
+
+export type BootstrapInitMessage = {
+  protocol: typeof BOOTSTRAP_PROTOCOL;
+  version: typeof BOOTSTRAP_VERSION;
+  type: "init";
+  appId: string;
+  runtimeSource: string;
+};
+
+export type BootstrapErrorMessage = {
+  protocol: typeof BOOTSTRAP_PROTOCOL;
+  version: typeof BOOTSTRAP_VERSION;
+  type: "error";
+  appId: string;
+  error: SerializedError;
+};
+
+export type BootstrapMessage = BootstrapReadyMessage | BootstrapInitMessage | BootstrapErrorMessage;
 
 export type LogLevel = "debug" | "info" | "warn" | "error";
 export type RuntimeStatus = "ready";
@@ -59,8 +87,55 @@ const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
+const hasOnly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key));
 
-/** Structural validation at the untrusted postMessage boundary. */
+export function createBootstrapReady(appId: string): BootstrapReadyMessage {
+  if (!isValidAppId(appId)) throw new Error("Invalid app id");
+  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "ready", appId };
+}
+
+export function createBootstrapInit(appId: string, runtimeSource: string): BootstrapInitMessage {
+  if (!isValidAppId(appId)) throw new Error("Invalid app id");
+  if (!runtimeSource.trim()) throw new Error("Runtime source must not be empty");
+  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "init", appId, runtimeSource };
+}
+
+export function createBootstrapError(appId: string, error: SerializedError): BootstrapErrorMessage {
+  if (!isValidAppId(appId)) throw new Error("Invalid app id");
+  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "error", appId, error };
+}
+
+export function isBootstrapReadyMessage(value: unknown): value is BootstrapReadyMessage {
+  return isObject(value)
+    && hasOnly(value, ["protocol", "version", "type", "appId"])
+    && value.protocol === BOOTSTRAP_PROTOCOL
+    && value.version === BOOTSTRAP_VERSION
+    && value.type === "ready"
+    && isValidAppId(value.appId);
+}
+
+export function isBootstrapInitMessage(value: unknown): value is BootstrapInitMessage {
+  return isObject(value)
+    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource"])
+    && value.protocol === BOOTSTRAP_PROTOCOL
+    && value.version === BOOTSTRAP_VERSION
+    && value.type === "init"
+    && isValidAppId(value.appId)
+    && typeof value.runtimeSource === "string"
+    && value.runtimeSource.length > 0;
+}
+
+export function isBootstrapErrorMessage(value: unknown): value is BootstrapErrorMessage {
+  return isObject(value)
+    && hasOnly(value, ["protocol", "version", "type", "appId", "error"])
+    && value.protocol === BOOTSTRAP_PROTOCOL
+    && value.version === BOOTSTRAP_VERSION
+    && value.type === "error"
+    && isValidAppId(value.appId)
+    && isSerializedError(value.error);
+}
+
+/** Structural validation for the runtime channel after the bootstrap trust boundary is established. */
 export function isBridgeMessage(value: unknown): value is BridgeMessage {
   if (!isObject(value) || value.protocol !== BRIDGE_PROTOCOL || value.version !== BRIDGE_VERSION ||
       !isValidAppId(value.appId) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
@@ -79,7 +154,6 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
   }
 }
 
-const hasOnly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key));
 function isInteractionTarget(value: unknown): boolean {
   if (!isObject(value) || !hasOnly(value, ["tag", "id", "value", "state"]) || typeof value.tag !== "string" || value.tag.length < 1 || value.tag.length > 100 || (value.id !== undefined && (typeof value.id !== "string" || value.id.length > 200)) || (value.value !== undefined && (typeof value.value !== "string" || value.value.length > 500))) return false;
   if (value.state === undefined) return true;
@@ -137,4 +211,3 @@ export function validateMessageEvent(event: MessageEvent<unknown>, options: Mess
     : APP_TYPES.has(event.data.type as AppToShellPayload["type"]);
   return validDirection ? event.data : null;
 }
-
