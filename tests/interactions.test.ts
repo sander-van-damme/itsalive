@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { installInteractionObserver } from "../src/app/interactions";
-import { serializeSemanticDocument } from "../src/app/semantic-document";
+import { installInteractionObserver } from "../src/runtime/interactions";
+import { serializeSemanticDocument } from "../src/runtime/semantic-document";
 import { ReactionBatcher, ReactionConfirmationGate, formatReactionBatch, reactionBatchFingerprint } from "../src/shell/core/reactions";
 import { MAX_SEMANTIC_DOCUMENT_CHARACTERS, type AppToShellPayload, type JevState } from "../src/shared";
 
