@@ -1,13 +1,6 @@
 import { PostMessageExecutor } from './bridge-executor';
 
 export type RuntimeState = 'loading' | 'ready' | 'error' | 'disposed';
-export type RuntimePresentation = { status: string; tone: 'working' | 'connected' | 'error' };
-
-export function runtimePresentation(state: RuntimeState): RuntimePresentation {
-  if (state === 'ready') return { status: 'App connected', tone: 'connected' };
-  if (state === 'loading') return { status: 'App connecting', tone: 'working' };
-  return { status: state === 'error' ? 'App runtime error' : 'App disconnected', tone: 'error' };
-}
 
 /** Owns the single live iframe/executor pair and its explicit handshake state. */
 export class RuntimeSession {
