@@ -1,5 +1,5 @@
-import type { ModelConfig } from "./types";
+import type { ProviderModel } from "./types";
 
-export function connectionTestModelConfig(provider: string, model: string): ModelConfig {
+export function connectionTestModelConfig(provider: string, model: string): ProviderModel {
   return { provider, model };
 }
