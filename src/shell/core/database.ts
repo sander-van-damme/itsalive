@@ -1,6 +1,6 @@
 import type { AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
 
-const DB_NAME = "itsalive-shell-v2";
+const DB_NAME = "itsalive-shell-v3";
 const DB_VERSION = 1;
 
 type Store = "apps" | "history" | "logs" | "schedules";
