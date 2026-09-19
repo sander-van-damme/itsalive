@@ -14,6 +14,7 @@ export interface UsageValue {
   inputTokens: number;
   outputTokens: number;
   cost?: number;
+  costComplete: boolean;
   latestContextTokens?: number;
   contextCapacity?: number;
   keyUsage?: number;
@@ -60,7 +61,7 @@ export class ShellUI {
   private resumePrompt?: ResumePrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
-  private usage: UsageValue = { requests: 0, inputTokens: 0, outputTokens: 0 };
+  private usage: UsageValue = { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true };
   private usageOpen = false;
   private busy = false;
   private agentProgress = '';
@@ -247,18 +248,21 @@ export class ShellUI {
 
   private renderGlobalActions(): string {
     const sessionTotal = this.usage.inputTokens + this.usage.outputTokens;
-    const usageLabel = this.usage.cost !== undefined ? money(this.usage.cost) : `${compactTokens(sessionTotal)} tok`;
+    const usageLabel = this.usage.cost !== undefined ? `${money(this.usage.cost)}${this.usage.costComplete ? '' : '+'}` : `${compactTokens(sessionTotal)} tok`;
     const context = this.usage.latestContextTokens !== undefined && this.usage.contextCapacity !== undefined
       ? `${compactTokens(this.usage.latestContextTokens)} / ${compactTokens(this.usage.contextCapacity)}`
       : 'Not measured yet';
     const keySpend = this.usage.keyUsage !== undefined ? money(this.usage.keyUsage) : 'Not loaded';
     const remaining = typeof this.usage.keyLimitRemaining === 'number' ? money(this.usage.keyLimitRemaining) : this.usage.keyLimitRemaining === null ? 'No key limit' : 'Not loaded';
-    const cost = this.usage.cost !== undefined ? money(this.usage.cost) : this.usage.requests ? 'Not reported for every request' : '$0.00';
+    const cost = this.usage.cost !== undefined
+      ? `${money(this.usage.cost)}${this.usage.costComplete ? '' : '+ known'}`
+      : this.usage.requests ? 'Not reported' : '$0.00';
+    const costLabel = this.usage.costComplete ? 'Session cost' : 'Known session cost';
     const usagePopover = this.usageOpen ? `<div class="popover usage-popover" data-usage-popover>
         <strong>OpenRouter usage</strong>
         <dl>
           <div><dt>This session</dt><dd>${esc(compactTokens(this.usage.inputTokens))} in · ${esc(compactTokens(this.usage.outputTokens))} out</dd></div>
-          <div><dt>Session cost</dt><dd>${esc(cost)}</dd></div>
+          <div><dt>${esc(costLabel)}</dt><dd>${esc(cost)}</dd></div>
           <div><dt>Current context</dt><dd>${esc(context)}</dd></div>
           <div><dt>Key spend</dt><dd>${esc(keySpend)}</dd></div>
           <div><dt>Key remaining</dt><dd>${esc(remaining)}</dd></div>
@@ -291,7 +295,7 @@ export class ShellUI {
       localStorage.setItem('itsalive.theme', this.theme);
       this.renderRail();
     };
-    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.view = this.view === 'settings' && this.active ? 'workspace' : 'settings'; this.collapsed = false; this.renderRail(); };
+    rail.querySelector<HTMLButtonElement>('[data-settings]')!.onclick = () => { this.usageOpen = false; this.view = this.view === 'settings' && this.active ? 'workspace' : 'settings'; this.collapsed = false; this.renderRail(); };
     rail.querySelector<HTMLButtonElement>('[data-switcher]')?.addEventListener('click', () => { this.switcherOpen = !this.switcherOpen; this.actionsOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
     rail.querySelector<HTMLButtonElement>('[data-app-menu]')?.addEventListener('click', () => { this.actionsOpen = !this.actionsOpen; this.switcherOpen = false; this.renderRail(); this.focusFirstMenuItem(); });
     rail.querySelector<HTMLButtonElement>('[data-launcher]')?.addEventListener('click', () => { this.view = 'launcher'; this.renderRail(); });
@@ -490,7 +494,7 @@ export class ShellUI {
 
   private focusFirstMenuItem(): void { requestAnimationFrame(() => this.mount.querySelector<HTMLButtonElement>('[role="menu"] button')?.focus()); }
   private handleDocumentKeydown = (event: KeyboardEvent): void => {
-    if (event.key !== 'Escape' || (!this.switcherOpen && !this.actionsOpen)) return;
-    this.switcherOpen = false; this.actionsOpen = false; this.renderRail();
+    if (event.key !== 'Escape' || (!this.switcherOpen && !this.actionsOpen && !this.usageOpen)) return;
+    this.switcherOpen = false; this.actionsOpen = false; this.usageOpen = false; this.renderRail();
   };
 }
