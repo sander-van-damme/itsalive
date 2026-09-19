@@ -97,6 +97,13 @@ interface Json {
   usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cost?: number };
 }
 
+interface ChatCompletionBody {
+  model: string;
+  messages: Array<{ role: string; content: string }>;
+  usage: { include: true };
+  [key: string]: unknown;
+}
+
 interface HttpAdapterOptions {
   id: string;
   endpoint: string;
@@ -123,7 +130,7 @@ function headersFor(credential?: Credential): Record<string, string> {
   };
 }
 
-function bodyFor(request: GenerateRequest): Json {
+function bodyFor(request: GenerateRequest): ChatCompletionBody {
   return {
     model: request.model.model,
     messages: [{ role: "system", content: request.system }, ...request.messages],
