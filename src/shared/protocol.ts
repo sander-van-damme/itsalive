@@ -60,7 +60,7 @@ export type ShellToAppPayload =
   | { type: "execute"; code: string }
   | { type: "reload" }
   | { type: "document.flush" }
-  | { type: "document.saved" }
+  | { type: "document.saved"; error?: SerializedError }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
   | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError }
@@ -148,6 +148,7 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
   switch (value.type) {
     case "execute": return typeof value.code === "string";
     case "document.save": return typeof value.html === "string" && value.html.length <= MAX_PERSISTED_DOCUMENT_CHARACTERS;
+    case "document.saved": return value.error === undefined || isSerializedError(value.error);
     case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
     case "history.request": return typeof value.query === "string";
     case "jev.request": return isJevState(value.state);
