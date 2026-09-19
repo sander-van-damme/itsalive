@@ -133,7 +133,7 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .launcher-item > svg { width: 15px; color: var(--faint); }
 
 /* Chat and composer */
-.working-state { flex: 0 0 auto; padding: 8px 18px 0; display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
+.working-state { align-self: flex-start; padding: 2px; display: flex; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .spinner { width: 11px; height: 11px; border: 1.5px solid var(--border); border-top-color: var(--muted); border-radius: 50%; animation: spin .8s linear infinite; }
 .chat-stream { flex: 1 1 auto; min-height: 0; overflow-y: auto; overscroll-behavior: contain; padding: 18px 18px 14px; display: flex; flex-direction: column; gap: 15px; scrollbar-color: var(--faint) transparent; }
 .message { max-width: 90%; padding: 10px 12px; border-radius: var(--radius-md); font-size: 14px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
