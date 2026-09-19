@@ -14,24 +14,28 @@ This repository produces two independent static builds:
 
 | Build | Output | Deployment binding | Responsibility |
 | --- | --- | --- | --- |
-| Root shell | `dist-root/` | `itsalive.org` | Platform state and policy: apps, persistent documents, Chat, Settings, histories, provider calls, runtime API definition, agent loop |
-| App runtime | `dist-app/` | `*.itsalive.org` | Minimal execution kernel: bridge, DOM execution/observation, serialization/restoration, screenshots, app-origin operations |
+| Root shell | `dist-root/` | `itsalive.org` | Platform state, policy, and runtime source: apps, persistent documents, Chat, Settings, histories, provider calls, runtime API, injected app runtime, agent loop |
+| App bootstrap | `dist-app/` | `*.itsalive.org` | Stable cross-origin bootstrap only: authenticate the shell, establish the bridge/channel, execute the shell-supplied runtime |
 
 The only connection between the two origins is a versioned `postMessage` protocol. Every message is checked for its exact origin, source window, immutable app UUID, direction, request ID, and payload shape. Each app UUID is also its permanent wildcard subdomain; display names can be changed independently. Provider credentials remain in root-origin storage and are never sent into app frames.
 
-### Thin app-runtime invariant
+### Thin app-bootstrap invariant
 
-Keep `src/app` as small and replaceable as possible. The root shell owns platform state, persistence, policy, prompts, API contracts and implementations, configuration, catalogs, and other product logic whenever those responsibilities do not require the app origin. Code belongs in the app runtime only when it must execute there, such as DOM access, generated-code execution, interaction capture, screenshots, validated bridge transport, or operations against the app origin's own browser storage.
+Keep the wildcard app deployment as close to a dumb puppet as possible. `src/app` should contain only the small, stable bootstrap needed to identify its UUID origin, authenticate/validate the root shell, establish the cross-origin communication channel, and execute a shell-supplied runtime payload. Substantive runtime code is owned, built, and versioned by the root shell even when that code must execute inside the app origin.
 
-The shell initializes the app runtime over the validated `postMessage` bridge. Persistent app HTML is shell-owned: the shell loads it from root-origin storage and sends it to the runtime for restoration, while the runtime serializes live DOM state and sends snapshots back for shell-owned persistence. Do not add a platform-private database to the app origin.
+This distinction is fundamental: **where code executes does not determine who owns or deploys that code**. DOM access, generated-code execution, interaction capture, screenshots, document serialization/restoration, logging hooks, durability checks, runtime API installation, and app-origin browser operations may execute in the wildcard frame, but their implementation should normally be delivered by the shell at initialization rather than baked into `dist-app`.
 
-The `window.itsalive` namespace follows the same ownership rule. Its contract and platform behavior are shell-owned. Because the iframe is cross-origin, the app runtime may install a small local facade/proxy from shell-provided initialization data and forward shell capabilities over the bridge. Capabilities that inherently require the app origin may execute locally behind that facade; exposing a capability inside the app does not make its policy, durable state, or catalog app-owned.
+The shell initializes each app over the validated bootstrap handshake, preferably transferring a dedicated `MessagePort` for subsequent runtime traffic. The shell supplies the current runtime payload plus shell-owned initialization state such as the saved HTML document. The injected runtime restores the document, installs `window.itsalive`, starts the required observers/handlers, and reports readiness. A newly mounted app therefore runs the runtime version belonging to the currently loaded shell; changing ordinary runtime behavior should not require redeploying the wildcard app.
+
+Persistent app HTML remains shell-owned: the injected runtime may normalize/serialize and restore the live DOM because those operations require app-origin document access, but snapshots are sent back for root-origin persistence. Do not add platform-private durable storage to the app origin.
+
+The `window.itsalive` namespace follows the same rule. Its contract, source, product policy, catalogs, and durable state are shell-owned. The injected runtime may expose local implementations or RPC proxies as needed, but those implementations are part of the shell-delivered runtime rather than permanent app-bootstrap code. Generated apps may still use ordinary browser APIs and their own origin-local storage.
 
 ## Included capabilities
 
 - Per-app origin isolation with no storage namespaces or shared app database.
 - IndexedDB shell repositories for app metadata, persistent app HTML, full history, schedules, and logs.
-- Bridge-based persistent app HTML initialization and saving, with app-side form-control normalization, serialization/restoration, and script re-execution.
+- Shell-injected runtime initialization over the cross-origin bridge, including persistent HTML restoration/saving, form-control normalization, script re-execution, observation, screenshots, logging, and runtime API installation.
 - JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, repair turns, and streamed multi-command responses whose completed commands execute immediately while generation continues.
 - Context budgeting that always retains the immutable system prompt, app prompt, and current trigger.
 - OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
@@ -97,11 +101,11 @@ itsalive.llm.ask(prompt)
 itsalive.done(message)
 ```
 
-The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. The shell owns the API contract and platform behavior; the cross-origin app runtime exposes only the local facade/proxies and app-origin implementations needed to make that contract available to generated code. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
+The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. The shell owns and supplies the runtime source that installs this API inside the app frame; local DOM/origin implementations execute there only because the browser requires them to. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
 
 Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state may use native browser IndexedDB directly; each app has its own browser origin, so that generated-app storage is naturally isolated. Platform persistence of the saved HTML belongs to the root shell database, not to runtime-private app-origin IndexedDB. The system prompt treats the document as a live drawing board: ordinary semantic HTML and browser DOM APIs are the default, native Custom Elements are optional rather than mandatory, and substantial work can be emitted as multiple independently executable commands in one streamed response. The shell applies each complete command as soon as its delimiter arrives, so users can see the app take shape before the model finishes generating the response. Native DOM values returned by generated code are serialized into readable observations, so no custom inspector/ref protocol is needed. Raw interaction events remain ephemeral; behavioral-history curation and durable summaries are platform state owned by the shell rather than hidden state inside the app document.
 
-Deleting an app always removes its shell-owned metadata, persistent document, behavioral summary, history, logs, and schedules. If that app is active, the shell also asks its mounted runtime to unregister service workers and clear origin-owned IndexedDB, Web Storage, and Cache Storage before removal. Inactive apps have no mounted cross-origin frame, so their origin-owned browser storage cannot be cleared by this small best-effort path.
+Deleting an app removes its shell-owned metadata, persistent document, behavioral summary, history, logs, and schedules and then forgets the immutable UUID. App-origin browser data is cleanup hygiene rather than part of deletion correctness. The shell may make a best-effort request to a protected wildcard cleanup endpoint that responds with `Clear-Site-Data: "storage", "cache"`; cleanup failure must not block deletion, and UUIDs are never reused.
 
 ## Security notes
 
