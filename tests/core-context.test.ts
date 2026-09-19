@@ -6,7 +6,7 @@ const model = { provider: "test", model: "test", maxContextTokens: 4_000, output
 
 describe("shell context builder", () => {
   it("teaches only the namespaced runtime API", () => {
-    for (const current of ["itsalive.done", "itsalive.history", "itsalive.dom.screenshot", "itsalive.llm"]) {
+    for (const current of ["itsalive.done", "itsalive.history", "itsalive.dom.screenshot", "itsalive.llm", "itsalive.components"]) {
       expect(SYSTEM_PROMPT).toContain(current);
     }
     expect(SYSTEM_PROMPT).toContain("native browser IndexedDB");
@@ -20,8 +20,11 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toContain("executes each command as soon as its closing delimiter arrives");
     expect(SYSTEM_PROMPT).toContain("Commands later in the same response cannot use the return value of an earlier command");
     expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
-    expect(SYSTEM_PROMPT).toContain("ordinary semantic HTML and browser DOM APIs by default");
+    expect(SYSTEM_PROMPT).toContain("Tailwind CSS as the default styling language");
+    expect(SYSTEM_PROMPT).toContain("Alpine.js as the default layer");
     expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
+    expect(SYSTEM_PROMPT).toContain("Chart, d3, THREE");
+    expect(SYSTEM_PROMPT).toContain("42 canonical Pines UI snippets");
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
