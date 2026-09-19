@@ -119,11 +119,30 @@ const ui = new ShellUI(root, {
     syncUsage();
   },
   refreshUsage: async () => { await refreshOpenRouterUsage(); },
+  checkDiagnostics: async () => {
+    const probe = crypto.randomUUID();
+    await diagnostics.write('info', 'logging', 'Diagnostic storage self-check', { probe });
+    await diagnostics.flush();
+    const logs = await db.logs.all();
+    const persisted = logs.some(entry =>
+      entry.source === 'logging'
+      && entry.message === 'Diagnostic storage self-check'
+      && entry.details !== null
+      && typeof entry.details === 'object'
+      && !Array.isArray(entry.details)
+      && (entry.details as Record<string, unknown>).probe === probe
+    );
+    if (!persisted) throw new Error('Diagnostic storage self-check could not read back its persisted entry');
+    return logs.length;
+  },
   exportLogs: async () => {
+    await diagnostics.write('info', 'logging', 'Diagnostic export requested');
     await diagnostics.flush();
     const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
+    if (!logs.length) throw new Error('Diagnostic storage returned no log entries');
     const contents = buildDiagnosticExport(logs, history);
-    downloadText(`itsalive-logs-${Date.now()}.log`, contents || 'No log entries recorded.');
+    if (!contents.trim()) throw new Error('Diagnostic export was unexpectedly empty');
+    downloadText(`itsalive-logs-${Date.now()}.log`, contents);
   },
   reloadApp: () => {
     if (!activeId || !runtime.frame?.contentWindow) return;
