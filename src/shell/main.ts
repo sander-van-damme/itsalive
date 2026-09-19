@@ -171,12 +171,15 @@ window.addEventListener('unhandledrejection', event => { void log('error', 'shel
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
 
-function agentProgressLabel(phase: AgentProgressPhase, initialBuild: boolean): string {
-  if (phase === 'executing') return initialBuild ? 'Building the interface…' : 'Applying the change…';
-  if (phase === 'repairing') return 'Fixing something that did not work…';
-  if (phase === 'verifying') return 'Checking that it works…';
-  if (phase === 'finishing') return 'Wrapping up…';
-  return initialBuild ? 'Planning your app…' : 'Working out the change…';
+function agentProgressLabel(phase: AgentProgressPhase, initialBuild: boolean, step?: number): string {
+  if (phase === 'executing') {
+    const part = step && step > 1 ? ` · part ${step}` : '';
+    return initialBuild ? `Building your app${part}…` : `Applying your change${part}…`;
+  }
+  if (phase === 'repairing') return 'Fixing something that didn’t work…';
+  if (phase === 'verifying') return 'Checking the result…';
+  if (phase === 'finishing') return 'Finishing up…';
+  return initialBuild ? 'Planning your app…' : 'Planning your change…';
 }
 
 async function refreshApps(select?: string): Promise<void> {
@@ -301,7 +304,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       credential: credential(),
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
-      onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild), progress.phase === 'executing'),
+      onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild, progress.step)),
       onContext: context => {
         sessionUsage.setContext(context.estimatedInputTokens, context.maxContextTokens);
         syncUsage();
