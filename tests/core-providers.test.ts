@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDefaultRegistry, createHttpAdapter, ProviderRegistry, ProviderResponseError } from "../src/shell/core/providers";
+import { createHttpAdapter, ProviderRegistry, ProviderResponseError } from "../src/shell/core/providers";
 
 describe("ProviderRegistry", () => {
   afterEach(() => {
