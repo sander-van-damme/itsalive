@@ -15,6 +15,7 @@ export * from "./jev";
 export * from "./model-capabilities";
 export * from "./providers";
 export * from "./reactions";
+export * from "./run-lifecycle";
 export * from "./schedules";
 export * from "./system-prompt";
 export * from "./types";
