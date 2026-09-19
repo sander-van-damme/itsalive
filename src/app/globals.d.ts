@@ -15,6 +15,7 @@ export interface ItsaliveRuntimeApi {
   readonly logs: Readonly<{
     get(input?: { level?: "log" | "info" | "warn" | "error"; limit?: number }): unknown[];
   }>;
+  readonly components: Readonly<Record<string, string>>;
   readonly cron: (id: string, schedule: string, callback: () => unknown) => { id: string; schedule: string };
   readonly done: (message?: string) => unknown;
 }
