@@ -20,11 +20,10 @@ export interface BuiltContext {
   estimatedInputTokens: number;
   includedHistoryIds: number[];
   omittedHistoryCount: number;
+  historyTokens: number;
+  historyTokenBudget: number;
 }
 
-const MAX_RECENT_CHAT_ENTRIES = 8;
-const MAX_RECENT_OPERATION_ENTRIES = 6;
-const MAX_HISTORY_TOKENS = 12_000;
 const section = (title: string, body: string) => `${title}\n${body.trim() || "(none)"}`;
 
 export function buildModelContext(input: ContextInput): BuiltContext {
@@ -47,10 +46,10 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     const content = section("NEW ENVIRONMENT OBSERVATION", truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count));
     if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
   }
-  const candidates = recentHistory(input.history, input.trigger, input.observation);
+  const candidates = historyCandidates(input.history, input.trigger, input.observation);
   const historyBudget = Math.min(
     Math.max(0, budget - used),
-    Math.min(MAX_HISTORY_TOKENS, Math.max(256, Math.floor(input.model.maxContextTokens * 0.2))),
+    Math.max(0, input.model.historyContextTokens),
   );
   let historyUsed = 0;
   const selected: HistoryEntry[] = [];
@@ -72,10 +71,12 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     estimatedInputTokens: used,
     includedHistoryIds: selected.flatMap(x => x.id == null ? [] : [x.id]),
     omittedHistoryCount: input.history.length - selected.length,
+    historyTokens: historyUsed,
+    historyTokenBudget: historyBudget,
   };
 }
 
-function recentHistory(history: HistoryEntry[], trigger: string, observation?: string): HistoryEntry[] {
+function historyCandidates(history: HistoryEntry[], trigger: string, observation?: string): HistoryEntry[] {
   const excluded = new Set<number>();
   const newestMatching = (predicate: (entry: HistoryEntry) => boolean) => {
     for (let index = history.length - 1; index >= 0; index--) {
@@ -89,21 +90,7 @@ function recentHistory(history: HistoryEntry[], trigger: string, observation?: s
   newestMatching(entry => entry.role === "user" && entry.kind === "chat" && entry.content === trigger);
   if (observation) newestMatching(entry => entry.role === "observation" && entry.content === observation);
 
-  const remaining = history.filter((_entry, index) => !excluded.has(index));
-  const chat = remaining
-    .filter(entry => !isOperational(entry))
-    .slice(-MAX_RECENT_CHAT_ENTRIES);
-  const operations = remaining.filter(isOperational).slice(-MAX_RECENT_OPERATION_ENTRIES);
-  const unique = new Map<string | number, HistoryEntry>();
-  for (const entry of [...chat, ...operations]) {
-    unique.set(entry.id ?? `${entry.timestamp}:${entry.role}:${entry.content}`, entry);
-  }
-  return [...unique.values()].sort((a, b) => a.timestamp - b.timestamp);
-}
-
-function isOperational(entry: HistoryEntry): boolean {
-  return entry.role === "agent" || entry.role === "observation"
-    || entry.kind === "javascript" || entry.kind === "execution" || entry.kind === "error";
+  return history.filter((_entry, index) => !excluded.has(index));
 }
 
 function truncateToTokens(value: string, limit: number, count: TokenCounter): string {
