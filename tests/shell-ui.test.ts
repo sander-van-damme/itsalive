@@ -161,6 +161,18 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('.app-switcher')).not.toBeNull();
   });
 
+  it('keeps launcher and API-key copy concise', () => {
+    mounted(false);
+    expect(document.querySelector('.panel-heading')?.textContent).not.toContain('Workspace');
+    expect(document.querySelector('h1')?.textContent).toBe('Your apps');
+
+    document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
+    const note = document.querySelector('.security-note')?.textContent ?? '';
+    expect(note).toContain('Stored locally in this browser');
+    expect(note).toContain('never shared with generated apps');
+    expect(note).toContain('shared devices');
+  });
+
   it('routes creation to Settings until an LLM is configured', () => {
     mounted(false);
     document.querySelector<HTMLButtonElement>('[data-create]')!.click();
