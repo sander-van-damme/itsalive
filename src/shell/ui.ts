@@ -5,7 +5,7 @@ const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMI
 
 export interface AppSummary { id: string; name: string }
 export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
-export interface InteractionPrompt { id: string; content: string; confirmLabel: string; dismissLabel: string }
+export interface InteractionPrompt { id: string; content: string; intentPlaceholder: string; confirmLabel: string; dismissLabel: string }
 export interface ResumePrompt { id: string; content: string; actionLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
@@ -32,7 +32,7 @@ export interface ShellActions {
   sendMessage(content: string): Promise<void>;
   stopAgent(): void;
   resumePausedRun(id: string): Promise<void>;
-  resolveInteractionPrompt(id: string, accepted: boolean): Promise<void>;
+  resolveInteractionPrompt(id: string, intent?: string): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
   refreshUsage(): Promise<void>;
@@ -331,12 +331,14 @@ export class ShellUI {
   }
 
   private renderChat(panel: HTMLElement): void {
-    const interactionPrompt = this.interactionPrompt
+    const interactionPrompt = this.interactionPrompt && !this.busy
       ? `<div class="message assistant interaction-prompt" data-interaction-prompt="${esc(this.interactionPrompt.id)}">
           <span>${esc(this.interactionPrompt.content)}</span>
+          <label class="sr-only" for="interaction-intent">What did you expect to happen?</label>
+          <textarea id="interaction-intent" data-prompt-intent rows="2" placeholder="${esc(this.interactionPrompt.intentPlaceholder)}"></textarea>
           <div class="prompt-actions">
-            <button class="action primary" data-prompt-confirm type="button" ${this.busy ? 'disabled' : ''}>${esc(this.interactionPrompt.confirmLabel)}</button>
-            <button class="action" data-prompt-dismiss type="button" ${this.busy ? 'disabled' : ''}>${esc(this.interactionPrompt.dismissLabel)}</button>
+            <button class="action primary" data-prompt-confirm type="button" disabled>${esc(this.interactionPrompt.confirmLabel)}</button>
+            <button class="action" data-prompt-dismiss type="button">${esc(this.interactionPrompt.dismissLabel)}</button>
           </div>
         </div>`
       : '';
@@ -363,14 +365,20 @@ export class ShellUI {
     const stream = panel.querySelector<HTMLElement>('[data-stream]')!;
     if (this.chatNearBottom) stream.scrollTop = stream.scrollHeight;
     stream.onscroll = () => { this.chatNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80; };
-    const resolvePrompt = (accepted: boolean) => {
+    const intentInput = panel.querySelector<HTMLTextAreaElement>('[data-prompt-intent]');
+    const intentConfirm = panel.querySelector<HTMLButtonElement>('[data-prompt-confirm]');
+    if (intentInput && intentConfirm) {
+      intentInput.addEventListener('input', () => { intentConfirm.disabled = !intentInput.value.trim(); });
+    }
+    const resolvePrompt = (intent?: string) => {
       const current = this.interactionPrompt;
       if (!current) return;
       panel.querySelectorAll<HTMLButtonElement>('[data-prompt-confirm], [data-prompt-dismiss]').forEach(button => { button.disabled = true; });
-      void this.actions.resolveInteractionPrompt(current.id, accepted);
+      if (intentInput) intentInput.disabled = true;
+      void this.actions.resolveInteractionPrompt(current.id, intent?.trim() || undefined);
     };
-    panel.querySelector<HTMLButtonElement>('[data-prompt-confirm]')?.addEventListener('click', () => resolvePrompt(true));
-    panel.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')?.addEventListener('click', () => resolvePrompt(false));
+    intentConfirm?.addEventListener('click', () => resolvePrompt(intentInput?.value));
+    panel.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')?.addEventListener('click', () => resolvePrompt());
     panel.querySelector<HTMLButtonElement>('[data-resume-run]')?.addEventListener('click', event => {
       const current = this.resumePrompt;
       if (!current) return;

@@ -190,33 +190,60 @@ describe('ShellUI workspace', () => {
     expect(callbacks.selectApp).not.toHaveBeenCalled();
   });
 
-  it('renders one interaction confirmation with explicit quick replies', () => {
+  it('requires a concrete intent before confirming an interaction adaptation', () => {
     const { ui, callbacks } = mounted();
     ui.setInteractionPrompt({
       id: 'reaction-1',
-      content: 'It looks like that interaction did not work. Adapt the app?',
-      confirmLabel: 'Adapt app',
+      content: 'What were you trying to make happen?',
+      intentPlaceholder: 'Describe what you expected to happen…',
+      confirmLabel: 'Use this intent',
       dismissLabel: 'Not now',
     });
 
     expect(document.querySelectorAll('[data-interaction-prompt]')).toHaveLength(1);
-    expect(document.querySelector('[data-interaction-prompt]')?.textContent).toContain('Adapt the app');
-    document.querySelector<HTMLButtonElement>('[data-prompt-confirm]')!.click();
-    expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-1', true);
+    const intent = document.querySelector<HTMLTextAreaElement>('[data-prompt-intent]')!;
+    const confirm = document.querySelector<HTMLButtonElement>('[data-prompt-confirm]')!;
+    expect(intent.placeholder).toContain('Describe what you expected');
+    expect(confirm.disabled).toBe(true);
+
+    intent.value = 'Copy the current timer value';
+    intent.dispatchEvent(new Event('input', { bubbles: true }));
+    expect(confirm.disabled).toBe(false);
+    confirm.click();
+    expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-1', 'Copy the current timer value');
   });
 
-  it('lets an interaction confirmation be dismissed without sending a normal chat message', () => {
+  it('lets an interaction clarification be dismissed without sending a normal chat message', () => {
     const { ui, callbacks } = mounted();
     ui.setInteractionPrompt({
       id: 'reaction-2',
-      content: 'Want me to inspect this interaction?',
-      confirmLabel: 'Adapt app',
+      content: 'What were you trying to make happen?',
+      intentPlaceholder: 'Describe what you expected to happen…',
+      confirmLabel: 'Use this intent',
       dismissLabel: 'Not now',
     });
 
     document.querySelector<HTMLButtonElement>('[data-prompt-dismiss]')!.click();
-    expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-2', false);
+    expect(callbacks.resolveInteractionPrompt).toHaveBeenCalledWith('reaction-2', undefined);
     expect(callbacks.sendMessage).not.toHaveBeenCalled();
+  });
+
+  it('defers interaction clarification while another agent run is busy', () => {
+    const { ui } = mounted();
+    ui.setInteractionPrompt({
+      id: 'reaction-busy',
+      content: 'What were you trying to make happen?',
+      intentPlaceholder: 'Describe what you expected to happen…',
+      confirmLabel: 'Use this intent',
+      dismissLabel: 'Not now',
+    });
+    expect(document.querySelector('[data-interaction-prompt]')).not.toBeNull();
+
+    ui.setBusy(true);
+    expect(document.querySelector('[data-interaction-prompt]')).toBeNull();
+
+    ui.setBusy(false);
+    expect(document.querySelector('[data-interaction-prompt]')).not.toBeNull();
   });
 
   it('replaces Send with a Stop control while the agent is busy', () => {

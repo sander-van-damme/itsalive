@@ -8,7 +8,7 @@ export type ReactionOfferResult =
   | { kind: "pending"; confirmation: ReactionConfirmation }
   | { kind: "cooldown"; key: string; until: number };
 export type ReactionResolution =
-  | { kind: "confirmed"; confirmation: ReactionConfirmation }
+  | { kind: "confirmed"; confirmation: ReactionConfirmation; intent: string }
   | { kind: "dismissed"; confirmation: ReactionConfirmation }
   | { kind: "missing" };
 
@@ -44,9 +44,9 @@ export function reactionBatchFingerprint(batch: ReactionBatch): string {
 export function interactionConfirmationMessage(batch: ReactionBatch): string {
   const newest = [...batch.events].sort((a, b) => a.interaction.seq - b.interaction.seq).at(-1);
   if (newest?.pattern?.frustrationSignal) {
-    return "It looks like you tried the same thing several times without the app responding. Want me to inspect that interaction and adapt the app?";
+    return "It looks like you tried the same thing several times without getting the response you expected. What were you trying to make happen?";
   }
-  return "I noticed an interaction that may need a smarter response. Want me to inspect it and adapt the app?";
+  return "I noticed an interaction that may not have done what you expected. What were you trying to make happen?";
 }
 
 export class ReactionConfirmationGate {
@@ -79,24 +79,30 @@ export class ReactionConfirmationGate {
     return { kind: "prompt", confirmation };
   }
 
-  resolve(id: string, accepted: boolean): ReactionResolution {
+  resolve(id: string, intent?: string): ReactionResolution {
     const confirmation = this.pending;
     if (!confirmation || confirmation.id !== id) return { kind: "missing" };
     this.pending = undefined;
     this.cooldownUntil.set(confirmation.key, this.now() + this.cooldownMs);
-    return accepted ? { kind: "confirmed", confirmation } : { kind: "dismissed", confirmation };
+    const normalizedIntent = intent?.trim();
+    return normalizedIntent
+      ? { kind: "confirmed", confirmation, intent: normalizedIntent }
+      : { kind: "dismissed", confirmation };
   }
 
   clear(): void { this.pending = undefined; }
 }
 
-export function formatReactionBatch(batch: ReactionBatch): string {
+export function formatReactionBatch(batch: ReactionBatch, intent: string): string {
   const events = [...batch.events].sort((a, b) => a.interaction.seq - b.interaction.seq);
   const recent = new Map<number, JevState["interaction"]>();
   for (const state of events) for (const interaction of state.recentInteractions) recent.set(interaction.seq, interaction);
-  return `USER CONFIRMED INTERACTION ADAPTATION
+  return `USER CONFIRMED INTERACTION INTENT
 
-The user explicitly chose to let you inspect and adapt the app in response to this observed behavior. That confirms they want help, but it does not confirm any specific inferred fix. Use the evidence below to make the smallest useful, reversible adaptation supported by the interaction. If the evidence is still too ambiguous to choose a safe change, do not guess: finish with a brief clarification request instead.
+The user explicitly described the outcome they wanted from the observed interaction. Treat this intent as authoritative and use the telemetry only as supporting evidence. Make the smallest useful, reversible change that satisfies the stated intent; do not infer additional goals.
+
+USER INTENT
+${intent.trim()}
 
 ESCALATED EVENTS
 ${JSON.stringify(events.map(event => ({ interaction: event.interaction, ...(event.pattern ? { pattern: event.pattern } : {}) })), null, 2)}

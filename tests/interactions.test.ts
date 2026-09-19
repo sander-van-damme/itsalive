@@ -290,8 +290,9 @@ describe("Jev decisions and reaction batching", () => {
       ...state(5),
       pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0, likelyBenign: false, frustrationSignal: true },
     };
-    const text = formatReactionBatch({ events: [patterned], createdAt: Date.now() });
-    expect(text).toContain("USER CONFIRMED INTERACTION ADAPTATION");
+    const text = formatReactionBatch({ events: [patterned], createdAt: Date.now() }, "Make the control copy its value");
+    expect(text).toContain("USER CONFIRMED INTERACTION INTENT");
+    expect(text).toContain("Make the control copy its value");
     expect(text).toContain('"frustrationSignal": true');
     expect(text).toContain('"actionCount": 5');
   });
@@ -316,14 +317,17 @@ describe("Jev decisions and reaction batching", () => {
     const offer = gate.offer(batch);
     expect(offer.kind).toBe("prompt");
 
-    expect(gate.resolve("prompt-1", false).kind).toBe("dismissed");
+    expect(gate.resolve("prompt-1").kind).toBe("dismissed");
     expect(gate.current()).toBeUndefined();
 
     const secondGate = new ReactionConfirmationGate(5_000, () => 1_000, () => "prompt-2");
     secondGate.offer(batch);
-    const confirmed = secondGate.resolve("prompt-2", true);
+    const confirmed = secondGate.resolve("prompt-2", "Copy the displayed value");
     expect(confirmed.kind).toBe("confirmed");
-    if (confirmed.kind === "confirmed") expect(confirmed.confirmation.batch).toBe(batch);
+    if (confirmed.kind === "confirmed") {
+      expect(confirmed.confirmation.batch).toBe(batch);
+      expect(confirmed.intent).toBe("Copy the displayed value");
+    }
   });
 
   it("cooldowns a handled episode but allows a materially changed document to prompt", () => {
@@ -332,7 +336,7 @@ describe("Jev decisions and reaction batching", () => {
     const first = gate.offer(original);
     expect(first.kind).toBe("prompt");
     if (first.kind !== "prompt") throw new Error("expected prompt");
-    gate.resolve(first.confirmation.id, false);
+    gate.resolve(first.confirmation.id);
 
     expect(gate.offer(original).kind).toBe("cooldown");
 
@@ -351,8 +355,8 @@ describe("Jev decisions and reaction batching", () => {
     await vi.advanceTimersByTimeAsync(10);
     const batch = deliver.mock.calls[0]![0];
     expect(batch.events.map((event: JevState) => event.interaction.seq)).toEqual([3, 8]);
-    expect(formatReactionBatch(batch)).toContain("newest");
-    expect(formatReactionBatch(batch).endsWith("newest")).toBe(true);
+    expect(formatReactionBatch(batch, "Keep the newest interaction")).toContain("newest");
+    expect(formatReactionBatch(batch, "Keep the newest interaction").endsWith("newest")).toBe(true);
   });
 });
 
