@@ -30,7 +30,7 @@ The only connection between the two origins is a versioned `postMessage` protoco
 - Native DOM inspection through ordinary browser APIs and execution results, plus literal history search, in-frame screenshots, and app log retrieval.
 - App-to-shell LLM requests and agent wake-ups.
 - Stable cron registrations and callback dispatch protocol. Cron callbacks run only while the relevant app runtime and shell are active; this is not server-side or background scheduling.
-- Tailwind's browser runtime and Lucide availability in itsalive apps without imposing a generated framework. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning.
+- Tailwind's browser runtime, Alpine.js with common plugins, Feather Icons, and preloaded browser libraries for charts, visualization, 3D, diagrams, math, dates, sliders, maps, animation, CSV, fuzzy search, and code highlighting. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
 ## Local development
@@ -82,6 +82,7 @@ Agent JavaScript executes inside the active app and can use ordinary browser API
 itsalive.dom.screenshot()
 itsalive.logs.get({ level, limit })
 itsalive.history.search({ query, limit })
+itsalive.components.modal // Pines Alpine + Tailwind component recipes
 itsalive.cron(id, expression, callback)
 itsalive.agent.wake(reason)
 itsalive.llm.ask(prompt)
