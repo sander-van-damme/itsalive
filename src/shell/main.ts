@@ -16,6 +16,7 @@ const registry = createDefaultRegistry();
 let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
+let activeRunFinished: Promise<void> | undefined;
 let connectionTimer: number | undefined;
 const initialBuild = new InitialBuildIntent();
 const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
@@ -72,10 +73,13 @@ const ui = new ShellUI(root, {
     initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
   },
   sendMessage: async content => {
-    if (activeId) {
-      pausedRuns.clear(activeId);
+    const targetAppId = activeId;
+    if (targetAppId) {
+      pausedRuns.clear(targetAppId);
       syncResumePrompt();
     }
+    await waitForAgentIdle();
+    if (activeId !== targetAppId) return;
     await runAgent(content);
   },
   stopAgent: () => { stopActiveRun('user-stop'); },
@@ -160,6 +164,14 @@ async function selectApp(id: string): Promise<void> {
   await refreshMessages();
 }
 
+async function waitForAgentIdle(): Promise<void> {
+  while (running) {
+    const pending = activeRunFinished;
+    if (!pending) return;
+    await pending;
+  }
+}
+
 function stopActiveRun(kind: ExternalAgentAbortKind): boolean {
   if (!activeRun || activeRun.signal.aborted) return false;
   activeRun.abort(createAgentAbort(kind));
@@ -201,7 +213,10 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   try { executor = runtime.requireReady(); }
   catch (error) { ui.setBusy(false); ui.setConnectionStatus('error'); ui.showError(error instanceof Error ? error.message : String(error)); return false; }
   const runController = new AbortController();
+  let resolveRunFinished!: () => void;
+  const runFinished = new Promise<void>(resolve => { resolveRunFinished = resolve; });
   activeRun = runController;
+  activeRunFinished = runFinished;
   running = true;
   const isInitialBuild = trigger === INITIAL_BUILD_TRIGGER;
   ui.setBusy(true);
@@ -258,6 +273,8 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
       const trigger = environmentalObservations.splice(0).join('\n\n');
       void runAgent(trigger, false);
     }
+    resolveRunFinished();
+    if (activeRunFinished === runFinished) activeRunFinished = undefined;
   }
   return true;
 }
@@ -362,7 +379,9 @@ function syncResumePrompt(): void {
 
 async function resumePausedRun(id: string): Promise<void> {
   const appId = activeId;
-  if (!appId || running || runtime.state !== 'ready') return;
+  if (!appId) return;
+  await waitForAgentIdle();
+  if (activeId !== appId || runtime.state !== 'ready') return;
   const paused = pausedRuns.take(appId, id);
   if (!paused) {
     syncResumePrompt();
