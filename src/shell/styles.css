@@ -170,10 +170,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .settings-result.success { color: #287646; }
 .settings-result.failure { color: var(--danger); }
 .settings-result.pending { color: var(--muted); }
-.advanced summary { padding: 3px 0; font-size: 14px; font-weight: 700; cursor: pointer; }
-.advanced-content { padding-top: 16px; }
-.endpoint-field:not(.prominent) { opacity: .78; }
-.token-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
 .security-note, .diagnostics p, .build-info p { color: var(--muted); font-size: 12px; line-height: 1.55; }
 .diagnostics p { margin: -7px 0 13px; }
 .build-info p { margin: 0; }
