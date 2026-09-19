@@ -45,6 +45,12 @@ const esc = (value: string) => value.replace(/[&<>'"]/g, character => ({ '&': '&
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase() || 'IA';
 const compactTokens = (value: number) => value < 1_000 ? String(Math.round(value)) : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
 const money = (value: number) => String.fromCharCode(36) + (value > 0 && value < 1 ? value.toFixed(4) : value.toFixed(2));
+function resizeComposerTextarea(textarea: HTMLTextAreaElement): void {
+  textarea.style.height = 'auto';
+  const viewportLimit = Math.max(120, Math.min(260, Math.floor(window.innerHeight * 0.3)));
+  textarea.style.height = `${Math.min(textarea.scrollHeight, viewportLimit)}px`;
+  textarea.style.overflowY = textarea.scrollHeight > viewportLimit ? 'auto' : 'hidden';
+}
 export function friendlyError(error: unknown, appName = 'This app'): string {
   const message = error instanceof Error ? error.message : String(error);
   if (/iframe|not connected|not available|not ready/i.test(message)) return `${appName} isn't ready yet. Try reloading it.`;
@@ -399,19 +405,23 @@ export class ShellUI {
     });
     const form = panel.querySelector<HTMLFormElement>('[data-composer]')!;
     const textarea = panel.querySelector<HTMLTextAreaElement>('#message')!;
-    const resize = () => { textarea.style.height = 'auto'; textarea.style.height = `${Math.min(textarea.scrollHeight, 160)}px`; };
+    const resize = () => resizeComposerTextarea(textarea);
     textarea.oninput = resize;
+    resize();
     form.onsubmit = event => { event.preventDefault(); if (this.busy) return; const content = textarea.value.trim(); if (!content) return; textarea.value = ''; resize(); this.chatNearBottom = true; void this.actions.sendMessage(content); };
     textarea.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing && !this.busy) { event.preventDefault(); form.requestSubmit(); } };
   }
 
   private renderCreation(panel: HTMLElement): void {
-    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-cancel type="button" aria-label="Cancel"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>What do you want to make?</h1><p>Describe it once. Building starts immediately.</p></div></header>
-      <div class="creation-status" data-create-status aria-live="polite">Your prompt becomes the app brief directly — no confirmation step.</div>
+    panel.innerHTML = `<header class="panel-heading flow-heading"><button class="icon-button quiet" data-cancel type="button" aria-label="Cancel"><i data-lucide="arrow-left" aria-hidden="true"></i></button><div><h1>What do you want to make?</h1><p>Describe the app you have in mind. You can refine it after the first version appears.</p></div></header>
+      <div class="creation-status" data-create-status aria-live="polite">Include the behavior or details that matter most to you.</div>
       <form class="composer" data-create-form><div class="composer-box"><label class="sr-only" for="goal">Describe your app</label><textarea id="goal" rows="1" required autofocus placeholder="Describe your app…"></textarea><button class="send" type="submit" aria-label="Start building"><i data-lucide="arrow-up" aria-hidden="true"></i></button></div></form>`;
     panel.querySelector<HTMLButtonElement>('[data-cancel]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
     const form = panel.querySelector<HTMLFormElement>('[data-create-form]')!;
     const goal = panel.querySelector<HTMLTextAreaElement>('#goal')!;
+    const resize = () => resizeComposerTextarea(goal);
+    goal.oninput = resize;
+    resize();
     form.onsubmit = event => { event.preventDefault(); void this.handleCreateApp(panel, form, goal); };
     goal.onkeydown = event => { if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); form.requestSubmit(); } };
   }
