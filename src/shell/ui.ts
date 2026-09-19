@@ -78,6 +78,8 @@ export class ShellUI {
   private theme = localStorage.getItem('itsalive.theme') ?? 'light';
   private switcherOpen = false;
   private actionsOpen = false;
+  private appDialog?: 'rename' | 'delete';
+  private dialogError = '';
   private chatNearBottom = true;
   private settingsNotice = '';
 
@@ -98,6 +100,8 @@ export class ShellUI {
       this.mobileView = 'chat';
       this.interactionPrompt = undefined;
       this.resumePrompt = undefined;
+      this.appDialog = undefined;
+      this.dialogError = '';
     }
     this.renderStagePlaceholder();
     this.renderRail();
@@ -213,9 +217,10 @@ export class ShellUI {
     shell?.setAttribute('data-mobile-view', this.mobileView);
     const rail = this.mount.querySelector<HTMLElement>('.rail');
     if (!rail) return;
-    rail.innerHTML = `${this.renderWorkspaceHeader()}<section class="panel" data-panel></section>${this.renderGlobalActions()}`;
+    rail.innerHTML = `${this.renderWorkspaceHeader()}<section class="panel" data-panel></section>${this.renderGlobalActions()}${this.renderAppDialog()}`;
     this.bindHeader(rail);
     this.renderPanel();
+    this.bindAppDialog(rail);
     createIcons({ icons });
   }
 
@@ -250,6 +255,38 @@ export class ShellUI {
       <button class="menu-item" role="menuitem" type="button" data-rename><i data-lucide="pencil" aria-hidden="true"></i><span>Rename app</span></button>
       <button class="menu-item" role="menuitem" type="button" data-reload><i data-lucide="refresh-cw" aria-hidden="true"></i><span>Reload app</span></button>
       <button class="menu-item danger" role="menuitem" type="button" data-delete><i data-lucide="trash-2" aria-hidden="true"></i><span>Delete app</span></button>
+    </div>`;
+  }
+
+  private renderAppDialog(): string {
+    if (!this.appDialog || !this.active) return '';
+    if (this.appDialog === 'rename') {
+      return `<div class="dialog-backdrop" data-dialog-backdrop>
+        <section class="shell-dialog" data-shell-dialog role="dialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-description">
+          <h2 id="app-dialog-title">Rename app</h2>
+          <p id="app-dialog-description">Choose a short name that makes this app easy to recognize.</p>
+          <form data-rename-form>
+            <label for="app-name">App name</label>
+            <input id="app-name" name="app-name" maxlength="60" required value="${esc(this.active.name)}" autocomplete="off">
+            <p class="dialog-error" data-dialog-error role="alert">${esc(this.dialogError)}</p>
+            <div class="dialog-actions">
+              <button class="action" data-dialog-cancel type="button">Cancel</button>
+              <button class="action primary" type="submit">Rename</button>
+            </div>
+          </form>
+        </section>
+      </div>`;
+    }
+    return `<div class="dialog-backdrop" data-dialog-backdrop>
+      <section class="shell-dialog" data-shell-dialog role="alertdialog" aria-modal="true" aria-labelledby="app-dialog-title" aria-describedby="app-dialog-description">
+        <h2 id="app-dialog-title">Delete “${esc(this.active.name)}”?</h2>
+        <p id="app-dialog-description">This removes the app and its conversation history. This action cannot be undone.</p>
+        <p class="dialog-error" data-dialog-error role="alert">${esc(this.dialogError)}</p>
+        <div class="dialog-actions">
+          <button class="action" data-dialog-cancel type="button">Cancel</button>
+          <button class="action danger-action" data-dialog-confirm-delete type="button">Delete app</button>
+        </div>
+      </section>
     </div>`;
   }
 
@@ -319,9 +356,9 @@ export class ShellUI {
     this.mount.querySelector<HTMLButtonElement>('[data-mobile-chat]')!.onclick = () => { this.mobileView = 'chat'; this.renderRail(); };
     rail.querySelectorAll<HTMLButtonElement>('[data-select-app]').forEach(button => button.onclick = () => { this.switcherOpen = false; this.view = 'workspace'; void this.actions.selectApp(button.dataset.selectApp ?? ''); });
     rail.querySelector<HTMLButtonElement>('[data-new]')?.addEventListener('click', () => { this.switcherOpen = false; this.beginCreation(); });
-    rail.querySelector<HTMLButtonElement>('[data-rename]')?.addEventListener('click', () => this.handleRename());
+    rail.querySelector<HTMLButtonElement>('[data-rename]')?.addEventListener('click', () => this.openAppDialog('rename'));
     rail.querySelector<HTMLButtonElement>('[data-reload]')?.addEventListener('click', () => { this.actionsOpen = false; this.actions.reloadApp(); this.renderRail(); });
-    rail.querySelector<HTMLButtonElement>('[data-delete]')?.addEventListener('click', () => this.handleDelete());
+    rail.querySelector<HTMLButtonElement>('[data-delete]')?.addEventListener('click', () => this.openAppDialog('delete'));
   }
 
   private renderPanel(): void {
@@ -532,11 +569,78 @@ export class ShellUI {
     finally { if (button.isConnected) button.disabled = false; }
   }
 
-  private handleDelete(): void {
+  private openAppDialog(kind: 'rename' | 'delete'): void {
     if (!this.active) return;
     this.actionsOpen = false;
-    if (confirm(`Delete “${this.active.name}”?\n\nThis removes the app and its conversation history.`)) void this.actions.deleteApp(this.active.id);
-    else this.renderRail();
+    this.appDialog = kind;
+    this.dialogError = '';
+    this.renderRail();
+  }
+
+  private closeAppDialog(): void {
+    this.appDialog = undefined;
+    this.dialogError = '';
+    this.renderRail();
+    requestAnimationFrame(() => this.mount.querySelector<HTMLButtonElement>('[data-app-menu]')?.focus());
+  }
+
+  private bindAppDialog(rail: HTMLElement): void {
+    const dialog = rail.querySelector<HTMLElement>('[data-shell-dialog]');
+    if (!dialog) return;
+    rail.querySelector<HTMLButtonElement>('[data-dialog-cancel]')?.addEventListener('click', () => this.closeAppDialog());
+    rail.querySelector<HTMLElement>('[data-dialog-backdrop]')?.addEventListener('click', event => {
+      if (event.target === event.currentTarget) this.closeAppDialog();
+    });
+
+    const renameForm = rail.querySelector<HTMLFormElement>('[data-rename-form]');
+    const nameInput = rail.querySelector<HTMLInputElement>('#app-name');
+    if (renameForm && nameInput) {
+      renameForm.addEventListener('submit', event => {
+        event.preventDefault();
+        void this.submitRename(nameInput);
+      });
+      requestAnimationFrame(() => { nameInput.focus(); nameInput.select(); });
+    }
+
+    rail.querySelector<HTMLButtonElement>('[data-dialog-confirm-delete]')?.addEventListener('click', event => {
+      void this.confirmDelete(event.currentTarget as HTMLButtonElement);
+    });
+  }
+
+  private async submitRename(input: HTMLInputElement): Promise<void> {
+    if (!this.active) return;
+    const name = input.value.trim().replace(/\s+/g, ' ');
+    if (!name) {
+      this.dialogError = 'Enter a name for the app.';
+      this.renderRail();
+      return;
+    }
+    if (name === this.active.name) {
+      this.dialogError = 'Choose a different name.';
+      this.renderRail();
+      return;
+    }
+    try {
+      await this.actions.renameApp(name);
+      this.closeAppDialog();
+    } catch {
+      this.dialogError = 'Couldn’t rename the app. Try again.';
+      this.renderRail();
+    }
+  }
+
+  private async confirmDelete(button: HTMLButtonElement): Promise<void> {
+    if (!this.active) return;
+    const id = this.active.id;
+    button.disabled = true;
+    try {
+      await this.actions.deleteApp(id);
+      this.appDialog = undefined;
+      this.dialogError = '';
+    } catch {
+      this.dialogError = 'Couldn’t delete the app. Try again.';
+      this.renderRail();
+    }
   }
 
   private beginCreation(): void {
@@ -547,14 +651,6 @@ export class ShellUI {
     this.view = 'creation'; this.renderRail();
   }
 
-  private handleRename(): void {
-    if (!this.active) return;
-    this.actionsOpen = false;
-    const name = prompt('Rename app', this.active.name);
-    if (name !== null && name.trim() && name.trim() !== this.active.name) void this.actions.renameApp(name);
-    else this.renderRail();
-  }
-
   private rememberChatPosition(): void {
     const stream = this.mount.querySelector<HTMLElement>('[data-stream]');
     if (stream) this.chatNearBottom = stream.scrollHeight - stream.scrollTop - stream.clientHeight < 80;
@@ -562,6 +658,30 @@ export class ShellUI {
 
   private focusFirstMenuItem(): void { requestAnimationFrame(() => this.mount.querySelector<HTMLButtonElement>('[role="menu"] button')?.focus()); }
   private handleDocumentKeydown = (event: KeyboardEvent): void => {
+    if (this.appDialog) {
+      if (event.key === 'Escape') {
+        event.preventDefault();
+        this.closeAppDialog();
+        return;
+      }
+      if (event.key === 'Tab') {
+        const dialog = this.mount.querySelector<HTMLElement>('[data-shell-dialog]');
+        const focusable = dialog
+          ? Array.from(dialog.querySelectorAll<HTMLElement>('button:not([disabled]), input:not([disabled]), textarea:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'))
+          : [];
+        if (!focusable.length) return;
+        const first = focusable[0]!;
+        const last = focusable.at(-1)!;
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first.focus();
+        }
+      }
+      return;
+    }
     if (event.key !== 'Escape' || (!this.switcherOpen && !this.actionsOpen && !this.usageOpen)) return;
     this.switcherOpen = false; this.actionsOpen = false; this.usageOpen = false; this.renderRail();
   };
