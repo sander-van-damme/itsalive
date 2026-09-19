@@ -96,7 +96,7 @@ describe('ShellUI workspace', () => {
   });
 
   it('exposes the history budget experiment without exposing provider internals', async () => {
-    const { callbacks } = mounted();
+    const { callbacks, ui } = mounted();
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
 
     expect(document.querySelector('h2')?.textContent).toBe('OpenRouter');
