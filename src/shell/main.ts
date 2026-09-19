@@ -126,11 +126,11 @@ window.addEventListener('error', event => { void log('error', 'shell', event.mes
 setInterval(() => { void fireDueSchedules(); }, 30_000);
 
 function agentProgressLabel(phase: AgentProgressPhase, initialBuild: boolean): string {
-  if (phase === 'executing') return initialBuild ? 'Building the first interface…' : 'Updating the app…';
+  if (phase === 'executing') return initialBuild ? 'Building the interface…' : 'Updating the app…';
   if (phase === 'repairing') return 'Fixing a build error…';
   if (phase === 'verifying') return 'Checking the result…';
   if (phase === 'finishing') return 'Finishing up…';
-  return initialBuild ? 'Preparing the first version…' : 'Planning your change…';
+  return initialBuild ? 'Understanding your app…' : 'Understanding your change…';
 }
 
 async function refreshApps(select?: string): Promise<void> {

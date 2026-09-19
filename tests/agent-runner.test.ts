@@ -76,7 +76,7 @@ describe('AgentRunner lifecycle', () => {
     }) };
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
@@ -89,6 +89,18 @@ describe('AgentRunner lifecycle', () => {
     expect(events.indexOf('execute:first')).toBeLessThan(events.indexOf('emit:second'));
     expect(events).toEqual(['emit:first', 'execute:first', 'emit:second', 'execute:done']);
     expect(progress).toEqual(expect.arrayContaining(['generating', 'executing', 'verifying', 'finishing']));
+    const milestones = info.mock.calls.filter(call => call[0] === 'Timing milestone').map(call => (call[1] as { milestone: string }).milestone);
+    expect(milestones).toEqual(expect.arrayContaining(['request-started', 'first-stream-text', 'first-complete-command', 'first-runtime-execution']));
+    const timingSummary = info.mock.calls.find(call => call[0] === 'Timing summary')?.[1] as Record<string, number | undefined>;
+    expect(timingSummary).toMatchObject({
+      totalMs: expect.any(Number),
+      firstStreamTextMs: expect.any(Number),
+      firstCompleteCommandMs: expect.any(Number),
+      firstExecutionMs: expect.any(Number),
+      lastProgressMs: expect.any(Number),
+    });
+    expect(timingSummary.firstCompleteCommandMs!).toBeGreaterThanOrEqual(timingSummary.firstStreamTextMs!);
+    expect(timingSummary.firstExecutionMs!).toBeGreaterThanOrEqual(timingSummary.firstCompleteCommandMs!);
     expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual([
       'document.body.dataset.first = "yes";',
       'return itsalive.done("ready");',
@@ -184,6 +196,40 @@ describe('AgentRunner lifecycle', () => {
     expect(result).toMatchObject({ status: 'done', turns: 2 });
     expect(providers.generate).toHaveBeenCalledTimes(2);
     expect(inspections).toBe(2);
+  });
+
+  it('does not accept done while a staged scaffold is still marked as building', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn()
+      .mockResolvedValueOnce({ text: 'return itsalive.done("too early");' })
+      .mockResolvedValueOnce({ text: 'document.querySelector("[data-itsalive-building]")?.removeAttribute("data-itsalive-building"); return itsalive.done("ready");' }) };
+    let inspections = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        inspections++;
+        return inspections === 1
+          ? { value: { rootHtml: '<section data-itsalive-building inert>Loading</section>', rootCount: 1, outsideUiCount: 0, buildingCount: 1 } }
+          : { value: { rootHtml: '<section>Ready</section>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      }
+      return { done: true, message: inspections ? 'ready' : 'candidate' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Build progressively', model, maxTurns: 3,
+    });
+
+    expect(result).toMatchObject({ status: 'done', turns: 2 });
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('data-itsalive-building') }),
+    ]));
   });
 
   it('stops a repeated low-signal verification loop after one diagnostic repair turn', async () => {

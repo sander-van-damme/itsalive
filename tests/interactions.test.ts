@@ -72,6 +72,16 @@ describe("continuous interaction observation", () => {
   });
 
 
+  it("preserves unfinished scaffold state in semantic context", () => {
+    document.body.innerHTML = '<main id="itsalive-root"><section data-itsalive-building inert aria-busy="true"><button disabled>Start</button></section></main>';
+    const result = serializeSemanticDocument();
+    expect(result).toContain('data-itsalive-building=""');
+    expect(result).toContain('inert=""');
+    expect(result).toContain('aria-busy="true"');
+    expect(result).toContain('disabled=""');
+  });
+
+
   it("preserves one canonical curated history across body rewrites until teardown", async () => {
     document.body.innerHTML = `<itsalive-history hidden><itsalive-history-summary>prefers 90 bpm</itsalive-history-summary></itsalive-history>`;
     const original = document.querySelector("itsalive-history")!;

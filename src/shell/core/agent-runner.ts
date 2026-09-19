@@ -58,6 +58,7 @@ return {
   rootHtml: root?.innerHTML ?? null,
   rootCount: document.querySelectorAll('[id="itsalive-root"]').length,
   outsideUiCount,
+  buildingCount: root ? root.querySelectorAll('[data-itsalive-building]').length + (root.matches('[data-itsalive-building]') ? 1 : 0) : 0,
 };
 `;
 
@@ -76,11 +77,23 @@ export class AgentRunner {
     const abort = () => controller.abort(options.signal?.reason);
     if (options.signal?.aborted) abort();
     else options.signal?.addEventListener("abort", abort, { once: true });
+    const startedAt = performance.now();
+    const elapsedMs = () => Math.round(performance.now() - startedAt);
+    let lastProgressAt = startedAt;
+    let firstStreamTextMs: number | undefined;
+    let firstCompleteCommandMs: number | undefined;
+    let firstExecutionMs: number | undefined;
+    const recordMilestone = (milestone: string): number => {
+      const elapsed = elapsedMs();
+      console.info('Timing milestone', { milestone, elapsedMs: elapsed });
+      return elapsed;
+    };
     const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS;
     const maxDurationMs = options.maxDurationMs ?? DEFAULT_AGENT_MAX_DURATION_MS;
     let idleDeadline: ReturnType<typeof setTimeout> | undefined;
     const touchProgress = () => {
       if (controller.signal.aborted) return;
+      lastProgressAt = performance.now();
       if (idleDeadline) clearTimeout(idleDeadline);
       idleDeadline = setTimeout(() => controller.abort(createAgentTimeout("idle-timeout")), idleTimeoutMs);
     };
@@ -92,9 +105,9 @@ export class AgentRunner {
     let consecutiveGenerationFailures = 0;
     let repeatedLowSignalObservation: string | undefined;
     let repeatedLowSignalState: string | undefined;
-    const startedAt = performance.now();
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
+    recordMilestone('request-started');
     try {
       if (options.persistTrigger !== false) await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
       for (let turn = 1; turn <= maxTurns; turn++) {
@@ -143,6 +156,7 @@ export class AgentRunner {
               }
               try {
                 touchProgress();
+                if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
                 reportProgress(options, "executing", turn);
                 const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
                 touchProgress();
@@ -161,8 +175,13 @@ export class AgentRunner {
               { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, signal: controller.signal },
               options.credential,
               delta => {
-                if (delta) touchProgress();
-                for (const code of commandParser.push(delta)) enqueueCommand(code);
+                if (delta) {
+                  touchProgress();
+                  if (firstStreamTextMs == null) firstStreamTextMs = recordMilestone('first-stream-text');
+                }
+                const commands = commandParser.push(delta);
+                if (commands.length && firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
+                for (const code of commands) enqueueCommand(code);
               },
             );
             await executionQueue;
@@ -235,6 +254,8 @@ export class AgentRunner {
               continue;
             }
             touchProgress();
+            if (firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
+            if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
             reportProgress(options, "executing", turn);
             const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
             touchProgress();
@@ -318,7 +339,15 @@ export class AgentRunner {
       if (idleDeadline) clearTimeout(idleDeadline);
       clearTimeout(safetyDeadline);
       options.signal?.removeEventListener("abort", abort);
-      console.info(`Run finished (${Math.round(performance.now() - startedAt)}ms)`, { aborted: controller.signal.aborted });
+      const totalMs = elapsedMs();
+      console.info('Timing summary', {
+        totalMs,
+        firstStreamTextMs,
+        firstCompleteCommandMs,
+        firstExecutionMs,
+        lastProgressMs: Math.round(lastProgressAt - startedAt),
+      });
+      console.info(`Run finished (${totalMs}ms)`, { aborted: controller.signal.aborted });
       console.groupEnd();
     }
   }
@@ -457,6 +486,9 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
       if (inspection.value.outsideUiCount > 0) {
         return { ok: false, reason: "user-visible UI exists outside the canonical #itsalive-root" };
       }
+      if ((inspection.value.buildingCount ?? 0) > 0) {
+        return { ok: false, reason: "the app still contains a data-itsalive-building scaffold; activate it before calling done()" };
+      }
       return assessCompletionTree(inspection.value.rootHtml);
     }
     if (typeof inspection.value === "string") return assessCompletionTree(inspection.value);
@@ -467,12 +499,13 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
   }
 }
 
-function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number } {
+function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number; buildingCount?: number } {
   if (!value || typeof value !== "object") return false;
   const candidate = value as Record<string, unknown>;
   return (typeof candidate.rootHtml === "string" || candidate.rootHtml === null)
     && typeof candidate.rootCount === "number"
-    && typeof candidate.outsideUiCount === "number";
+    && typeof candidate.outsideUiCount === "number"
+    && (candidate.buildingCount === undefined || typeof candidate.buildingCount === "number");
 }
 
 function isLowSignalObservation(observation: string): boolean {
