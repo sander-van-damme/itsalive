@@ -92,9 +92,6 @@ function prepareCuratedHistory(ownerDocument: Document): { history: Element; sum
   const summary = summaries.shift() ?? history.appendChild(ownerDocument.createElement("itsalive-history-summary"));
   summaries.forEach(node => node.remove());
 
-  // Migration from older runtimes: raw telemetry must never survive in persisted HTML.
-  history.querySelectorAll(":scope > :not(itsalive-history-summary)").forEach(node => node.remove());
-  ownerDocument.querySelectorAll("itsalive-interaction, itsalive-target, itsalive-actual-target").forEach(node => node.remove());
   return { history, summary };
 }
 
