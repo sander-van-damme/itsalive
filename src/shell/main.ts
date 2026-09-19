@@ -362,6 +362,8 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const result = await decisionModel.evaluate({ state: message.state, signal: controller.signal }, key);
     if (!current()) return;
     jevSessionStats.inputTokens += result.usage?.inputTokens ?? 0;
+    sessionUsage.recordUnpricedUsage({ inputTokens: result.usage?.inputTokens });
+    syncUsage();
     const decision = decideJevEscalation(result.probability, message.state);
     if (decision.escalated) jevSessionStats.escalations++;
     await log('info', 'jev', 'Interaction decision', {
