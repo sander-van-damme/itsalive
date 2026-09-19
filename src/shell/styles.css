@@ -69,8 +69,6 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .stage-state[hidden] { display: none; }
 .stage-state strong { font-size: 20px; }
 .stage-state p { margin: 7px 0 18px; color: var(--muted); }
-.stage-state.updating { inset: 14px auto auto 14px; display: inline-flex; place-content: initial; justify-items: initial; align-items: center; gap: 7px; padding: 8px 11px; border: 1px solid var(--border); border-radius: 999px; background: color-mix(in srgb, var(--panel) 92%, transparent); box-shadow: var(--shadow); backdrop-filter: blur(8px); color: var(--muted); font-size: 12px; pointer-events: none; }
-.stage-state.updating .spinner { width: 10px; height: 10px; }
 .mobile-view-button { display: none; }
 
 /* Rail and workspace header */
