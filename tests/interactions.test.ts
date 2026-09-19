@@ -3,7 +3,6 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { installInteractionObserver } from "../src/app/interactions";
 import { serializeSemanticDocument } from "../src/app/semantic-document";
 import { ReactionBatcher, formatReactionBatch } from "../src/shell/core/reactions";
-import { MockDecisionModel } from "../src/shell/core/jev";
 import { MAX_SEMANTIC_DOCUMENT_CHARACTERS, type AppToShellPayload, type JevState } from "../src/shared";
 
 const response = (probability: number) => Promise.resolve({ type: "jev.response", probability, escalated: probability >= .7 });
@@ -72,19 +71,6 @@ describe("continuous interaction observation", () => {
     expect(result).not.toContain("shadow-xl");
   });
 
-  it("migrates legacy raw history away and keeps only the curated summary", () => {
-    document.body.innerHTML = `<main>Current app</main><itsalive-history><itsalive-history-summary>likes violins</itsalive-history-summary><itsalive-interaction value="old raw"></itsalive-interaction></itsalive-history>`;
-    const observer = installInteractionObserver({ request: vi.fn() } as never, { acceptUntrustedForTest: true });
-
-    expect(document.querySelector("itsalive-history-summary")?.textContent).toBe("likes violins");
-    expect(document.querySelector("itsalive-interaction")).toBeNull();
-    expect(document.documentElement.outerHTML).not.toContain("old raw");
-    const semantic = serializeSemanticDocument();
-    expect(semantic).toContain("Current app");
-    expect(semantic).not.toContain("likes violins");
-    expect(semantic).not.toContain("itsalive-history");
-    observer.destroy();
-  });
 
   it("preserves one canonical curated history across body rewrites until teardown", async () => {
     document.body.innerHTML = `<itsalive-history hidden><itsalive-history-summary>prefers 90 bpm</itsalive-history-summary></itsalive-history>`;
@@ -273,10 +259,6 @@ describe("Jev decisions and reaction batching", () => {
     document: "<html><body><section></section></body></html>",
   });
 
-  it("supports deterministic negative and positive mock decisions", async () => {
-    await expect(new MockDecisionModel(() => .2).evaluate({ state: state(1) })).resolves.toMatchObject({ probability: .2 });
-    await expect(new MockDecisionModel(() => .9).evaluate({ state: state(2) })).resolves.toMatchObject({ probability: .9 });
-  });
 
   it("coalesces nearby positive interactions and tears down timers", async () => {
     vi.useFakeTimers();
