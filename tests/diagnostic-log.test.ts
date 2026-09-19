@@ -118,4 +118,16 @@ describe("buildDiagnosticExport", () => {
     expect(lines.join("\n")).not.toContain("other app");
     expect(lines.join("\n")).not.toContain("not selected");
   });
+
+  it("exports diagnostics across apps when no app filter is supplied", () => {
+    const logs: LogEntry[] = [
+      { timestamp: 1, level: "info", source: "agent", message: "first app", appId: APP_ID },
+      { timestamp: 2, level: "error", source: "agent", message: "deleted app failure", appId: OTHER_APP_ID },
+    ];
+
+    const output = buildDiagnosticExport(logs, []);
+
+    expect(output).toContain("first app");
+    expect(output).toContain("deleted app failure");
+  });
 });
