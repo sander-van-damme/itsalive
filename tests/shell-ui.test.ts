@@ -150,6 +150,17 @@ describe('ShellUI workspace', () => {
     expect(popover.textContent).toContain('Key remaining');
   });
 
+  it('closes the usage disclosure when another shell menu opens', () => {
+    const { ui } = mounted();
+    ui.setUsage({ requests: 1, inputTokens: 100, outputTokens: 20, costComplete: false });
+    document.querySelector<HTMLButtonElement>('[data-usage]')!.click();
+    expect(document.querySelector('[data-usage-popover]')).not.toBeNull();
+
+    document.querySelector<HTMLButtonElement>('[data-switcher]')!.click();
+    expect(document.querySelector('[data-usage-popover]')).toBeNull();
+    expect(document.querySelector('.app-switcher')).not.toBeNull();
+  });
+
   it('routes creation to Settings until an LLM is configured', () => {
     mounted(false);
     document.querySelector<HTMLButtonElement>('[data-create]')!.click();
