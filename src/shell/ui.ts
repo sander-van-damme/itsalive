@@ -79,7 +79,8 @@ export class ShellUI {
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
   setModelContextCapacity(tokens: number | undefined): void {
     this.modelContextTokens = tokens;
-    if (this.view === 'settings') this.renderPanel();
+    const node = this.mount.querySelector<HTMLElement>('[data-model-context]');
+    if (node) node.textContent = `Auto Router context capacity: ${tokens == null ? 'Not loaded yet' : `${tokens.toLocaleString()} tokens`}. This is loaded from OpenRouter rather than hardcoded.`;
   }
 
   setBusy(busy: boolean): void {
