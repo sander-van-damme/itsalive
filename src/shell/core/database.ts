@@ -1,9 +1,9 @@
-import type { AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
+import type { AppDocumentRecord, AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
 
-const DB_NAME = "itsalive-shell-v3";
+const DB_NAME = "itsalive-shell-v4";
 const DB_VERSION = 1;
 
-type Store = "apps" | "history" | "logs" | "schedules";
+type Store = "apps" | "documents" | "history" | "logs" | "schedules";
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -34,6 +34,7 @@ export class ShellDatabase {
       open.onupgradeneeded = () => {
         const db = open.result;
         db.createObjectStore("apps", { keyPath: "id" });
+        db.createObjectStore("documents", { keyPath: "appId" });
         const history = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
         history.createIndex("appId", "appId");
         const logs = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
@@ -85,9 +86,10 @@ export class ShellDatabase {
     const db = await this.open();
     // Diagnostics intentionally outlive app deletion so a just-failed test can
     // still be exported after the user removes the app itself.
-    const tx = db.transaction(["apps", "history", "schedules"], "readwrite");
+    const tx = db.transaction(["apps", "documents", "history", "schedules"], "readwrite");
     const completed = transactionDone(tx);
     tx.objectStore("apps").delete(id);
+    tx.objectStore("documents").delete(id);
     for (const store of ["history", "schedules"] as const) {
       const cursor = tx.objectStore(store).index("appId").openKeyCursor(IDBKeyRange.only(id));
       cursor.onsuccess = () => {
@@ -103,6 +105,11 @@ export class ShellDatabase {
     get: (id: string) => this.get<AppRecord>("apps", id),
     put: (app: AppRecord) => this.put("apps", app),
     delete: (id: string) => this.deleteApp(id),
+  };
+  documents = {
+    get: (appId: string) => this.get<AppDocumentRecord>("documents", appId),
+    put: (document: AppDocumentRecord) => this.put("documents", document),
+    delete: (appId: string) => this.delete("documents", appId),
   };
   history = {
     add: async (entry: HistoryEntry) => Number(await this.put("history", entry)),
