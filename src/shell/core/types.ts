@@ -20,9 +20,6 @@ export interface HistoryEntry {
 export interface ModelConfig {
   provider: string;
   model: string;
-  maxContextTokens: number;
-  maxOutputTokens: number;
-  observationHeadroomTokens?: number;
   options?: Record<string, unknown>;
 }
 
@@ -38,7 +35,6 @@ export interface GenerateRequest {
   model: ModelConfig;
   system: string;
   messages: ModelMessage[];
-  maxOutputTokens: number;
   signal?: AbortSignal;
 }
 
