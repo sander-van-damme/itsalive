@@ -1,8 +1,8 @@
 // @vitest-environment jsdom
 import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
-import { dbSet, openAppDatabase, STORES } from '../src/app/db';
-import { installAutosave, loadSavedDocument } from '../src/app/persistence';
+import { dbSet, openAppDatabase, STORES } from '../src/runtime/db';
+import { installAutosave, loadSavedDocument } from '../src/runtime/persistence';
 import { ShellDatabase } from '../src/shell/core/database';
 import { deleteApp } from '../src/shell/core/app-deletion';
 import { DiagnosticLog, buildDiagnosticExport } from '../src/shell/core/diagnostic-log';
