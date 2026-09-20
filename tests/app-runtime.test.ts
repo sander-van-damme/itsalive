@@ -36,6 +36,7 @@ vi.mock("../src/runtime/logs", () => ({
 }));
 
 vi.mock("../src/runtime/persistence", () => ({
+  serializeAppDocument: () => "<!doctype html><html><body><main>snapshot</main></body></html>",
   restoreAppDocument: async (html: string) => {
     state.restoredWithApi = window.itsalive?.apiVersion === 2;
     state.restoredHtml = html;
@@ -179,6 +180,15 @@ describe("injected app runtime namespace", () => {
     expect(second?.payload.error).toEqual(expect.objectContaining({ name: "Error", message: "second failure" }));
     expect(second?.payload.error).not.toHaveProperty("cause");
     expect(JSON.stringify(second)).not.toContain("first failure");
+  });
+
+  it("returns an explicit document snapshot before shell-driven teardown", async () => {
+    emit({ type: "document.snapshot", requestId: "snapshot" });
+    await nextTask();
+    expect(state.posts).toContainEqual({
+      payload: { type: "result", result: { html: "<!doctype html><html><body><main>snapshot</main></body></html>" } },
+      requestId: "snapshot",
+    });
   });
 
   it("sends autosave snapshots to the shell instead of writing runtime storage", () => {
