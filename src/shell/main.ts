@@ -586,9 +586,6 @@ async function log(level: LogEntry['level'], source: string, message: string, de
   await diagnostics.write(level, source, message, details, appId);
 }
 
-async function requestRuntime<T>(payload: Parameters<RuntimeSession['post']>[0], timeoutMs = 10_000): Promise<T> {
-  return runtime.request<T>(payload, timeoutMs);
-}
 
 function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
 
