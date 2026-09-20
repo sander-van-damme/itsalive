@@ -1,5 +1,3 @@
-import { dbGet, dbSet, STORES } from "./db";
-
 const RUNTIME_SELECTOR = "[data-app-runtime]";
 
 function normalizeControls(root: ParentNode) {
@@ -46,31 +44,33 @@ export async function restoreAppDocument(html: string): Promise<void> {
   await executeScripts(document);
 }
 
-export async function loadSavedDocument() {
-  const html = await dbGet<string>(STORES.document, "html");
-  if (html) await restoreAppDocument(html);
-  return Boolean(html);
-}
-
-export function installAutosave(delay = 750) {
+export function installAutosave(persist: (html: string) => void, delay = 750) {
   let timer: number | undefined;
   let suspended = false;
-  const save = async () => {
+
+  const save = () => {
     window.clearTimeout(timer);
     timer = undefined;
-    if (!suspended) await dbSet(STORES.document, "html", serializeAppDocument());
+    if (!suspended) persist(serializeAppDocument());
   };
+
   const observer = new MutationObserver(() => {
     if (suspended) return;
     window.clearTimeout(timer);
-    timer = window.setTimeout(() => void save(), delay);
+    timer = window.setTimeout(save, delay);
   });
   observer.observe(document.documentElement, { attributes: true, childList: true, characterData: true, subtree: true });
-  const scheduleSave = () => { window.clearTimeout(timer); timer = window.setTimeout(() => void save(), delay); };
-  const saveOnPageHide = () => void save();
+
+  const scheduleSave = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(save, delay);
+  };
+  const saveOnPageHide = () => save();
+
   addEventListener("input", scheduleSave, true);
   addEventListener("change", scheduleSave, true);
   addEventListener("pagehide", saveOnPageHide);
+
   return {
     save,
     suspend: () => { suspended = true; },
