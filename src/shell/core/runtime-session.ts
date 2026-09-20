@@ -27,6 +27,7 @@ export class RuntimeSession {
 
   private port: MessagePort | undefined;
   private runtimeSource: string | undefined;
+  private documentHtml: string | undefined;
   private bootstrapAccepted = false;
   private readonly pending = new Map<string, PendingRequest>();
 
@@ -59,7 +60,7 @@ export class RuntimeSession {
     this.port.addEventListener("message", this.onPortMessage as EventListener);
     this.port.start();
     this.executor = new PostMessageExecutor(this.port, appId);
-    frameWindow.postMessage(createBootstrapInit(appId, source), origin, [channel.port2]);
+    frameWindow.postMessage(createBootstrapInit(appId, source, this.documentHtml), origin, [channel.port2]);
   };
 
   private readonly onPortMessage = (event: MessageEvent<unknown>) => {
@@ -86,7 +87,7 @@ export class RuntimeSession {
     private readonly onError: (error: Error) => void = () => undefined,
   ) {}
 
-  switchTo(appId: string, origin: string, runtimeSource: string): HTMLIFrameElement {
+  switchTo(appId: string, origin: string, runtimeSource: string, documentHtml?: string): HTMLIFrameElement {
     this.dispose();
     if (!runtimeSource.trim()) throw new Error("Runtime source must not be empty");
 
@@ -99,12 +100,39 @@ export class RuntimeSession {
     this.appId = appId;
     this.origin = new URL(origin).origin;
     this.runtimeSource = runtimeSource;
+    this.documentHtml = documentHtml;
     this.bootstrapAccepted = false;
     this.state = "loading";
 
     window.addEventListener("message", this.onWindowMessage);
     this.mount(frame);
     return frame;
+  }
+
+  reload(documentHtml?: string): void {
+    const frame = this.frame;
+    const origin = this.origin;
+    if (!frame || !origin || this.state === "disposed") throw new Error("App runtime is unavailable");
+    this.resetChannel("Runtime reloading");
+    this.documentHtml = documentHtml;
+    this.bootstrapAccepted = false;
+    this.state = "loading";
+    frame.src = origin;
+  }
+
+  private resetChannel(reason: string): void {
+    this.executor?.dispose();
+    this.executor = undefined;
+    if (this.port) {
+      this.port.removeEventListener("message", this.onPortMessage as EventListener);
+      this.port.close();
+      this.port = undefined;
+    }
+    for (const pending of this.pending.values()) {
+      clearTimeout(pending.timer);
+      pending.reject(new Error(reason));
+    }
+    this.pending.clear();
   }
 
   setState(state: Exclude<RuntimeState, "disposed">): void {
@@ -147,16 +175,7 @@ export class RuntimeSession {
 
   dispose(): void {
     window.removeEventListener("message", this.onWindowMessage);
-    this.executor?.dispose();
-    if (this.port) {
-      this.port.removeEventListener("message", this.onPortMessage as EventListener);
-      this.port.close();
-    }
-    for (const pending of this.pending.values()) {
-      clearTimeout(pending.timer);
-      pending.reject(new Error("Runtime disposed"));
-    }
-    this.pending.clear();
+    this.resetChannel("Runtime disposed");
     this.frame?.remove();
     this.executor = undefined;
     this.port = undefined;
@@ -164,6 +183,7 @@ export class RuntimeSession {
     this.appId = undefined;
     this.origin = undefined;
     this.runtimeSource = undefined;
+    this.documentHtml = undefined;
     this.bootstrapAccepted = false;
     this.state = "disposed";
   }
