@@ -522,7 +522,6 @@ async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
     }, appId);
   } finally {
     behaviorRewriteInFlight.delete(appId);
-    void maybeRewriteBehaviorHistory(appId);
   }
 }
 
