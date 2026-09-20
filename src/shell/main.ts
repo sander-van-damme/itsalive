@@ -87,9 +87,10 @@ const ui = new ShellUI(root, {
     reactionConfirmationGates.delete(id);
     confirmedReactionQueue.delete(id);
     pausedRuns.clear(id);
-    const clearOrigin = activeId === id && runtime.state === 'ready' ? () => requestRuntime({ type: 'storage.clear' }) : undefined;
-    await deleteApp(db, id, clearOrigin, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
-    initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
+    if (activeId === id) disposeFrame();
+    await deleteApp(db, id, undefined, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
+    initialBuild.clear(id);
+    await refreshApps(apps.find(a => a.id !== id)?.id);
   },
   sendMessage: async content => {
     const targetAppId = activeId;
@@ -145,12 +146,7 @@ const ui = new ShellUI(root, {
     if (!contents.trim()) throw new Error('Diagnostic export was unexpectedly empty');
     downloadText(`itsalive-logs-${Date.now()}.log`, contents);
   },
-  reloadApp: () => {
-    if (!activeId || runtime.state !== 'ready') return;
-    runtime.setState('loading');
-    ui.setConnectionStatus('working');
-    runtime.post({ type: 'reload' });
-  }
+  reloadApp: () => { void reloadActiveApp(); }
 });
 const runtime = new RuntimeSession(
   frame => ui.mountFrame(frame),
@@ -216,12 +212,29 @@ async function selectApp(id: string): Promise<void> {
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
-  const runtimeSource = await loadRuntimeSource();
+  const [runtimeSource, savedDocument] = await Promise.all([
+    loadRuntimeSource(),
+    db.documents.get(id),
+  ]);
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
-  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
+  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource, savedDocument?.html);
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
+}
+
+async function reloadActiveApp(): Promise<void> {
+  const id = activeId;
+  if (!id || runtime.appId !== id || runtime.state === 'disposed') return;
+  const savedDocument = await db.documents.get(id);
+  ui.setConnectionStatus('working');
+  if (connectionTimer) clearTimeout(connectionTimer);
+  connectionTimer = window.setTimeout(() => {
+    runtime.setState('error');
+    ui.setBusy(false);
+    ui.setConnectionStatus('error');
+  }, 10_000);
+  runtime.reload(savedDocument?.html);
 }
 
 async function waitForAgentIdle(): Promise<void> {
@@ -378,6 +391,9 @@ async function startPendingInitialBuild(): Promise<void> {
 async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): Promise<void> {
   if (!activeId || message.appId !== activeId) return;
   switch (message.type) {
+    case 'document.save':
+      await db.documents.put({ appId: activeId, html: message.html, updatedAt: Date.now() });
+      break;
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
     case 'jev.request': await handleJevRequest(message); break;
