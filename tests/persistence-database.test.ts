@@ -154,7 +154,7 @@ describe("app deletion cleanup", () => {
   });
 
   it("uses a credentialed, preflighted cleanup request without depending on an iframe", async () => {
-    const fetcher = vi.fn(async () => new Response(null, { status: 204 }));
+    const fetcher = vi.fn(async (_input: RequestInfo | URL, _init?: RequestInit) => new Response(null, { status: 204 }));
     await clearAppOrigin(APP_ID, fetcher as typeof fetch, "https:");
 
     expect(fetcher).toHaveBeenCalledOnce();
