@@ -1,6 +1,6 @@
 import { AppBridge } from "./bridge";
 import { installLogging } from "./logs";
-import { installAutosave, restoreAppDocument } from "./persistence";
+import { installAutosave, restoreAppDocument, serializeAppDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
@@ -102,7 +102,14 @@ export async function startAppRuntime(options: RuntimeOptions) {
     const message = bridge.validate(event);
     if (!message) return;
     if (bridge.acceptResponse(message)) return;
-    if (message.type === "execute") {
+    if (message.type === "document.snapshot") {
+      const html = serializeAppDocument();
+      if (html.length > MAX_SAVED_DOCUMENT_CHARACTERS) {
+        bridge.post({ type: "execution.error", error: serializeError(new Error("Saved document is too large")) }, message.requestId);
+      } else {
+        bridge.post({ type: "result", result: { html } }, message.requestId);
+      }
+    } else if (message.type === "execute") {
       try {
         ensureCanonicalAppRoot();
         let result: unknown;
