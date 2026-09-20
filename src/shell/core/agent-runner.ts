@@ -56,7 +56,7 @@ const outsideUiCount = Array.from(document.body.childNodes).filter(node => {
   if (node === root || node.nodeType === Node.COMMENT_NODE) return false;
   if (node.nodeType === Node.TEXT_NODE) return Boolean(node.textContent?.trim());
   if (!(node instanceof Element)) return false;
-  return !node.matches('[data-app-runtime], itsalive-history, script, style, link, template, noscript');
+  return !node.matches('[data-app-runtime], script, style, link, template, noscript');
 }).length;
 return {
   rootHtml: root?.innerHTML ?? null,
