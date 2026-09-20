@@ -119,11 +119,13 @@ describe("bridge protocol", () => {
   it("bounds every Jev bridge field and rejects unexpected payload data", () => {
     const envelope = { protocol: "itsalive", version: 4, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
     const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
-    const valid = { ...envelope, state: { interaction, recentInteractions: [interaction], document: "<main>ok</main>" } };
+    const valid = { ...envelope, state: { interaction, document: "<main>ok</main>" } };
     expect(isBridgeMessage(valid)).toBe(true);
-    const patterned = { ...valid, state: { ...valid.state, pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0, likelyBenign: false, frustrationSignal: true } } };
+    const patterned = { ...valid, state: { ...valid.state, pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0 } } };
     expect(isBridgeMessage(patterned)).toBe(true);
     expect(isBridgeMessage({ ...patterned, state: { ...patterned.state, pattern: { ...patterned.state.pattern, coalescedCount: 5 } } })).toBe(false);
+    expect(isBridgeMessage({ ...valid, state: { ...valid.state, recentInteractions: [interaction] } })).toBe(false);
+    expect(isBridgeMessage({ ...valid, state: { ...valid.state, historySummary: "runtime-owned" } })).toBe(false);
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, document: "x".repeat(MAX_SEMANTIC_DOCUMENT_CHARACTERS + 1) } })).toBe(false);
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, interaction: { ...interaction, key: "x".repeat(31) } } })).toBe(false);
     expect(isBridgeMessage({ ...valid, state: { ...valid.state, interaction: { ...interaction, target: { tag: "button", id: "x".repeat(201) } } } })).toBe(false);
