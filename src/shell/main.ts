@@ -95,6 +95,7 @@ const ui = new ShellUI(root, {
         await waitForAgentIdle();
       }
       await flushActiveDocument();
+      behaviorTracker.clear(id);
       disposeFrame();
     }
     await deleteApp(db, id, undefined, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
@@ -215,6 +216,8 @@ async function selectApp(id: string): Promise<void> {
     await waitForAgentIdle();
   }
   await flushActiveDocument();
+  const previousAppId = activeId;
+  if (previousAppId) behaviorTracker.clear(previousAppId);
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
@@ -237,6 +240,7 @@ async function reloadActiveApp(): Promise<void> {
   const id = activeId;
   if (!id || runtime.appId !== id || runtime.state === 'disposed') return;
   await flushActiveDocument();
+  behaviorTracker.clear(id);
   const savedDocument = await db.documents.get(id);
   ui.setConnectionStatus('working');
   if (connectionTimer) clearTimeout(connectionTimer);
