@@ -8,6 +8,12 @@ export interface AppRecord {
   updatedAt: number;
 }
 
+export interface AppDocumentRecord {
+  appId: string;
+  html: string;
+  updatedAt: number;
+}
+
 export interface HistoryEntry {
   id?: number;
   appId: string;
