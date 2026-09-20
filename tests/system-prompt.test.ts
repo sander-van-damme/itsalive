@@ -16,6 +16,11 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).toContain('prefers-reduced-motion');
   });
 
+  it('keeps behavioral history out of the generated app document', () => {
+    expect(SYSTEM_PROMPT).toContain('behavioral summaries');
+    expect(SYSTEM_PROMPT).not.toContain('itsalive-history');
+  });
+
   it('defines the canonical generated-app root as an invariant', () => {
     expect(SYSTEM_PROMPT).toContain('#itsalive-root');
     expect(SYSTEM_PROMPT).toContain('Do not remove or replace #itsalive-root');
