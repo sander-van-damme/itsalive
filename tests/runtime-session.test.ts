@@ -110,7 +110,7 @@ describe("RuntimeSession", () => {
   it("reloads by creating a fresh bootstrap that receives the latest saved document", () => {
     const { session } = createSession();
     session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE, SAVED_DOCUMENT);
-    bootstrap(session);
+    const { post } = bootstrap(session);
     session.setState("ready");
 
     const latest = "<!doctype html><html><body><main>latest</main></body></html>";
@@ -121,7 +121,7 @@ describe("RuntimeSession", () => {
     expect(session.frame?.src).toBe(ORIGIN + "/");
 
     const frame = session.frame!;
-    const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
+    post.mockClear();
     window.dispatchEvent(new MessageEvent("message", {
       data: createBootstrapReady(APP_ID),
       origin: ORIGIN,
