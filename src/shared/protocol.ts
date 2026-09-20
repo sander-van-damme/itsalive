@@ -58,6 +58,7 @@ export interface JevState { interaction: InteractionSnapshot; recentInteractions
 
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
+  | { type: "document.snapshot" }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
   | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError }
@@ -83,7 +84,7 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "llm.response", "history.response", "jev.response", "cron.fire"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "llm.response", "history.response", "jev.response", "cron.fire"]);
 const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.save", "wake", "llm.request", "history.request", "jev.request", "log", "cron.register", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
