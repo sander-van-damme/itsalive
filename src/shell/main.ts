@@ -2,7 +2,7 @@ import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
 import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { loadRuntimeSource } from './runtime-source';
-import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
+import { MAX_SAVED_DOCUMENT_CHARACTERS, ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -87,9 +87,17 @@ const ui = new ShellUI(root, {
     reactionConfirmationGates.delete(id);
     confirmedReactionQueue.delete(id);
     pausedRuns.clear(id);
-    const clearOrigin = activeId === id && runtime.state === 'ready' ? () => requestRuntime({ type: 'storage.clear' }) : undefined;
-    await deleteApp(db, id, clearOrigin, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
-    initialBuild.clear(id); if (activeId === id) disposeFrame(); await refreshApps(apps.find(a => a.id !== id)?.id);
+    if (activeId === id) {
+      if (running) {
+        stopActiveRun('runtime-disposed');
+        await waitForAgentIdle();
+      }
+      await flushActiveDocument();
+      disposeFrame();
+    }
+    await deleteApp(db, id, undefined, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
+    initialBuild.clear(id);
+    await refreshApps(apps.find(a => a.id !== id)?.id);
   },
   sendMessage: async content => {
     const targetAppId = activeId;
@@ -145,12 +153,7 @@ const ui = new ShellUI(root, {
     if (!contents.trim()) throw new Error('Diagnostic export was unexpectedly empty');
     downloadText(`itsalive-logs-${Date.now()}.log`, contents);
   },
-  reloadApp: () => {
-    if (!activeId || runtime.state !== 'ready') return;
-    runtime.setState('loading');
-    ui.setConnectionStatus('working');
-    runtime.post({ type: 'reload' });
-  }
+  reloadApp: () => { void reloadActiveApp(); }
 });
 const runtime = new RuntimeSession(
   frame => ui.mountFrame(frame),
@@ -209,6 +212,7 @@ async function selectApp(id: string): Promise<void> {
     stopActiveRun('app-switch');
     await waitForAgentIdle();
   }
+  await flushActiveDocument();
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
@@ -216,12 +220,43 @@ async function selectApp(id: string): Promise<void> {
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
-  const runtimeSource = await loadRuntimeSource();
+  const [runtimeSource, savedDocument] = await Promise.all([
+    loadRuntimeSource(),
+    db.documents.get(id),
+  ]);
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
-  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
+  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource, savedDocument?.html);
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
+}
+
+async function reloadActiveApp(): Promise<void> {
+  const id = activeId;
+  if (!id || runtime.appId !== id || runtime.state === 'disposed') return;
+  await flushActiveDocument();
+  const savedDocument = await db.documents.get(id);
+  ui.setConnectionStatus('working');
+  if (connectionTimer) clearTimeout(connectionTimer);
+  connectionTimer = window.setTimeout(() => {
+    runtime.setState('error');
+    ui.setBusy(false);
+    ui.setConnectionStatus('error');
+  }, 10_000);
+  runtime.reload(savedDocument?.html);
+}
+
+async function flushActiveDocument(): Promise<void> {
+  const id = activeId;
+  if (!id || runtime.appId !== id || runtime.state !== 'ready') return;
+  try {
+    const snapshot = await runtime.request<{ html?: unknown }>({ type: 'document.snapshot' }, 5_000);
+    if (!snapshot || typeof snapshot.html !== 'string') throw new Error('Runtime returned an invalid document snapshot');
+    if (snapshot.html.length > MAX_SAVED_DOCUMENT_CHARACTERS) throw new Error('Runtime document snapshot is too large');
+    await db.documents.put({ appId: id, html: snapshot.html, updatedAt: Date.now() });
+  } catch (error) {
+    console.warn(`[itsalive] Could not flush document snapshot for ${id}`, error);
+  }
 }
 
 async function waitForAgentIdle(): Promise<void> {
@@ -378,6 +413,9 @@ async function startPendingInitialBuild(): Promise<void> {
 async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): Promise<void> {
   if (!activeId || message.appId !== activeId) return;
   switch (message.type) {
+    case 'document.save':
+      await db.documents.put({ appId: activeId, html: message.html, updatedAt: Date.now() });
+      break;
     case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
     case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
     case 'jev.request': await handleJevRequest(message); break;
@@ -570,9 +608,6 @@ async function log(level: LogEntry['level'], source: string, message: string, de
   await diagnostics.write(level, source, message, details, appId);
 }
 
-async function requestRuntime<T>(payload: Parameters<RuntimeSession['post']>[0], timeoutMs = 10_000): Promise<T> {
-  return runtime.request<T>(payload, timeoutMs);
-}
 
 function downloadText(name: string, value: string): void { const url = URL.createObjectURL(new Blob([value], { type: 'text/plain;charset=utf-8' })); const a = document.createElement('a'); a.href=url; a.download=name; a.click(); URL.revokeObjectURL(url); }
 

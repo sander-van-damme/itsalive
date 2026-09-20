@@ -7,6 +7,7 @@ import {
   BOOTSTRAP_VERSION,
   BRIDGE_VERSION,
   MAX_SEMANTIC_DOCUMENT_CHARACTERS,
+  MAX_SAVED_DOCUMENT_CHARACTERS,
   createBootstrapError,
   createBootstrapInit,
   createBootstrapReady,
@@ -62,16 +63,18 @@ describe("bootstrap protocol", () => {
   it("uses a separate strict one-shot bootstrap envelope", () => {
     expect(BOOTSTRAP_VERSION).toBe(1);
     const ready = createBootstrapReady(APP_ID);
-    const init = createBootstrapInit(APP_ID, "runtime();");
+    const init = createBootstrapInit(APP_ID, "runtime();", "<!doctype html><main>saved</main>");
     const failure = createBootstrapError(APP_ID, serializeError(new Error("boom")));
 
     expect(isBootstrapReadyMessage(ready)).toBe(true);
     expect(isBootstrapInitMessage(init)).toBe(true);
+    expect(init.documentHtml).toContain("saved");
     expect(isBootstrapErrorMessage(failure)).toBe(true);
 
     expect(isBootstrapReadyMessage({ ...ready, extra: true })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, runtimeSource: "" })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, appId: APP_ID.toUpperCase() })).toBe(false);
+    expect(isBootstrapInitMessage({ ...init, documentHtml: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
     expect(isBootstrapErrorMessage({ ...failure, version: 2 })).toBe(false);
   });
 });
@@ -88,6 +91,14 @@ describe("bridge protocol", () => {
     expect(isShellToAppMessage(execute)).toBe(true);
     expect(isAppToShellMessage(execute)).toBe(false);
     expect(isAppToShellMessage(result)).toBe(true);
+  });
+
+  it("validates bounded shell-owned document snapshots", () => {
+    const save = createBridgeMessage(APP_ID, "req_doc123", { type: "document.save", html: "<!doctype html><main>ok</main>" });
+    expect(isAppToShellMessage(save)).toBe(true);
+    expect(isShellToAppMessage(save)).toBe(false);
+    expect(isBridgeMessage({ ...save, html: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
+    expect(isBridgeMessage({ ...save, html: 42 })).toBe(false);
   });
 
   it("uses the LLM request and response protocol", () => {

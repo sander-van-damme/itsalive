@@ -2,6 +2,7 @@ export interface RuntimeOptions {
   rootOrigin: string;
   appId: string;
   port: MessagePort;
+  documentHtml?: string;
   autosaveDelay?: number;
   maxResultBytes?: number;
   screenshot?: (element: HTMLElement) => Promise<string>;
@@ -11,6 +12,7 @@ export interface RuntimeBootstrapContext {
   rootOrigin: string;
   appId: string;
   port: MessagePort;
+  documentHtml?: string;
 }
 
 export interface LogEntry {

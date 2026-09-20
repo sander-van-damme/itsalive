@@ -1,12 +1,11 @@
 import { AppBridge } from "./bridge";
 import { installLogging } from "./logs";
-import { installAutosave, loadSavedDocument } from "./persistence";
+import { installAutosave, restoreAppDocument, serializeAppDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
-import { clearOriginStorage } from "./storage";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
-import { serializeError } from "../shared";
+import { MAX_SAVED_DOCUMENT_CHARACTERS, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 import { COMPONENTS } from "./components";
@@ -103,7 +102,14 @@ export async function startAppRuntime(options: RuntimeOptions) {
     const message = bridge.validate(event);
     if (!message) return;
     if (bridge.acceptResponse(message)) return;
-    if (message.type === "execute") {
+    if (message.type === "document.snapshot") {
+      const html = serializeAppDocument();
+      if (html.length > MAX_SAVED_DOCUMENT_CHARACTERS) {
+        bridge.post({ type: "execution.error", error: serializeError(new Error("Saved document is too large")) }, message.requestId);
+      } else {
+        bridge.post({ type: "result", result: { html } }, message.requestId);
+      }
+    } else if (message.type === "execute") {
       try {
         ensureCanonicalAppRoot();
         let result: unknown;
@@ -124,18 +130,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
         logs.add("error", ["Agent execution failed", error], "agent", error instanceof Error ? error.stack : undefined);
         bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
       }
-    } else if (message.type === "reload") {
-      bridge.post({ type: "result", result: { reloading: true } }, message.requestId);
-      location.reload();
-    } else if (message.type === "storage.clear") {
-      autosave.suspend();
-      autosave.disconnect();
-      try {
-        await clearOriginStorage();
-        bridge.post({ type: "result", result: { cleared: true } }, message.requestId);
-      } catch (error) {
-        bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
-      }
     } else if (message.type === "cron.fire") {
       const id = message.callbackId;
       const callback = id && cronCallbacks.get(id);
@@ -149,9 +143,15 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
   bridge.addMessageListener(listener);
 
-  await loadSavedDocument();
+  if (options.documentHtml) await restoreAppDocument(options.documentHtml);
   ensureCanonicalAppRoot();
-  const autosave = installAutosave(options.autosaveDelay);
+  const autosave = installAutosave(html => {
+    if (html.length > MAX_SAVED_DOCUMENT_CHARACTERS) {
+      logs.add("error", [`Saved document exceeds ${MAX_SAVED_DOCUMENT_CHARACTERS} characters; snapshot was not persisted`], "bridge");
+      return;
+    }
+    bridge.post({ type: "document.save", html });
+  }, options.autosaveDelay);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => {
