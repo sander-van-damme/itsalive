@@ -2,7 +2,7 @@ import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
 import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { loadRuntimeSource } from './runtime-source';
-import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
+import { MAX_SAVED_DOCUMENT_CHARACTERS, ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -87,7 +87,14 @@ const ui = new ShellUI(root, {
     reactionConfirmationGates.delete(id);
     confirmedReactionQueue.delete(id);
     pausedRuns.clear(id);
-    if (activeId === id) disposeFrame();
+    if (activeId === id) {
+      if (running) {
+        stopActiveRun('runtime-disposed');
+        await waitForAgentIdle();
+      }
+      await flushActiveDocument();
+      disposeFrame();
+    }
     await deleteApp(db, id, undefined, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
     initialBuild.clear(id);
     await refreshApps(apps.find(a => a.id !== id)?.id);
@@ -205,6 +212,7 @@ async function selectApp(id: string): Promise<void> {
     stopActiveRun('app-switch');
     await waitForAgentIdle();
   }
+  await flushActiveDocument();
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
@@ -226,6 +234,7 @@ async function selectApp(id: string): Promise<void> {
 async function reloadActiveApp(): Promise<void> {
   const id = activeId;
   if (!id || runtime.appId !== id || runtime.state === 'disposed') return;
+  await flushActiveDocument();
   const savedDocument = await db.documents.get(id);
   ui.setConnectionStatus('working');
   if (connectionTimer) clearTimeout(connectionTimer);
@@ -235,6 +244,19 @@ async function reloadActiveApp(): Promise<void> {
     ui.setConnectionStatus('error');
   }, 10_000);
   runtime.reload(savedDocument?.html);
+}
+
+async function flushActiveDocument(): Promise<void> {
+  const id = activeId;
+  if (!id || runtime.appId !== id || runtime.state !== 'ready') return;
+  try {
+    const snapshot = await runtime.request<{ html?: unknown }>({ type: 'document.snapshot' }, 5_000);
+    if (!snapshot || typeof snapshot.html !== 'string') throw new Error('Runtime returned an invalid document snapshot');
+    if (snapshot.html.length > MAX_SAVED_DOCUMENT_CHARACTERS) throw new Error('Runtime document snapshot is too large');
+    await db.documents.put({ appId: id, html: snapshot.html, updatedAt: Date.now() });
+  } catch (error) {
+    console.warn(`[itsalive] Could not flush document snapshot for ${id}`, error);
+  }
 }
 
 async function waitForAgentIdle(): Promise<void> {
