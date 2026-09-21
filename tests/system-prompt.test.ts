@@ -21,6 +21,10 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).not.toContain('itsalive-history');
   });
 
+  it('documents shell-backed log lookup as asynchronous', () => {
+    expect(SYSTEM_PROMPT).toContain('await itsalive.logs.get(...)');
+  });
+
   it('defines the canonical generated-app root as an invariant', () => {
     expect(SYSTEM_PROMPT).toContain('#itsalive-root');
     expect(SYSTEM_PROMPT).toContain('Do not remove or replace #itsalive-root');
