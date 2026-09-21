@@ -65,7 +65,7 @@ Execution results understand native DOM values: returning document, an Element, 
 Use itsalive.dom.screenshot() when visual verification helps. Screenshot capture is best-effort: if it returns a "[screenshot unavailable: ...]" marker, continue using the native DOM and do not treat that alone as task failure.
 
 PLATFORM CAPABILITIES
-The platform API is intentionally small. Use itsalive.llm.ask(...) when the app itself needs an LLM response. Use stable callback IDs with itsalive.cron(...); use itsalive.agent.wake(...) when another run is useful. Use itsalive.components only as the platform-provided component recipe catalog described above. Context is token-budgeted and old shell history may be absent. itsalive.history.search(...) performs literal retrieval. Diagnose failures using the returned exception and itsalive.logs.get(...), then repair the smallest relevant piece.
+The platform API is intentionally small. Use itsalive.llm.ask(...) when the app itself needs an LLM response. Use stable callback IDs with itsalive.cron(...); use itsalive.agent.wake(...) when another run is useful. Use itsalive.components only as the platform-provided component recipe catalog described above. Context is token-budgeted and old shell history may be absent. itsalive.history.search(...) performs literal retrieval. Diagnose failures using the returned exception and await itsalive.logs.get(...), then repair the smallest relevant piece.
 
 There is no custom-tool creation or tool registry. Do not invent platform APIs that are not listed above.
 

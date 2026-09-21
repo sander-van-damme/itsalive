@@ -30,8 +30,7 @@ function serializable(value: unknown, seen = new WeakSet<object>()): unknown {
   return result;
 }
 
-export function installLogging(bridge: AppBridge, capacity = 500) {
-  const entries: LogEntry[] = [];
+export function installLogging(bridge: AppBridge) {
   const groups: string[] = [];
 
   const originals = {
@@ -50,8 +49,6 @@ export function installLogging(bridge: AppBridge, capacity = 500) {
 
   const add = (level: LogEntry["level"], args: unknown[], source: LogEntry["source"] = "app", stack?: string) => {
     const entry = { timestamp: new Date().toISOString(), level, message: args.map(printable).join(" "), source, ...(stack ? { stack } : {}) } satisfies LogEntry;
-    entries.push(entry);
-    if (entries.length > capacity) entries.splice(0, entries.length - capacity);
     bridge.post({
       type: "log",
       record: {
@@ -134,10 +131,5 @@ export function installLogging(bridge: AppBridge, capacity = 500) {
     removeEventListener("unhandledrejection", onUnhandledRejection);
   };
 
-  return {
-    add,
-    get: ({ level, limit = 100 }: { level?: LogEntry["level"]; limit?: number } = {}) =>
-      entries.filter(entry => !level || entry.level === level).slice(-Math.max(0, Math.min(limit, capacity))),
-    destroy,
-  };
+  return { add, destroy };
 }

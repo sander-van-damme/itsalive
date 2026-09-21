@@ -1,3 +1,4 @@
+import type { LogRecord } from "../shared";
 import type { captureScreenshot } from "./screenshot";
 
 export interface LlmApi {
@@ -13,7 +14,7 @@ export interface ItsaliveRuntimeApi {
     screenshot: typeof captureScreenshot;
   }>;
   readonly logs: Readonly<{
-    get(input?: { level?: "log" | "info" | "warn" | "error"; limit?: number }): unknown[];
+    get(input?: { level?: "debug" | "info" | "warn" | "error"; limit?: number }): Promise<LogRecord[]>;
   }>;
   readonly components: Readonly<Record<string, string>>;
   readonly cron: (id: string, schedule: string, callback: () => unknown) => { id: string; schedule: string };

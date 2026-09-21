@@ -78,6 +78,16 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (response.error) throw new Error(response.error.message);
     return response.results ?? [];
   } });
+  const logApi = Object.freeze({ get: async (query: { level?: "debug" | "info" | "warn" | "error"; limit?: number } = {}) => {
+    if (query.level !== undefined && !["debug", "info", "warn", "error"].includes(query.level)) throw new Error("Invalid log level");
+    if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 200)) {
+      throw new Error("Log limit must be an integer from 1 to 200");
+    }
+    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "logs.request", ...query });
+    if (response.type !== "logs.response") throw new Error(`Unexpected logs response: ${response.type}`);
+    if (response.error) throw new Error(response.error.message);
+    return response.results ?? [];
+  } });
 
   const runtimeApi: ItsaliveRuntimeApi = Object.freeze({
     apiVersion: 2,
@@ -85,7 +95,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     history,
     agent,
     dom: Object.freeze({ screenshot }),
-    logs: Object.freeze({ get: logs.get }),
+    logs: logApi,
     components: COMPONENTS,
     cron,
     done,

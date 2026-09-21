@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
+import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { MAX_SAVED_DOCUMENT_CHARACTERS, ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
@@ -37,6 +37,7 @@ let running = false;
 let activeRun: AbortController | undefined;
 let activeRunFinished: Promise<void> | undefined;
 let connectionTimer: number | undefined;
+let runtimeLogWrites: Promise<void> = Promise.resolve();
 const initialBuild = new InitialBuildIntent();
 const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
 
@@ -423,8 +424,25 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
     case 'document.save':
       await db.documents.put({ appId: activeId, html: message.html, updatedAt: Date.now() });
       break;
-    case 'log': await log(message.record.level, message.record.source, message.record.message, message.record.details, activeId); break;
-    case 'history.request': respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) }); break;
+    case 'log':
+      runtimeLogWrites = runtimeLogWrites.then(
+        () => log(message.record.level, message.record.source, message.record.message, message.record.details, message.appId),
+        () => log(message.record.level, message.record.source, message.record.message, message.record.details, message.appId),
+      );
+      try { await runtimeLogWrites; }
+      catch (error) { console.warn('[itsalive] Could not persist app runtime log', error); }
+      break;
+    case 'history.request':
+      respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) });
+      break;
+    case 'logs.request':
+      try {
+        await runtimeLogWrites;
+        respond(message, { type: 'logs.response', results: await queryRuntimeLogs(db, message.appId, { level: message.level, limit: message.limit }) });
+      } catch (error) {
+        respond(message, { type: 'logs.response', error: serializeError(error) });
+      }
+      break;
     case 'jev.request': await handleJevRequest(message); break;
     case 'llm.request': await handleLlmRequest(message); break;
     case 'cron.register': {

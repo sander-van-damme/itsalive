@@ -4,6 +4,7 @@ export * from "./app-creation";
 export * from "./app-deletion";
 export * from "./behavior";
 export * from "./bridge-executor";
+export * from "./runtime-logs";
 export * from "./runtime-session";
 export * from "./context";
 export * from "./database";

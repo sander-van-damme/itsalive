@@ -14,6 +14,7 @@ describe("app console logging", () => {
 
     const post = vi.fn();
     const logging = installLogging({ post } as never);
+    expect(logging).not.toHaveProperty("get");
 
     console.debug("debug message", { nested: "value" });
     console.groupCollapsed("phase one");
