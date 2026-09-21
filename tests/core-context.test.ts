@@ -29,6 +29,19 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
 
+  it("includes the shell-owned behavioral summary as mandatory context", () => {
+    const result = buildModelContext({
+      model,
+      appPrompt: "A violin coach",
+      behaviorSummary: "The user prefers concise feedback around 90 bpm.",
+      trigger: "Help me",
+      history: [],
+    });
+    const joined = result.messages.map(message => message.content).join("\n");
+    expect(joined).toContain("CURATED BEHAVIORAL HISTORY");
+    expect(joined).toContain("prefers concise feedback");
+  });
+
   it("always includes immutable app context and the current trigger", () => {
     const result = buildModelContext({ model, appPrompt: "A violin coach", trigger: "Help me", history: [] });
     expect(result.system).toBe(SYSTEM_PROMPT);
