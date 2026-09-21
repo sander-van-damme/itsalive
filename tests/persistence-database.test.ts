@@ -72,14 +72,25 @@ describe("shell persistence", () => {
     expect([...connection.transaction("history").objectStore("history").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("logs").objectStore("logs").indexNames]).toEqual(["appId"]);
 
-    await db.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
+    await db.apps.put({
+      id: APP_ID,
+      name: "Test",
+      prompt: "Build",
+      createdAt: 1,
+      updatedAt: 1,
+      behaviorSummary: "Prefers fast feedback.",
+      behaviorSummaryUpdatedAt: 2,
+    });
     await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", updatedAt: 2 });
     await db.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "hello" });
     await db.logs.add({ appId: APP_ID, timestamp: 4, level: "info", source: "test", message: "saved" });
     await db.schedules.put({ id: `${APP_ID}:daily`, appId: APP_ID, expression: "0 8 * * *", registeredAt: 5, nextRun: 6 });
 
     const reloadedShell = new ShellDatabase(databaseName);
-    expect(await reloadedShell.apps.get(APP_ID)).toMatchObject({ name: "Test" });
+    expect(await reloadedShell.apps.get(APP_ID)).toMatchObject({
+      name: "Test",
+      behaviorSummary: "Prefers fast feedback.",
+    });
     expect(await reloadedShell.documents.get(APP_ID)).toMatchObject({ html: "<!doctype html><main>saved</main>" });
     expect(await reloadedShell.history.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.logs.forApp(APP_ID)).toHaveLength(1);
