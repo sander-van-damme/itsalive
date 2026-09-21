@@ -23,6 +23,7 @@ export interface AgentProgress { phase: AgentProgressPhase; turn: number; step?:
 export interface RunOptions {
   appId: string;
   appPrompt: string;
+  behaviorSummary?: string;
   trigger: string;
   model: ModelConfig;
   credential?: Credential;
@@ -125,7 +126,7 @@ export class AgentRunner {
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
+          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, behaviorSummary: options.behaviorSummary, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
           options.onContext?.({ estimatedInputTokens: context.estimatedInputTokens, maxContextTokens: options.model.maxContextTokens });
           console.info('Context', {
