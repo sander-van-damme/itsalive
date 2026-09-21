@@ -349,6 +349,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     const result = await runner.run({
       appId: app.id,
       appPrompt: app.prompt,
+      behaviorSummary: app.behaviorSummary,
       trigger,
       persistTrigger: false,
       model,
