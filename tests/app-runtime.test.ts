@@ -106,6 +106,7 @@ describe("injected app runtime namespace", () => {
       { timestamp: 1, level: "error", source: "app", message: "boom" },
     ]);
     expect(state.requests.find(request => request.type === "logs.request")).toEqual({ type: "logs.request", level: "error", limit: 10 });
+    await expect(window.itsalive.logs.get({ limit: 201 })).rejects.toThrow("Log limit must be an integer from 1 to 200");
 
     document.getElementById("itsalive-root")!.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
     emit({ type: "execute", code: "return itsalive.apiVersion;", requestId: "version" });
