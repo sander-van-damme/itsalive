@@ -109,6 +109,20 @@ describe("bridge protocol", () => {
     expect(isBridgeMessage({ ...request, options: { temperature: 1 } })).toBe(false);
   });
 
+  it("validates bounded shell log queries and responses", () => {
+    const request = createBridgeMessage(APP_ID, "req_logs123", { type: "logs.request", level: "error", limit: 50 });
+    const response = createBridgeMessage(APP_ID, "req_logs123", {
+      type: "logs.response",
+      results: [{ timestamp: 1, level: "error", source: "app", message: "boom" }],
+    });
+    expect(isAppToShellMessage(request)).toBe(true);
+    expect(isShellToAppMessage(response)).toBe(true);
+    expect(isBridgeMessage({ ...request, level: "log" })).toBe(false);
+    expect(isBridgeMessage({ ...request, limit: 201 })).toBe(false);
+    expect(isBridgeMessage({ ...request, limit: 0 })).toBe(false);
+    expect(isBridgeMessage({ ...response, results: Array.from({ length: 201 }, () => response.results![0]) })).toBe(false);
+  });
+
   it("rejects unused cron fields and runtime statuses", () => {
     const envelope = { protocol: "itsalive", version: 4, appId: APP_ID, requestId: "req_fields" };
     expect(isBridgeMessage({ ...envelope, type: "cron.register", registration: { callbackId: "daily", schedule: "0 8 * * *", description: "unused" } })).toBe(false);
