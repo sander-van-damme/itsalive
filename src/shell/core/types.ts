@@ -6,6 +6,8 @@ export interface AppRecord {
   prompt: string;
   createdAt: number;
   updatedAt: number;
+  behaviorSummary?: string;
+  behaviorSummaryUpdatedAt?: number;
 }
 
 export interface AppDocumentRecord {

@@ -8,7 +8,6 @@ describe("canonical app root", () => {
   it("creates one canonical root and discards visible UI outside it", () => {
     document.body.innerHTML = `
       <main data-outside-app>Outside app</main>
-      <itsalive-history hidden><itsalive-history-summary>summary</itsalive-history-summary></itsalive-history>
       <script data-app-runtime></script>
     `;
 
@@ -17,8 +16,19 @@ describe("canonical app root", () => {
     expect(root.id).toBe("itsalive-root");
     expect(document.querySelector("[data-outside-app]")).toBeNull();
     expect(document.querySelectorAll('[id="itsalive-root"]')).toHaveLength(1);
-    expect(document.querySelector("itsalive-history")?.parentElement).toBe(document.body);
     expect(document.querySelector("[data-app-runtime]")?.parentElement).toBe(document.body);
+  });
+
+  it("discards legacy hidden behavioral-history nodes from restored documents", () => {
+    document.body.innerHTML = `
+      <main id="itsalive-root"><section>App</section></main>
+      <itsalive-history hidden><itsalive-history-summary>legacy summary</itsalive-history-summary></itsalive-history>
+    `;
+
+    ensureCanonicalAppRoot();
+
+    expect(document.querySelector("itsalive-history")).toBeNull();
+    expect(document.getElementById("itsalive-root")?.textContent).toContain("App");
   });
 
   it("rejects and removes a second top-level app surface without disturbing the existing app", () => {

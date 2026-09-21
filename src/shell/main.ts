@@ -1,8 +1,8 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
+import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { loadRuntimeSource } from './runtime-source';
-import { MAX_SAVED_DOCUMENT_CHARACTERS, ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type JevState } from '../shared';
+import { MAX_SAVED_DOCUMENT_CHARACTERS, ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -67,6 +67,8 @@ if (stored) {
 
 const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
+const behaviorTracker = new BehaviorTracker();
+const behaviorRewriteInFlight = new Set<string>();
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
 const confirmedReactionQueue = new Map<string, { batch: ReactionBatch; intent: string }>();
 const pausedRuns = new PausedRunStore();
@@ -93,6 +95,7 @@ const ui = new ShellUI(root, {
         await waitForAgentIdle();
       }
       await flushActiveDocument();
+      behaviorTracker.clear(id);
       disposeFrame();
     }
     await deleteApp(db, id, undefined, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
@@ -213,6 +216,8 @@ async function selectApp(id: string): Promise<void> {
     await waitForAgentIdle();
   }
   await flushActiveDocument();
+  const previousAppId = activeId;
+  if (previousAppId) behaviorTracker.clear(previousAppId);
   activeId = id;
   history.replaceState(null, '', shellUrlForApp(location.href, id));
   disposeFrame();
@@ -235,6 +240,7 @@ async function reloadActiveApp(): Promise<void> {
   const id = activeId;
   if (!id || runtime.appId !== id || runtime.state === 'disposed') return;
   await flushActiveDocument();
+  behaviorTracker.clear(id);
   const savedDocument = await db.documents.get(id);
   ui.setConnectionStatus('working');
   if (connectionTimer) clearTimeout(connectionTimer);
@@ -343,6 +349,7 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
     const result = await runner.run({
       appId: app.id,
       appPrompt: app.prompt,
+      behaviorSummary: app.behaviorSummary,
       trigger,
       persistTrigger: false,
       model,
@@ -436,10 +443,14 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
   }
 }
 
-async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; state: JevState }): Promise<void> {
+async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; state: InteractionObservation }): Promise<void> {
   const startedAt = performance.now();
   const appId = activeId;
   const epoch = runtimeEpoch;
+  const app = appId ? apps.find(item => item.id === appId) : undefined;
+  if (!appId || !app) return;
+  const state: JevState = behaviorTracker.observe(appId, message.state, app.behaviorSummary);
+  void maybeRewriteBehaviorHistory(appId);
   const controller = new AbortController();
   jevControllers.add(controller);
   const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
@@ -447,34 +458,74 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const key = credential();
     if (!key) throw new Error('OpenRouter is not configured');
     jevSessionStats.requests++;
-    jevSessionStats.coalescedEvents += message.state.pattern?.coalescedCount ?? 0;
+    jevSessionStats.coalescedEvents += state.pattern?.coalescedCount ?? 0;
     const decisionModel: DecisionModel = new OpenRouterJevAdapter();
-    const result = await decisionModel.evaluate({ state: message.state, signal: controller.signal }, key);
+    const result = await decisionModel.evaluate({ state, signal: controller.signal }, key);
     if (!current()) return;
     jevSessionStats.inputTokens += result.usage?.inputTokens ?? 0;
     sessionUsage.recordUnpricedUsage({ inputTokens: result.usage?.inputTokens });
-    const decision = decideJevEscalation(result.probability, message.state);
+    const decision = decideJevEscalation(result.probability, state);
     if (decision.escalated) jevSessionStats.escalations++;
     await log('info', 'jev', 'Interaction decision', {
       probability: result.probability,
       threshold: JEV_ESCALATION_THRESHOLD,
       escalated: decision.escalated,
       escalationReason: decision.reason,
-      pattern: message.state.pattern,
+      pattern: state.pattern,
       durationMs: Math.round(performance.now() - startedAt),
-      snapshotCharacters: message.state.document.length,
+      snapshotCharacters: state.document.length,
       inputTokens: result.usage?.inputTokens,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
     respond(message, { type: 'jev.response', probability: result.probability, escalated: decision.escalated });
-    if (decision.escalated) reactionBatcher.add(message.state);
+    if (decision.escalated) reactionBatcher.add(state);
   } catch (error) {
     if (!current()) return;
     await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500), session: { ...jevSessionStats } }, appId);
     if (!current()) return;
     respond(message, { type: 'jev.response', probability: 0, escalated: false, error: serializeError(error) });
   } finally { jevControllers.delete(controller); }
+}
+
+async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
+  if (behaviorRewriteInFlight.has(appId)) return;
+  const app = apps.find(item => item.id === appId);
+  const key = credential();
+  if (!app || !key) return;
+  const batch = behaviorTracker.takeRewriteBatch(appId);
+  if (!batch) return;
+
+  behaviorRewriteInFlight.add(appId);
+  try {
+    const result = await registry.generate({
+      purpose: 'behavior history rewrite',
+      model: await modelConfig(),
+      system: 'Curate a compact behavioral summary for future application reasoning. Return only the summary.',
+      messages: [{ role: 'user', content: behaviorRewritePrompt(app.behaviorSummary, batch) }],
+    }, key);
+    syncUsage();
+    const summary = result.text.trim().slice(0, MAX_BEHAVIOR_SUMMARY_CHARACTERS);
+    if (!summary) throw new Error('Behavior history rewrite returned an empty summary');
+
+    const current = await db.apps.get(appId);
+    if (!current) return;
+    const updated: AppRecord = { ...current, behaviorSummary: summary, behaviorSummaryUpdatedAt: Date.now() };
+    await db.apps.put(updated);
+    apps = apps.map(item => item.id === appId ? updated : item);
+    await log('info', 'behavior', 'Behavioral history summary updated', {
+      samples: batch.length,
+      summaryCharacters: summary.length,
+    }, appId);
+  } catch (error) {
+    behaviorTracker.restoreRewriteBatch(appId, batch);
+    await log('warn', 'behavior', 'Behavioral history rewrite failed', {
+      error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+    }, appId);
+  } finally {
+    behaviorRewriteInFlight.delete(appId);
+    if (behaviorTracker.hasRewriteBatch(appId)) void maybeRewriteBehaviorHistory(appId);
+  }
 }
 
 function reactionConfirmationGate(appId: string): ReactionConfirmationGate {

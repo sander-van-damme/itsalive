@@ -1,6 +1,6 @@
 export const APP_ROOT_ID = "itsalive-root";
 
-const ALLOWED_OUTSIDE_ROOT_SELECTOR = "[data-app-runtime], itsalive-history, script, style, link, template, noscript";
+const ALLOWED_OUTSIDE_ROOT_SELECTOR = "[data-app-runtime], script, style, link, template, noscript";
 
 function roots(ownerDocument: Document): HTMLElement[] {
   return Array.from(ownerDocument.querySelectorAll<HTMLElement>(`[id="${APP_ROOT_ID}"]`));

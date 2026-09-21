@@ -28,7 +28,6 @@ describe("continuous interaction observation", () => {
     const payload = request.mock.calls[0]![0] as Extract<AppToShellPayload, { type: "jev.request" }>;
     expect(payload.state.interaction.target.tag).toBe("music-card");
     expect(payload.state.interaction.actualTarget.tag).toBe("button");
-    expect(payload.state.recentInteractions).toHaveLength(1);
     observer.destroy();
   });
 
@@ -56,7 +55,6 @@ describe("continuous interaction observation", () => {
 
     expect(JSON.stringify(request.mock.calls[0]?.[0])).not.toContain("super-secret");
     expect(document.documentElement.outerHTML).not.toContain("super-secret");
-    expect(document.querySelector("itsalive-history")?.textContent).toBe("");
     observer.destroy();
   });
 
@@ -82,25 +80,6 @@ describe("continuous interaction observation", () => {
   });
 
 
-  it("preserves one canonical curated history across body rewrites until teardown", async () => {
-    document.body.innerHTML = `<itsalive-history hidden><itsalive-history-summary>prefers 90 bpm</itsalive-history-summary></itsalive-history>`;
-    const original = document.querySelector("itsalive-history")!;
-    const observer = installInteractionObserver({ request: vi.fn() } as never, { acceptUntrustedForTest: true });
-
-    document.body.innerHTML = "<main>New app</main>";
-    await vi.waitFor(() => expect(document.querySelector("itsalive-history")).toBe(original));
-    expect(document.querySelector("itsalive-history-summary")?.textContent).toBe("prefers 90 bpm");
-
-    document.body.innerHTML += "<itsalive-history><itsalive-history-summary>duplicate</itsalive-history-summary></itsalive-history>";
-    await vi.waitFor(() => expect(document.querySelectorAll("itsalive-history")).toHaveLength(1));
-    expect(document.querySelector("itsalive-history")).toBe(original);
-
-    observer.destroy();
-    document.body.replaceChildren(document.createElement("main"));
-    await Promise.resolve();
-    expect(document.querySelector("itsalive-history")).toBeNull();
-  });
-
   it("sends bounded target metadata and keyboard keys without persisting them", async () => {
     const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.1); });
     const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true });
@@ -118,26 +97,22 @@ describe("continuous interaction observation", () => {
     observer.destroy();
   });
 
-  it("persists only an LLM-rewritten curated history", async () => {
-    const request = vi.fn(async (payload: AppToShellPayload) => payload.type === "llm.request"
-      ? { type: "llm.response", result: "User repeatedly adjusts tempo upward and prefers quick feedback." }
-      : { type: "jev.response", probability: .1, escalated: false });
+  it("never performs behavioral-history LLM curation inside the runtime", async () => {
+    const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.1); });
     const buttons = Array.from({ length: 3 }, () => document.body.appendChild(document.createElement("button")));
-    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, historyRewriteInterval: 3 });
+    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true });
 
     for (const button of buttons) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    await vi.waitFor(() => expect(document.querySelector("itsalive-history-summary")?.textContent).toContain("adjusts tempo"));
+    await Promise.resolve();
 
-    expect(document.querySelectorAll("itsalive-interaction")).toHaveLength(0);
-    const llmRequest = request.mock.calls.map(call => call[0]).find(payload => payload.type === "llm.request") as Extract<AppToShellPayload, { type: "llm.request" }>;
-    expect(llmRequest.prompt).toContain("Rewrite the behavioral history");
-    expect(llmRequest.prompt).toContain("New ephemeral interactions");
+    expect(request.mock.calls.every(([payload]) => payload.type === "jev.request")).toBe(true);
+    expect(document.querySelector("itsalive-history")).toBeNull();
     observer.destroy();
   });
   it("does not evaluate pointerdown and click as separate actions", async () => {
     const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.1); });
     const button = document.body.appendChild(document.createElement("button"));
-    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, historyRewriteInterval: 40 });
+    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true });
 
     button.dispatchEvent(new Event("pointerdown", { bubbles: true }));
     button.click();
@@ -156,7 +131,6 @@ describe("continuous interaction observation", () => {
     button.textContent = "Check answer";
     const observer = installInteractionObserver({ request } as never, {
       acceptUntrustedForTest: true,
-      historyRewriteInterval: 40,
       repeatIdleMs: 100,
       repeatWindowMs: 1_000,
     });
@@ -177,20 +151,19 @@ describe("continuous interaction observation", () => {
       actionCount: 5,
       coalescedCount: 3,
       documentChangeCount: 0,
-      likelyBenign: false,
-      frustrationSignal: true,
     });
+    expect(aggregate.state.pattern).not.toHaveProperty("likelyBenign");
+    expect(aggregate.state.pattern).not.toHaveProperty("frustrationSignal");
     observer.destroy();
   });
 
-  it("suppresses frustration boosting for intentional rapid media-style controls", async () => {
+  it("does not classify repeat intent inside the runtime", async () => {
     vi.useFakeTimers();
     const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.2); });
     const button = document.body.appendChild(document.createElement("button"));
-    button.textContent = "Hear chord";
+    button.setAttribute("aria-label", "Hear chord");
     const observer = installInteractionObserver({ request } as never, {
       acceptUntrustedForTest: true,
-      historyRewriteInterval: 40,
       repeatIdleMs: 100,
       repeatWindowMs: 1_000,
     });
@@ -205,24 +178,19 @@ describe("continuous interaction observation", () => {
     await vi.advanceTimersByTimeAsync(100);
 
     const aggregate = request.mock.calls[1]![0] as Extract<AppToShellPayload, { type: "jev.request" }>;
-    expect(aggregate.state.pattern).toMatchObject({
-      actionCount: 5,
-      likelyBenign: true,
-      frustrationSignal: false,
-    });
+    expect(aggregate.state.pattern).toMatchObject({ actionCount: 5, documentChangeCount: 0 });
+    expect(aggregate.state.pattern).not.toHaveProperty("likelyBenign");
+    expect(aggregate.state.pattern).not.toHaveProperty("frustrationSignal");
     observer.destroy();
   });
 
-  it("does not trigger a behavioral-history rewrite for one coalesced five-click burst", async () => {
+  it("coalesces repeat traffic without issuing any runtime LLM request", async () => {
     vi.useFakeTimers();
-    const request = vi.fn(async (payload: AppToShellPayload) => payload.type === "llm.request"
-      ? { type: "llm.response", result: "rewritten" }
-      : { type: "jev.response", probability: .2, escalated: false });
+    const request = vi.fn((payload: AppToShellPayload) => { void payload; return response(.2); });
     const button = document.body.appendChild(document.createElement("button"));
     button.textContent = "Check";
     const observer = installInteractionObserver({ request } as never, {
       acceptUntrustedForTest: true,
-      historyRewriteInterval: 3,
       repeatIdleMs: 100,
       repeatWindowMs: 1_000,
     });
@@ -236,8 +204,8 @@ describe("continuous interaction observation", () => {
     }
     await vi.advanceTimersByTimeAsync(100);
 
-    expect(request.mock.calls.filter(([payload]) => payload.type === "jev.request")).toHaveLength(2);
-    expect(request.mock.calls.filter(([payload]) => payload.type === "llm.request")).toHaveLength(0);
+    expect(request.mock.calls).toHaveLength(2);
+    expect(request.mock.calls.every(([payload]) => payload.type === "jev.request")).toBe(true);
     observer.destroy();
   });
 
@@ -398,7 +366,7 @@ describe("privacy and bounded work", () => {
     const resolvers: Array<(value: unknown) => void> = [];
     const request = vi.fn((payload: unknown) => { void payload; return new Promise(resolve => resolvers.push(resolve)); });
     const buttons = Array.from({ length: 4 }, () => document.body.appendChild(document.createElement("button")));
-    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, maxInFlight: 1, historyRewriteInterval: 40 });
+    const observer = installInteractionObserver({ request } as never, { acceptUntrustedForTest: true, maxInFlight: 1 });
     for (const button of buttons) button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     await Promise.resolve();
     expect(request).toHaveBeenCalledOnce();

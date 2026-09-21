@@ -23,6 +23,7 @@ export interface AgentProgress { phase: AgentProgressPhase; turn: number; step?:
 export interface RunOptions {
   appId: string;
   appPrompt: string;
+  behaviorSummary?: string;
   trigger: string;
   model: ModelConfig;
   credential?: Credential;
@@ -56,7 +57,7 @@ const outsideUiCount = Array.from(document.body.childNodes).filter(node => {
   if (node === root || node.nodeType === Node.COMMENT_NODE) return false;
   if (node.nodeType === Node.TEXT_NODE) return Boolean(node.textContent?.trim());
   if (!(node instanceof Element)) return false;
-  return !node.matches('[data-app-runtime], itsalive-history, script, style, link, template, noscript');
+  return !node.matches('[data-app-runtime], script, style, link, template, noscript');
 }).length;
 return {
   rootHtml: root?.innerHTML ?? null,
@@ -125,7 +126,7 @@ export class AgentRunner {
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
+          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, behaviorSummary: options.behaviorSummary, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
           options.onContext?.({ estimatedInputTokens: context.estimatedInputTokens, maxContextTokens: options.model.maxContextTokens });
           console.info('Context', {

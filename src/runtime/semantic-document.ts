@@ -44,7 +44,7 @@ function addText(target: Element, text: string, owner: Document, budget: Budget)
 }
 
 function project(source: Element, owner: Document, budget: Budget, depth = 0, parent?: Element): Element | null {
-  if (OMIT.has(source.tagName) || source.hasAttribute("data-app-runtime") || source.localName === "svg" || source.localName === "itsalive-history") return null;
+  if (OMIT.has(source.tagName) || source.hasAttribute("data-app-runtime") || source.localName === "svg") return null;
   if (budget.nodes >= MAX_NODES || depth > MAX_DEPTH) { budget.truncated = true; return null; }
   budget.nodes++;
   const meaningful = custom(source) || SEMANTIC_NATIVE.has(source.tagName) || source === source.ownerDocument.documentElement || source === source.ownerDocument.body || source.children.length > 0 || Boolean(source.textContent?.trim());
