@@ -78,6 +78,10 @@ export class BehaviorTracker {
     };
   }
 
+  hasRewriteBatch(appId: string): boolean {
+    return (this.apps.get(appId)?.rewriteQueue.length ?? 0) >= this.rewriteInterval;
+  }
+
   takeRewriteBatch(appId: string): BehavioralSample[] | undefined {
     const state = this.apps.get(appId);
     if (!state || state.rewriteQueue.length < this.rewriteInterval) return undefined;
