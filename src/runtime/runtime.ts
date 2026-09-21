@@ -78,6 +78,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (response.error) throw new Error(response.error.message);
     return response.results ?? [];
   } });
+  const logApi = Object.freeze({ get: async (query: { level?: "debug" | "info" | "warn" | "error"; limit?: number } = {}) => {
+    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "logs.request", ...query });
+    if (response.type !== "logs.response") throw new Error(`Unexpected logs response: ${response.type}`);
+    if (response.error) throw new Error(response.error.message);
+    return response.results ?? [];
+  } });
 
   const runtimeApi: ItsaliveRuntimeApi = Object.freeze({
     apiVersion: 2,
@@ -85,7 +91,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     history,
     agent,
     dom: Object.freeze({ screenshot }),
-    logs: Object.freeze({ get: logs.get }),
+    logs: logApi,
     components: COMPONENTS,
     cron,
     done,
