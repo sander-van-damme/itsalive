@@ -19,6 +19,18 @@ describe("canonical app root", () => {
     expect(document.querySelector("[data-app-runtime]")?.parentElement).toBe(document.body);
   });
 
+  it("discards legacy hidden behavioral-history nodes from restored documents", () => {
+    document.body.innerHTML = `
+      <main id="itsalive-root"><section>App</section></main>
+      <itsalive-history hidden><itsalive-history-summary>legacy summary</itsalive-history-summary></itsalive-history>
+    `;
+
+    ensureCanonicalAppRoot();
+
+    expect(document.querySelector("itsalive-history")).toBeNull();
+    expect(document.getElementById("itsalive-root")?.textContent).toContain("App");
+  });
+
   it("rejects and removes a second top-level app surface without disturbing the existing app", () => {
     document.body.innerHTML = '<main id="itsalive-root"><section data-working>Working app</section></main>';
     const root = document.getElementById("itsalive-root");
