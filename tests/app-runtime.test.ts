@@ -23,6 +23,7 @@ vi.mock("../src/runtime/bridge", () => ({
       state.requests.push(payload);
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
       if (payload.type === "history.request") return { type: "history.response", results: ["match"] };
+      if (payload.type === "logs.request") return { type: "logs.response", results: [{ timestamp: 1, level: "error", source: "app", message: "boom" }] };
       throw new Error(`Unexpected request: ${String(payload.type)}`);
     }
   },
@@ -31,7 +32,7 @@ vi.mock("../src/runtime/bridge", () => ({
 vi.mock("../src/runtime/logs", () => ({
   installLogging: () => {
     const entries: unknown[] = [];
-    return { add: (...entry: unknown[]) => entries.push(entry), get: () => entries, destroy: vi.fn() };
+    return { add: (...entry: unknown[]) => entries.push(entry), destroy: vi.fn() };
   },
 }));
 
@@ -101,7 +102,10 @@ describe("injected app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);
     expect(window.itsalive.cron("daily", "0 8 * * *", () => "fired")).toEqual({ id: "daily", schedule: "0 8 * * *" });
     expect(window.itsalive.dom).toEqual({ screenshot: expect.any(Function) });
-    expect(window.itsalive.logs.get()).toEqual([]);
+    expect(await window.itsalive.logs.get({ level: "error", limit: 10 })).toEqual([
+      { timestamp: 1, level: "error", source: "app", message: "boom" },
+    ]);
+    expect(state.requests.find(request => request.type === "logs.request")).toEqual({ type: "logs.request", level: "error", limit: 10 });
 
     document.getElementById("itsalive-root")!.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
     emit({ type: "execute", code: "return itsalive.apiVersion;", requestId: "version" });
