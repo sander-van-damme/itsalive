@@ -490,17 +490,14 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
 
 async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
   if (behaviorRewriteInFlight.has(appId)) return;
+  const app = apps.find(item => item.id === appId);
+  const key = credential();
+  if (!app || !key) return;
   const batch = behaviorTracker.takeRewriteBatch(appId);
   if (!batch) return;
 
   behaviorRewriteInFlight.add(appId);
   try {
-    const app = apps.find(item => item.id === appId);
-    const key = credential();
-    if (!app || !key) {
-      behaviorTracker.restoreRewriteBatch(appId, batch);
-      return;
-    }
     const result = await registry.generate({
       purpose: 'behavior history rewrite',
       model: await modelConfig(),
@@ -527,6 +524,7 @@ async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
     }, appId);
   } finally {
     behaviorRewriteInFlight.delete(appId);
+    if (behaviorTracker.hasRewriteBatch(appId)) void maybeRewriteBehaviorHistory(appId);
   }
 }
 
