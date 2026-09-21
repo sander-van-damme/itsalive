@@ -425,8 +425,12 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
       await db.documents.put({ appId: activeId, html: message.html, updatedAt: Date.now() });
       break;
     case 'log':
-      runtimeLogWrites = runtimeLogWrites.then(() => log(message.record.level, message.record.source, message.record.message, message.record.details, message.appId));
-      await runtimeLogWrites;
+      runtimeLogWrites = runtimeLogWrites.then(
+        () => log(message.record.level, message.record.source, message.record.message, message.record.details, message.appId),
+        () => log(message.record.level, message.record.source, message.record.message, message.record.details, message.appId),
+      );
+      try { await runtimeLogWrites; }
+      catch (error) { console.warn('[itsalive] Could not persist app runtime log', error); }
       break;
     case 'history.request':
       respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) });
