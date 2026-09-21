@@ -7,6 +7,7 @@ export const conservativeTokenEstimate: TokenCounter = (text) => Math.ceil(new T
 export interface ContextInput {
   model: ModelConfig;
   appPrompt: string;
+  behaviorSummary?: string;
   trigger: string;
   observation?: string;
   environmentObservation?: string;
@@ -30,7 +31,11 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   const count = input.countTokens ?? conservativeTokenEstimate;
   const headroom = input.model.observationHeadroomTokens ?? 1_024;
   const budget = input.model.maxContextTokens - input.model.outputHeadroomTokens - headroom;
-  const mandatory = [section("APP PROMPT", input.appPrompt), section("CURRENT TRIGGER", input.trigger)].join("\n\n");
+  const mandatory = [
+    section("APP PROMPT", input.appPrompt),
+    ...(input.behaviorSummary?.trim() ? [section("CURATED BEHAVIORAL HISTORY", input.behaviorSummary)] : []),
+    section("CURRENT TRIGGER", input.trigger),
+  ].join("\n\n");
   const baseCost = count(SYSTEM_PROMPT) + count(mandatory);
   if (baseCost > budget) throw new Error(`Mandatory context (${baseCost} tokens estimated) exceeds input budget (${budget}); choose a larger-context model or shorten the app prompt/trigger`);
 
