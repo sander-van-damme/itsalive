@@ -1,17 +1,34 @@
-import type { Credential, GenerateRequest, GenerateResult, LlmAdapter } from "./types";
-import { sanitizeDiagnostic } from './diagnostics';
+import { normalizeLlmUsage } from "./llm-trace";
+import type { Credential, GenerateRequest, GenerateResult, LlmAdapter, LlmTraceEvent } from "./types";
+import { sanitizeDiagnostic } from "./diagnostics";
 
 export class ProviderResponseError extends Error {
   constructor(message: string, readonly diagnostic: unknown) {
     super(message);
-    this.name = 'ProviderResponseError';
+    this.name = "ProviderResponseError";
   }
+}
+
+type UsageObserver = (usage: GenerateResult["usage"]) => void;
+type TraceObserver = (event: LlmTraceEvent) => void;
+
+function traceId(): string {
+  return globalThis.crypto?.randomUUID?.() ?? `llm-${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function safeOptions(value: Record<string, unknown> | undefined): Record<string, unknown> | undefined {
+  if (!value) return undefined;
+  const safe = sanitizeDiagnostic(value);
+  return safe && typeof safe === "object" && !Array.isArray(safe) ? safe as Record<string, unknown> : undefined;
 }
 
 export class ProviderRegistry {
   private readonly adapters = new Map<string, LlmAdapter>();
 
-  constructor(private readonly onUsage?: (usage: GenerateResult["usage"]) => void) {}
+  constructor(
+    private readonly onUsage?: UsageObserver,
+    private readonly onTrace?: TraceObserver,
+  ) {}
 
   register(adapter: LlmAdapter): this {
     this.adapters.set(adapter.id, adapter);
@@ -32,26 +49,57 @@ export class ProviderRegistry {
     return this.trace(request, credential, true, onText, onActivity);
   }
 
-  private async trace(request: GenerateRequest, credential: Credential | undefined, streaming: boolean, onText?: (delta: string) => void, onActivity?: () => void): Promise<GenerateResult> {
-    const startedAt = performance.now();
-    const label = request.purpose ?? 'generation';
-    console.groupCollapsed(`[itsalive:llm] ${label} · ${request.model.provider}/${request.model.model}${streaming ? ' · stream' : ''}`);
-    console.info('Request', sanitizeDiagnostic({
+  private emitTrace(event: LlmTraceEvent): void {
+    console.info("Trace", sanitizeDiagnostic(event));
+    try { this.onTrace?.(event); }
+    catch (error) { console.warn("[itsalive:llm] Trace observer failed", sanitizeDiagnostic(error)); }
+  }
+
+  private async trace(
+    request: GenerateRequest,
+    credential: Credential | undefined,
+    streaming: boolean,
+    onText?: (delta: string) => void,
+    onActivity?: () => void,
+  ): Promise<GenerateResult> {
+    const perfStartedAt = performance.now();
+    const startedAt = Date.now();
+    const requestId = traceId();
+    const label = request.purpose ?? "generation";
+    const identity = request.trace ?? {
+      runId: requestId,
+      agentId: requestId,
+      role: "unattributed",
+      profile: "unattributed",
+    };
+    const base = {
+      ...identity,
+      requestId,
       purpose: label,
       provider: request.model.provider,
       model: request.model.model,
+      ...(request.model.options ? { modelOptions: safeOptions(request.model.options) } : {}),
+      streaming,
+      startedAt,
+      ...(request.trace?.turn != null ? { turn: request.trace.turn } : {}),
+      ...(request.trace?.context ? { context: request.trace.context } : {}),
+    };
+
+    console.groupCollapsed(`[itsalive:llm] ${label} · ${request.model.provider}/${request.model.model}${streaming ? " · stream" : ""}`);
+    console.info("Request", sanitizeDiagnostic({
+      ...base,
       systemCharacters: request.system.length,
       messages: request.messages.map(message => ({ role: message.role, characters: message.content.length })),
-      modelOptions: request.model.options,
-      ...(streaming ? { streaming: true } : {}),
     }));
+
     try {
       const adapter = this.get(request.model.provider);
       const result = streaming && adapter.stream
         ? await adapter.stream(request, credential, onText!, onActivity)
         : await adapter.generate(request, credential);
       if (streaming && !adapter.stream && result.text) onText?.(result.text);
-      console.info(`Response (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic({
+      const elapsedMs = Math.round(performance.now() - perfStartedAt);
+      console.info(`Response (${elapsedMs}ms)`, sanitizeDiagnostic({
         textPreview: result.text.slice(0, 500),
         textCharacters: result.text.length,
         usage: result.usage,
@@ -59,14 +107,31 @@ export class ProviderRegistry {
         ...(streaming ? { streaming: Boolean(adapter.stream) } : {}),
       }));
       this.onUsage?.(result.usage);
+      this.emitTrace({
+        ...base,
+        elapsedMs,
+        status: "success",
+        usage: normalizeLlmUsage(result.usage),
+      });
       return result;
     } catch (error) {
-      console.error(`Request failed (${Math.round(performance.now() - startedAt)}ms)`, sanitizeDiagnostic(error instanceof Error ? {
+      const elapsedMs = Math.round(performance.now() - perfStartedAt);
+      const diagnostic = error instanceof Error ? {
         name: error.name,
         message: error.message,
         stack: error.stack,
-        ...('diagnostic' in error ? { diagnostic: error.diagnostic } : {}),
-      } : error));
+        ...("diagnostic" in error ? { diagnostic: error.diagnostic } : {}),
+      } : error;
+      console.error(`Request failed (${elapsedMs}ms)`, sanitizeDiagnostic(diagnostic));
+      this.emitTrace({
+        ...base,
+        elapsedMs,
+        status: "error",
+        usage: normalizeLlmUsage(undefined),
+        error: error instanceof Error
+          ? { name: error.name, message: error.message }
+          : { message: String(error) },
+      });
       throw error;
     } finally {
       console.groupEnd();
@@ -90,11 +155,35 @@ function compactProviderMetadata(raw: unknown): Record<string, unknown> | undefi
   };
 }
 
+interface TokenDetails {
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+  cache_creation_input_tokens?: number;
+  reasoning_tokens?: number;
+}
+
+interface JsonUsage {
+  input_tokens?: number;
+  output_tokens?: number;
+  prompt_tokens?: number;
+  completion_tokens?: number;
+  cost?: number;
+  cached_tokens?: number;
+  cache_write_tokens?: number;
+  prompt_cache_write_tokens?: number;
+  cache_creation_input_tokens?: number;
+  reasoning_tokens?: number;
+  prompt_tokens_details?: TokenDetails;
+  input_tokens_details?: TokenDetails;
+  completion_tokens_details?: TokenDetails;
+  output_tokens_details?: TokenDetails;
+}
+
 interface Json {
   [key: string]: unknown;
   error?: { message?: string };
   choices?: Array<{ message?: { content?: string }; delta?: { content?: string }; finish_reason?: string; native_finish_reason?: string }>;
-  usage?: { input_tokens?: number; output_tokens?: number; prompt_tokens?: number; completion_tokens?: number; cost?: number };
+  usage?: JsonUsage;
 }
 
 interface ChatCompletionBody {
@@ -109,6 +198,31 @@ interface HttpAdapterOptions {
   endpoint: string;
 }
 
+function generationUsage(usage: JsonUsage | undefined): GenerateResult["usage"] {
+  if (!usage) return undefined;
+  return {
+    inputTokens: usage.prompt_tokens ?? usage.input_tokens,
+    cachedInputTokens:
+      usage.prompt_tokens_details?.cached_tokens
+      ?? usage.input_tokens_details?.cached_tokens
+      ?? usage.cached_tokens,
+    cacheWriteTokens:
+      usage.prompt_tokens_details?.cache_write_tokens
+      ?? usage.input_tokens_details?.cache_write_tokens
+      ?? usage.prompt_tokens_details?.cache_creation_input_tokens
+      ?? usage.input_tokens_details?.cache_creation_input_tokens
+      ?? usage.cache_write_tokens
+      ?? usage.prompt_cache_write_tokens
+      ?? usage.cache_creation_input_tokens,
+    outputTokens: usage.completion_tokens ?? usage.output_tokens,
+    reasoningTokens:
+      usage.completion_tokens_details?.reasoning_tokens
+      ?? usage.output_tokens_details?.reasoning_tokens
+      ?? usage.reasoning_tokens,
+    cost: usage.cost,
+  };
+}
+
 async function checkedJson(response: Response): Promise<Json> {
   const body = await response.json().catch(() => ({})) as Json;
   if (!response.ok) {
@@ -118,7 +232,7 @@ async function checkedJson(response: Response): Promise<Json> {
       ...(statusText ? { statusText } : {}),
       body,
     });
-    throw new ProviderResponseError(`Provider request failed (${response.status}${statusText ? ` ${statusText}` : ''})`, diagnostic);
+    throw new ProviderResponseError(`Provider request failed (${response.status}${statusText ? ` ${statusText}` : ""})`, diagnostic);
   }
   return body;
 }
@@ -155,15 +269,7 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
       if (typeof text !== "string") {
         throw new ProviderResponseError("Provider returned no text response", sanitizeDiagnostic(json));
       }
-      return {
-        text,
-        usage: {
-          inputTokens: json.usage?.prompt_tokens ?? json.usage?.input_tokens,
-          outputTokens: json.usage?.completion_tokens ?? json.usage?.output_tokens,
-          cost: json.usage?.cost,
-        },
-        raw: json,
-      };
+      return { text, usage: generationUsage(json.usage), raw: json };
     },
     async stream(request, credential, onText, onActivity) {
       const response = await fetch(options.endpoint, {
@@ -179,7 +285,11 @@ export function createHttpAdapter(options: HttpAdapterOptions): LlmAdapter {
   };
 }
 
-async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta: string) => void, onActivity?: () => void): Promise<GenerateResult> {
+async function readOpenAiStream(
+  body: ReadableStream<Uint8Array>,
+  onText: (delta: string) => void,
+  onActivity?: () => void,
+): Promise<GenerateResult> {
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -205,11 +315,7 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
       text += delta;
       onText(delta);
     }
-    if (json.usage) usage = {
-      inputTokens: json.usage.prompt_tokens ?? json.usage.input_tokens,
-      outputTokens: json.usage.completion_tokens ?? json.usage.output_tokens,
-      cost: json.usage.cost,
-    };
+    if (json.usage) usage = generationUsage(json.usage);
     return false;
   };
 
@@ -232,8 +338,11 @@ async function readOpenAiStream(body: ReadableStream<Uint8Array>, onText: (delta
   return { text, usage, raw: last };
 }
 
-export function createDefaultRegistry(onUsage?: (usage: GenerateResult["usage"]) => void): ProviderRegistry {
-  return new ProviderRegistry(onUsage).register(
+export function createDefaultRegistry(
+  onUsage?: UsageObserver,
+  onTrace?: TraceObserver,
+): ProviderRegistry {
+  return new ProviderRegistry(onUsage, onTrace).register(
     createHttpAdapter({ id: "openrouter", endpoint: "https://openrouter.ai/api/v1/chat/completions" }),
   );
 }
