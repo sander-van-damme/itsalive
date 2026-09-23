@@ -5,6 +5,7 @@ import type { Credential, LlmContextTrace, LlmTraceIdentity, ModelConfig } from 
 import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
 import { createAgentTimeout } from "./run-lifecycle";
+import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
 
 export interface ExecutionResult {
   value?: unknown;
@@ -34,9 +35,10 @@ export interface RunOptions {
   /** Hierarchical identity used to attribute every provider request in this run. */
   trace?: LlmTraceIdentity;
   credential?: Credential;
-  maxTurns?: number;
-  maxDurationMs?: number;
-  idleTimeoutMs?: number;
+  /** Run policy. Turns are telemetry; emergencyTurnCeiling is only a runaway guard. */
+  budget?: Partial<RunBudgetLimits>;
+  /** Future manager/workers may pass a child controller sharing the parent spend ledger. */
+  budgetController?: RunBudgetController;
   executionTimeoutMs?: number;
   maxObservationCharacters?: number;
   countTokens?: TokenCounter;
@@ -50,11 +52,20 @@ export interface RunOptions {
   onContext?: (context: AgentContextDiagnostic) => void;
 }
 
-export interface RunResult { status: "done" | "turn-limit" | "stalled"; message?: string; turns: number }
+export interface RunResult {
+  status: "done" | RunBudgetStopKind;
+  message?: string;
+  turns: number;
+}
 
-export const DEFAULT_AGENT_IDLE_TIMEOUT_MS = 120_000;
-export const DEFAULT_AGENT_MAX_DURATION_MS = 10 * 60_000;
-const MAX_CONSECUTIVE_GENERATION_FAILURES = 3;
+export const DEFAULT_AGENT_RUN_BUDGET: RunBudgetLimits = Object.freeze({
+  idleTimeoutMs: 120_000,
+  maxDurationMs: 10 * 60_000,
+  maxCostUsd: null,
+  maxConsecutiveFailures: 3,
+  stallRepeatLimit: 2,
+  emergencyTurnCeiling: 1_000,
+});
 const PROGRESS_INSPECTION = 'return document.getElementById("itsalive-root")?.outerHTML ?? document.body.innerHTML;';
 const COMPLETION_INSPECTION = `
 const root = document.getElementById("itsalive-root");
@@ -102,8 +113,9 @@ export class AgentRunner {
       console.info('Timing milestone', { milestone, elapsedMs: elapsed });
       return elapsed;
     };
-    const idleTimeoutMs = options.idleTimeoutMs ?? DEFAULT_AGENT_IDLE_TIMEOUT_MS;
-    const maxDurationMs = options.maxDurationMs ?? DEFAULT_AGENT_MAX_DURATION_MS;
+    if (options.budget && options.budgetController) throw new Error("Provide either budget or budgetController, not both");
+    const budget = options.budgetController ?? new RunBudgetController({ ...DEFAULT_AGENT_RUN_BUDGET, ...options.budget });
+    const { idleTimeoutMs, maxDurationMs } = budget.limits;
     let idleDeadline: ReturnType<typeof setTimeout> | undefined;
     const touchProgress = () => {
       if (controller.signal.aborted) return;
@@ -112,11 +124,9 @@ export class AgentRunner {
       idleDeadline = setTimeout(() => controller.abort(createAgentTimeout("idle-timeout")), idleTimeoutMs);
     };
     touchProgress();
-    const safetyDeadline = setTimeout(() => controller.abort(createAgentTimeout("safety-timeout")), maxDurationMs);
-    const maxTurns = options.maxTurns ?? 12;
+    const timeBudgetDeadline = setTimeout(() => controller.abort(createAgentTimeout("time-budget")), maxDurationMs);
     let observation: string | undefined;
     let environmentObservation: string | undefined;
-    let consecutiveGenerationFailures = 0;
     let repeatedLowSignalObservation: string | undefined;
     let repeatedLowSignalState: string | undefined;
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
@@ -124,14 +134,16 @@ export class AgentRunner {
       trigger: sanitizeDiagnostic(options.trigger),
       provider: options.model.provider,
       model: options.model.model,
-      maxTurns,
+      budget: budget.snapshot(),
       trace: options.trace,
     });
     recordMilestone('request-started');
     try {
       if (options.persistTrigger !== false) await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
-      for (let turn = 1; turn <= maxTurns; turn++) {
-        console.groupCollapsed(`[itsalive:agent] Turn ${turn}/${maxTurns}`);
+      for (let turn = 1; ; turn++) {
+        const turnStop = budget.startTurn(turn);
+        if (turnStop) return budgetStopResult(turnStop, turn - 1, budget);
+        console.groupCollapsed(`[itsalive:agent] Turn ${turn}`);
         try {
           if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
           touchProgress();
@@ -231,6 +243,8 @@ export class AgentRunner {
             );
             await executionQueue;
             touchProgress();
+            const costStop = budget.recordUsage(generated.usage?.cost);
+            if (costStop) return budgetStopResult(costStop, turn, budget);
           } catch (error) {
             console.error('Model request failed', diagnosticError(error));
             if (controller.signal.aborted) throw controller.signal.reason ?? error;
@@ -245,22 +259,20 @@ export class AgentRunner {
               commandParser.finish();
               if (streamedCodeError) throw streamedCodeError;
               if (!streamedCommands || !streamedResult) throw new GeneratedCodeError("format", "Model returned no complete streamed commands");
-              consecutiveGenerationFailures = 0;
+              budget.recordSuccess("generation");
             } catch (error) {
               const generatedError = error instanceof GeneratedCodeError
                 ? error
                 : new GeneratedCodeError("format", error instanceof Error ? error.message : String(error));
-              consecutiveGenerationFailures++;
               observation = generatedCodeObservation(generatedError);
+              const failureStop = budget.recordFailure("generation");
               console.warn('Generated command stream rejected', sanitizeDiagnostic({
                 phase: generatedError.phase,
                 message: generatedError.message,
-                consecutiveFailures: consecutiveGenerationFailures,
+                consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
               }));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
-              if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
-                throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
-              }
+              if (failureStop) return budgetStopResult(failureStop, turn, budget);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
@@ -275,22 +287,20 @@ export class AgentRunner {
             try {
               code = extractExecutableJavaScript(generated.text);
               validateExecutableJavaScript(code);
-              consecutiveGenerationFailures = 0;
+              budget.recordSuccess("generation");
             } catch (error) {
               const generatedError = error instanceof GeneratedCodeError
                 ? error
                 : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
-              consecutiveGenerationFailures++;
               observation = generatedCodeObservation(generatedError);
+              const failureStop = budget.recordFailure("generation");
               console.warn('Generated code rejected before execution', sanitizeDiagnostic({
                 phase: generatedError.phase,
                 message: generatedError.message,
-                consecutiveFailures: consecutiveGenerationFailures,
+                consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
               }));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
-              if (consecutiveGenerationFailures >= MAX_CONSECUTIVE_GENERATION_FAILURES) {
-                throw new Error(`Agent produced invalid JavaScript ${consecutiveGenerationFailures} times in a row; stopping to avoid wasting turns. Last error: ${generatedError.message}`);
-              }
+              if (failureStop) return budgetStopResult(failureStop, turn, budget);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
@@ -309,13 +319,20 @@ export class AgentRunner {
           }
 
           if (result.error) {
+            const failureStop = budget.recordFailure("runtime");
             reportProgress(options, "repairing", turn);
             repeatedLowSignalObservation = undefined;
             repeatedLowSignalState = undefined;
-            console.info('Turn outcome', { kind: 'runtime-repair' });
+            budget.clearStall();
+            console.info('Turn outcome', {
+              kind: 'runtime-repair',
+              consecutiveFailures: budget.snapshot().consecutiveFailures.runtime,
+            });
+            if (failureStop) return budgetStopResult(failureStop, turn, budget);
             console.info('A command failed; continuing to next turn for repair');
             continue;
           }
+          budget.recordSuccess("runtime");
 
           if (result.done) {
             reportProgress(options, "verifying", turn);
@@ -333,10 +350,16 @@ export class AgentRunner {
               reportProgress(options, "repairing", turn);
               console.warn('Completion check rejected', sanitizeDiagnostic(completion));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
-              console.info('Turn outcome', { kind: 'verification-repair' });
+              const failureStop = budget.recordFailure("verification");
+              console.info('Turn outcome', {
+                kind: 'verification-repair',
+                consecutiveFailures: budget.snapshot().consecutiveFailures.verification,
+              });
+              if (failureStop) return budgetStopResult(failureStop, turn, budget);
               console.info('Continuing to next turn after incomplete done()');
               continue;
             }
+            budget.recordSuccess("verification");
             const completionMessage = userFacingCompletionMessage(result.message);
             if (completionMessage) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: completionMessage });
             reportProgress(options, "finishing", turn);
@@ -350,12 +373,18 @@ export class AgentRunner {
             if (rawObservation === repeatedLowSignalObservation) {
               const runtimeState = await inspectRuntimeProgress(this.executor, options, controller.signal);
               if (runtimeState && repeatedLowSignalState && runtimeState === repeatedLowSignalState) {
-                const message = 'Repeated verification produced the same low-signal result without changing #itsalive-root. The run stopped early to avoid burning the remaining turn budget.';
-                observation = `${rawObservation}\n\nPlatform diagnostic: ${message}`;
-                await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
-                console.warn('Verification stalled', { turn, kind: 'verification-stall' });
-                return { status: "stalled", message, turns: turn };
+                const stop = budget.recordStall();
+                if (stop) {
+                  const message = 'Repeated verification produced the same low-signal result without changing #itsalive-root.';
+                  observation = `${rawObservation}\n\nPlatform diagnostic: ${message}`;
+                  await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+                  console.warn('Verification stalled', { turn, kind: 'verification-stall', budget: budget.snapshot() });
+                  return budgetStopResult(stop, turn, budget, message);
+                }
+              } else if (repeatedLowSignalState && runtimeState !== repeatedLowSignalState) {
+                budget.clearStall();
               }
+              if (!repeatedLowSignalState) budget.recordStall();
               repeatedLowSignalState = runtimeState;
               const diagnostic = 'Platform diagnostic: this verification returned the same low-signal result again. Do not repeat the same probe. Inspect #itsalive-root or use a different selector/diagnostic before continuing.';
               observation = `${rawObservation}\n\n${diagnostic}`;
@@ -364,10 +393,12 @@ export class AgentRunner {
             } else {
               repeatedLowSignalObservation = rawObservation;
               repeatedLowSignalState = undefined;
+              budget.clearStall();
             }
           } else {
             repeatedLowSignalObservation = undefined;
             repeatedLowSignalState = undefined;
+            budget.clearStall();
           }
           console.info('Turn outcome', { kind: 'construction' });
           console.info('Continuing to next turn');
@@ -375,15 +406,13 @@ export class AgentRunner {
           console.groupEnd();
         }
       }
-      console.warn('Agent turn limit reached', { maxTurns });
-      return { status: "turn-limit", turns: maxTurns };
     } catch (error) {
       console.error('Agent run failed', diagnosticError(error));
       if (controller.signal.aborted) throw controller.signal.reason ?? error;
       throw error;
     } finally {
       if (idleDeadline) clearTimeout(idleDeadline);
-      clearTimeout(safetyDeadline);
+      clearTimeout(timeBudgetDeadline);
       options.signal?.removeEventListener("abort", abort);
       const totalMs = elapsedMs();
       console.info('Timing summary', {
@@ -394,11 +423,22 @@ export class AgentRunner {
         firstCompleteCommandMs,
         firstExecutionMs,
         lastProgressMs: Math.round(lastProgressAt - startedAt),
+        budget: budget.snapshot(),
       });
-      console.info(`Run finished (${totalMs}ms)`, { aborted: controller.signal.aborted });
+      console.info(`Run finished (${totalMs}ms)`, { aborted: controller.signal.aborted, budget: budget.snapshot() });
       console.groupEnd();
     }
   }
+}
+
+function budgetStopResult(
+  status: RunBudgetStopKind,
+  turns: number,
+  budget: RunBudgetController,
+  message = runBudgetMessage(status),
+): RunResult {
+  console.warn('Run budget stop', { status, turns, budget: budget.snapshot() });
+  return { status, message, turns };
 }
 
 const TECHNICAL_COMPLETION = /(?:\b(?:AudioContext|DOM|API|JavaScript|Alpine|Tailwind|IndexedDB|localStorage|event listener|browser API|CSS|HTML)\b|prefers-reduced-motion|confirmation toast|aria-[\w-]+|x-[\w-]+)/i;
