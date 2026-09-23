@@ -110,6 +110,7 @@ export interface LlmTraceEvent extends LlmTraceIdentity {
   modelOptions?: Record<string, unknown>;
   streaming: boolean;
   startedAt: number;
+  endedAt: number;
   elapsedMs: number;
   status: "success" | "error";
   turn?: number;
