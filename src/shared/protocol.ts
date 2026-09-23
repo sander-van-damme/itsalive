@@ -36,7 +36,6 @@ export type BootstrapInitMessage = {
   type: "init";
   appId: string;
   runtimeSource: string;
-  documentHtml?: string;
 };
 
 export type BootstrapErrorMessage = {
@@ -135,18 +134,10 @@ export function createBootstrapReady(appId: string): BootstrapReadyMessage {
   return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "ready", appId };
 }
 
-export function createBootstrapInit(appId: string, runtimeSource: string, documentHtml?: string): BootstrapInitMessage {
+export function createBootstrapInit(appId: string, runtimeSource: string): BootstrapInitMessage {
   if (!isValidAppId(appId)) throw new Error("Invalid app id");
   if (!runtimeSource.trim()) throw new Error("Runtime source must not be empty");
-  if (documentHtml !== undefined && documentHtml.length > MAX_SAVED_DOCUMENT_CHARACTERS) throw new Error("Saved document is too large");
-  return {
-    protocol: BOOTSTRAP_PROTOCOL,
-    version: BOOTSTRAP_VERSION,
-    type: "init",
-    appId,
-    runtimeSource,
-    ...(documentHtml !== undefined ? { documentHtml } : {}),
-  };
+  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "init", appId, runtimeSource };
 }
 
 export function createBootstrapError(appId: string, error: SerializedError): BootstrapErrorMessage {
@@ -165,14 +156,13 @@ export function isBootstrapReadyMessage(value: unknown): value is BootstrapReady
 
 export function isBootstrapInitMessage(value: unknown): value is BootstrapInitMessage {
   return isObject(value)
-    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource", "documentHtml"])
+    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource"])
     && value.protocol === BOOTSTRAP_PROTOCOL
     && value.version === BOOTSTRAP_VERSION
     && value.type === "init"
     && isValidAppId(value.appId)
     && typeof value.runtimeSource === "string"
-    && value.runtimeSource.length > 0
-    && (value.documentHtml === undefined || typeof value.documentHtml === "string" && value.documentHtml.length <= MAX_SAVED_DOCUMENT_CHARACTERS);
+    && value.runtimeSource.length > 0;
 }
 
 export function isBootstrapErrorMessage(value: unknown): value is BootstrapErrorMessage {
