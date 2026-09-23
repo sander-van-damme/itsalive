@@ -9,12 +9,16 @@ export interface InteractionPrompt { id: string; content: string; intentPlacehol
 export interface ResumePrompt { id: string; content: string; actionLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
-export interface UsageValue {
+export interface UsageBucketValue {
   requests: number;
   inputTokens: number;
   outputTokens: number;
   cost?: number;
   costComplete: boolean;
+}
+export interface UsageValue {
+  llm: UsageBucketValue;
+  jev: UsageBucketValue;
   latestContextTokens?: number;
   contextCapacity?: number;
   keyUsage?: number;
@@ -44,7 +48,7 @@ export interface ShellActions {
 const esc = (value: string) => value.replace(/[&<>'"]/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', "'": '&#39;', '"': '&quot;' })[character] ?? character);
 const initials = (name: string) => name.trim().split(/\s+/).slice(0, 2).map(word => word[0]).join('').toUpperCase() || 'IA';
 const compactTokens = (value: number) => value < 1_000 ? String(Math.round(value)) : new Intl.NumberFormat(undefined, { notation: 'compact', maximumFractionDigits: 1 }).format(value);
-const money = (value: number) => String.fromCharCode(36) + (value > 0 && value < 1 ? value.toFixed(4) : value.toFixed(2));
+const money = (value: number) => String.fromCharCode(36) + (value > 0 && value < 0.01 ? value.toFixed(6) : value > 0 && value < 1 ? value.toFixed(4) : value.toFixed(2));
 function resizeComposerTextarea(textarea: HTMLTextAreaElement): void {
   textarea.style.height = 'auto';
   const viewportLimit = Math.max(120, Math.min(260, Math.floor(window.innerHeight * 0.3)));
@@ -68,7 +72,10 @@ export class ShellUI {
   private resumePrompt?: ResumePrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
-  private usage: UsageValue = { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true };
+  private usage: UsageValue = {
+    llm: { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true },
+    jev: { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true },
+  };
   private usageOpen = false;
   private busy = false;
   private agentProgress = '';
@@ -286,38 +293,46 @@ export class ShellUI {
   }
 
   private renderGlobalActions(): string {
-    const sessionTotal = this.usage.inputTokens + this.usage.outputTokens;
-    const tokenLabel = `${compactTokens(sessionTotal)} tok`;
-    const compactCost = this.usage.cost !== undefined ? money(this.usage.cost) : this.usage.requests ? 'price n/a' : '$0.00';
-    const usageLabel = `${tokenLabel} · ${compactCost}`;
-    const usageAria = this.usage.costComplete
-      ? `${tokenLabel}; session cost ${compactCost}`
-      : `${tokenLabel}; known priced cost ${compactCost}; some requests did not report a price`;
+    const meter = (label: 'LLM' | 'JEV', usage: UsageBucketValue) => {
+      const totalTokens = usage.inputTokens + usage.outputTokens;
+      const tokenLabel = `${compactTokens(totalTokens)} tok`;
+      const compactCost = usage.cost !== undefined ? money(usage.cost) : usage.requests ? 'price n/a' : '$0.00';
+      const cost = usage.cost !== undefined ? money(usage.cost) : usage.requests ? 'Not reported' : '$0.00';
+      const aria = usage.costComplete
+        ? `${label}: ${usage.requests.toLocaleString()} requests, ${tokenLabel}, cost ${compactCost}`
+        : `${label}: ${usage.requests.toLocaleString()} requests, ${tokenLabel}, known cost ${compactCost}, some requests did not report a price`;
+      return { totalTokens, tokenLabel, compactCost, cost, aria };
+    };
+    const llm = meter('LLM', this.usage.llm);
+    const jev = meter('JEV', this.usage.jev);
     const context = this.usage.latestContextTokens !== undefined && this.usage.contextCapacity !== undefined
       ? `${compactTokens(this.usage.latestContextTokens)} / ${compactTokens(this.usage.contextCapacity)}`
       : 'Not measured yet';
     const keySpend = this.usage.keyUsage !== undefined ? money(this.usage.keyUsage) : 'Not loaded';
     const remaining = typeof this.usage.keyLimitRemaining === 'number' ? money(this.usage.keyLimitRemaining) : this.usage.keyLimitRemaining === null ? 'No key limit' : 'Not loaded';
-    const cost = this.usage.cost !== undefined ? money(this.usage.cost) : this.usage.requests ? 'Not reported' : '$0.00';
-    const costLabel = this.usage.costComplete ? 'Session cost' : 'Known session cost';
-    const costNote = !this.usage.costComplete && this.usage.requests
-      ? '<p class="usage-note">Some AI requests did not report a price. The known cost is only the priced portion of this session.</p>'
-      : '';
+    const costNotes = [
+      !this.usage.llm.costComplete && this.usage.llm.requests ? 'LLM: some requests did not report a price.' : '',
+      !this.usage.jev.costComplete && this.usage.jev.requests ? 'JEV: some decisions did not report a price.' : '',
+    ].filter(Boolean);
     const usagePopover = this.usageOpen ? `<div class="popover usage-popover" data-usage-popover>
-        <strong>OpenRouter usage</strong>
+        <strong>Session usage</strong>
         <dl>
-          <div><dt>This session</dt><dd>${esc(compactTokens(this.usage.inputTokens))} in · ${esc(compactTokens(this.usage.outputTokens))} out</dd></div>
-          <div><dt>${esc(costLabel)}</dt><dd>${esc(cost)}</dd></div>
-          <div><dt>Current context</dt><dd>${esc(context)}</dd></div>
-          <div><dt>Key spend</dt><dd>${esc(keySpend)}</dd></div>
+          <div><dt>LLM</dt><dd>${esc(this.usage.llm.requests.toLocaleString())} req · ${esc(compactTokens(this.usage.llm.inputTokens))} in · ${esc(compactTokens(this.usage.llm.outputTokens))} out · ${esc(llm.cost)}</dd></div>
+          <div><dt>JEV</dt><dd>${esc(this.usage.jev.requests.toLocaleString())} req · ${esc(compactTokens(this.usage.jev.inputTokens))} in · ${esc(compactTokens(this.usage.jev.outputTokens))} out · ${esc(jev.cost)}</dd></div>
+          <div><dt>Current LLM context</dt><dd>${esc(context)}</dd></div>
+          <div><dt>OpenRouter key spend</dt><dd>${esc(keySpend)}</dd></div>
           <div><dt>Key remaining</dt><dd>${esc(remaining)}</dd></div>
         </dl>
-        ${costNote}
+        ${costNotes.length ? `<p class="usage-note">${esc(costNotes.join(' '))}</p>` : ''}
       </div>` : '';
     return `<nav class="global-actions" aria-label="Global controls">
       <button class="icon-button quiet" data-mobile-app type="button" aria-label="View app"><i data-lucide="panel-left" aria-hidden="true"></i><span>App</span></button>
       <div class="usage-anchor">
-        <button class="usage-button ${this.usageOpen ? 'active' : ''}" data-usage type="button" aria-label="OpenRouter usage: ${esc(usageAria)}" aria-expanded="${this.usageOpen}"><i data-lucide="circle-gauge" aria-hidden="true"></i><span>${esc(usageLabel)}</span></button>
+        <button class="usage-button ${this.usageOpen ? 'active' : ''}" data-usage type="button" aria-label="OpenRouter usage: ${esc(llm.aria)}; ${esc(jev.aria)}" aria-expanded="${this.usageOpen}">
+          <i data-lucide="circle-gauge" aria-hidden="true"></i>
+          <span class="usage-meter" data-usage-llm><strong>LLM</strong> ${esc(llm.tokenLabel)} · ${esc(llm.compactCost)}</span>
+          <span class="usage-meter" data-usage-jev><strong>JEV</strong> ${esc(jev.tokenLabel)} · ${esc(jev.compactCost)}</span>
+        </button>
         ${usagePopover}
       </div>
       <button class="icon-button quiet ${this.view === 'settings' ? 'active' : ''}" data-settings type="button" aria-label="Settings"><i data-lucide="settings" aria-hidden="true"></i><span>Settings</span></button>

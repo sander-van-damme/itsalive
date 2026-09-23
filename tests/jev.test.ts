@@ -8,8 +8,8 @@ const jsonResponse = (body: unknown, status = 200) => new Response(JSON.stringif
 
 describe("OpenRouter Jev adapter", () => {
   it("uses the decisions contract and normalizes a realistic Noul answer", async () => {
-    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => { void url; void init; return jsonResponse({ model: JEV_MODEL, answers: { requires_llm_attention: { type: "noul", noul: .82 } }, usage: { input_tokens: 71, output_tokens: 0 } }); });
-    await expect(new OpenRouterJevAdapter(fetcher as typeof fetch).evaluate({ state }, credential)).resolves.toEqual({ probability: .82, usage: { inputTokens: 71 } });
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => { void url; void init; return jsonResponse({ model: JEV_MODEL, answers: { requires_llm_attention: { type: "noul", noul: .82 } }, usage: { input_tokens: 71, output_tokens: 3, cost: 0.000002982 } }); });
+    await expect(new OpenRouterJevAdapter(fetcher as typeof fetch).evaluate({ state }, credential)).resolves.toEqual({ probability: .82, usage: { inputTokens: 71, outputTokens: 3, cost: 0.000002982 } });
     expect(fetcher).toHaveBeenCalledWith(OPENROUTER_DECISIONS_URL, expect.objectContaining({ method: "POST", headers: expect.objectContaining({ authorization: "Bearer sk-or-test" }) }));
     expect(JSON.parse(String(fetcher.mock.calls[0]![1]!.body))).toMatchObject({ model: "~typesafe/jev-latest", state, questions: { requires_llm_attention: { type: "noul" } } });
   });

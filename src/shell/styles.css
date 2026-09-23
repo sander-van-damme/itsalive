@@ -95,10 +95,11 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .global-actions .icon-button span { display: none; }
 .global-actions [data-mobile-app] { display: none; }
 .usage-anchor { position: relative; margin-right: auto; min-width: 0; }
-.usage-button { min-height: 34px; max-width: 180px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-variant-numeric: tabular-nums; }
+.usage-button { min-height: 34px; max-width: 270px; padding: 6px 8px; border: 1px solid var(--border); border-radius: 999px; display: inline-flex; align-items: center; gap: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; font-variant-numeric: tabular-nums; }
 .usage-button:hover, .usage-button.active { background: var(--soft); color: var(--text); }
 .usage-button svg { width: 14px; height: 14px; flex: 0 0 auto; }
 .usage-button span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-button .usage-meter + .usage-meter { padding-left: 6px; border-left: 1px solid var(--border); }
 .popover.usage-popover { top: auto; bottom: calc(100% + 8px); left: 0; width: min(290px, calc(100vw - 32px)); max-height: min(420px, calc(100dvh - 90px)); overflow-y: auto; padding: 12px; }
 .usage-popover > strong { display: block; margin-bottom: 9px; font-size: 13px; }
 .usage-popover dl { margin: 0; display: grid; gap: 7px; }

@@ -1,7 +1,7 @@
 import type { GenerateResult } from "./types";
 import type { OpenRouterKeyInfo } from "./openrouter-account";
 
-export interface SessionUsageState {
+export interface UsageBucketState {
   requests: number;
   inputTokens: number;
   outputTokens: number;
@@ -10,12 +10,22 @@ export interface SessionUsageState {
   unpricedRequests: number;
 }
 
-export interface SessionUsageSnapshot {
+export interface SessionUsageState {
+  llm: UsageBucketState;
+  jev: UsageBucketState;
+}
+
+export interface UsageBucketSnapshot {
   requests: number;
   inputTokens: number;
   outputTokens: number;
   cost?: number;
   costComplete: boolean;
+}
+
+export interface SessionUsageSnapshot {
+  llm: UsageBucketSnapshot;
+  jev: UsageBucketSnapshot;
   latestContextTokens?: number;
   contextCapacity?: number;
   keyUsage?: number;
@@ -23,48 +33,68 @@ export interface SessionUsageSnapshot {
   keyLimitRemaining?: number | null;
 }
 
+type MeterUsage = { inputTokens?: number; outputTokens?: number; cost?: number };
+
 function finiteNonNegative(value: unknown): number | undefined {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : undefined;
 }
 
+function emptyBucket(): UsageBucketState {
+  return { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, unpricedRequests: 0 };
+}
+
+function restoreBucket(initial?: Partial<UsageBucketState>): UsageBucketState {
+  if (!initial) return emptyBucket();
+  return {
+    requests: Math.floor(finiteNonNegative(initial.requests) ?? 0),
+    inputTokens: finiteNonNegative(initial.inputTokens) ?? 0,
+    outputTokens: finiteNonNegative(initial.outputTokens) ?? 0,
+    knownCost: finiteNonNegative(initial.knownCost) ?? 0,
+    pricedRequests: Math.floor(finiteNonNegative(initial.pricedRequests) ?? 0),
+    unpricedRequests: Math.floor(finiteNonNegative(initial.unpricedRequests) ?? 0),
+  };
+}
+
+function record(bucket: UsageBucketState, usage?: MeterUsage): void {
+  bucket.requests++;
+  bucket.inputTokens += finiteNonNegative(usage?.inputTokens) ?? 0;
+  bucket.outputTokens += finiteNonNegative(usage?.outputTokens) ?? 0;
+  const cost = finiteNonNegative(usage?.cost);
+  if (cost === undefined) bucket.unpricedRequests++;
+  else {
+    bucket.knownCost += cost;
+    bucket.pricedRequests++;
+  }
+}
+
+function snapshotBucket(bucket: UsageBucketState): UsageBucketSnapshot {
+  return {
+    requests: bucket.requests,
+    inputTokens: bucket.inputTokens,
+    outputTokens: bucket.outputTokens,
+    ...(bucket.pricedRequests > 0 ? { cost: bucket.knownCost } : {}),
+    costComplete: bucket.unpricedRequests === 0,
+  };
+}
+
 export class SessionUsageTracker {
-  private requests = 0;
-  private inputTokens = 0;
-  private outputTokens = 0;
-  private knownCost = 0;
-  private pricedRequests = 0;
-  private unpricedRequests = 0;
+  private llm: UsageBucketState;
+  private jev: UsageBucketState;
   private latestContextTokens?: number;
   private contextCapacity?: number;
   private keyInfo?: OpenRouterKeyInfo;
 
   constructor(initial?: Partial<SessionUsageState>) {
-    if (!initial) return;
-    this.requests = Math.floor(finiteNonNegative(initial.requests) ?? 0);
-    this.inputTokens = finiteNonNegative(initial.inputTokens) ?? 0;
-    this.outputTokens = finiteNonNegative(initial.outputTokens) ?? 0;
-    this.knownCost = finiteNonNegative(initial.knownCost) ?? 0;
-    this.pricedRequests = Math.floor(finiteNonNegative(initial.pricedRequests) ?? 0);
-    this.unpricedRequests = Math.floor(finiteNonNegative(initial.unpricedRequests) ?? 0);
+    this.llm = restoreBucket(initial?.llm);
+    this.jev = restoreBucket(initial?.jev);
   }
 
-  recordGeneration(usage: GenerateResult["usage"]): void {
-    this.requests++;
-    this.inputTokens += finiteNonNegative(usage?.inputTokens) ?? 0;
-    this.outputTokens += finiteNonNegative(usage?.outputTokens) ?? 0;
-    const cost = finiteNonNegative(usage?.cost);
-    if (cost === undefined) this.unpricedRequests++;
-    else {
-      this.knownCost += cost;
-      this.pricedRequests++;
-    }
+  recordLlmGeneration(usage: GenerateResult["usage"]): void {
+    record(this.llm, usage);
   }
 
-  recordUnpricedUsage(usage?: { inputTokens?: number; outputTokens?: number }): void {
-    this.requests++;
-    this.inputTokens += finiteNonNegative(usage?.inputTokens) ?? 0;
-    this.outputTokens += finiteNonNegative(usage?.outputTokens) ?? 0;
-    this.unpricedRequests++;
+  recordJevDecision(usage?: MeterUsage): void {
+    record(this.jev, usage);
   }
 
   setContext(inputTokens: number, capacity: number): void {
@@ -75,12 +105,8 @@ export class SessionUsageTracker {
   setKeyInfo(info: OpenRouterKeyInfo): void { this.keyInfo = info; }
 
   reset(): void {
-    this.requests = 0;
-    this.inputTokens = 0;
-    this.outputTokens = 0;
-    this.knownCost = 0;
-    this.pricedRequests = 0;
-    this.unpricedRequests = 0;
+    this.llm = emptyBucket();
+    this.jev = emptyBucket();
     this.latestContextTokens = undefined;
     this.contextCapacity = undefined;
     this.keyInfo = undefined;
@@ -88,22 +114,15 @@ export class SessionUsageTracker {
 
   state(): SessionUsageState {
     return {
-      requests: this.requests,
-      inputTokens: this.inputTokens,
-      outputTokens: this.outputTokens,
-      knownCost: this.knownCost,
-      pricedRequests: this.pricedRequests,
-      unpricedRequests: this.unpricedRequests,
+      llm: { ...this.llm },
+      jev: { ...this.jev },
     };
   }
 
   snapshot(): SessionUsageSnapshot {
     return {
-      requests: this.requests,
-      inputTokens: this.inputTokens,
-      outputTokens: this.outputTokens,
-      ...(this.pricedRequests > 0 ? { cost: this.knownCost } : {}),
-      costComplete: this.unpricedRequests === 0,
+      llm: snapshotBucket(this.llm),
+      jev: snapshotBucket(this.jev),
       ...(this.latestContextTokens !== undefined ? { latestContextTokens: this.latestContextTokens } : {}),
       ...(this.contextCapacity !== undefined ? { contextCapacity: this.contextCapacity } : {}),
       ...(this.keyInfo?.usage !== undefined ? { keyUsage: this.keyInfo.usage } : {}),

@@ -143,14 +143,11 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('[data-model-context]')?.textContent).toContain('1,000,000 tokens');
   });
 
-  it('shows session spend, context, and key usage as separate usage concepts', () => {
+  it('shows independent LLM and JEV usage meters with context and key usage', () => {
     const { ui, callbacks } = mounted();
     ui.setUsage({
-      requests: 4,
-      inputTokens: 12_000,
-      outputTokens: 3_000,
-      cost: 0.0123,
-      costComplete: false,
+      llm: { requests: 4, inputTokens: 12_000, outputTokens: 3_000, cost: 0.0123, costComplete: false },
+      jev: { requests: 96, inputTokens: 198_693, outputTokens: 0, cost: 0.008345, costComplete: true },
       latestContextTokens: 4_200,
       contextCapacity: 1_000_000,
       keyUsage: 2.5,
@@ -158,26 +155,36 @@ describe('ShellUI workspace', () => {
     });
 
     const button = document.querySelector<HTMLButtonElement>('[data-usage]')!;
-    expect(button.textContent).toContain('tok');
-    expect(button.textContent).toContain('$0.0123');
+    expect(document.querySelector('[data-usage-llm]')?.textContent).toContain('LLM');
+    expect(document.querySelector('[data-usage-llm]')?.textContent).toContain('$0.0123');
+    expect(document.querySelector('[data-usage-jev]')?.textContent).toContain('JEV');
+    expect(document.querySelector('[data-usage-jev]')?.textContent).toContain('$0.008345');
+    expect(button.getAttribute('aria-label')).toContain('LLM: 4 requests');
+    expect(button.getAttribute('aria-label')).toContain('JEV: 96 requests');
     expect(button.getAttribute('aria-label')).toContain('some requests did not report a price');
-    expect(button.getAttribute('aria-label')).not.toContain('+');
     button.click();
 
     expect(callbacks.refreshUsage).toHaveBeenCalledOnce();
     const popover = document.querySelector('[data-usage-popover]')!;
-    expect(popover.textContent).toContain('This session');
-    expect(popover.textContent).toContain('Known session cost');
+    expect(popover.textContent).toContain('Session usage');
+    expect(popover.textContent).toContain('LLM');
+    expect(popover.textContent).toContain('4 req');
+    expect(popover.textContent).toContain('JEV');
+    expect(popover.textContent).toContain('96 req');
     expect(popover.textContent).toContain('$0.0123');
-    expect(popover.textContent).toContain('Some AI requests did not report a price');
-    expect(popover.textContent).toContain('Current context');
-    expect(popover.textContent).toContain('Key spend');
+    expect(popover.textContent).toContain('$0.008345');
+    expect(popover.textContent).toContain('LLM: some requests did not report a price');
+    expect(popover.textContent).toContain('Current LLM context');
+    expect(popover.textContent).toContain('OpenRouter key spend');
     expect(popover.textContent).toContain('Key remaining');
   });
 
   it('closes the usage disclosure when another shell menu opens', () => {
     const { ui } = mounted();
-    ui.setUsage({ requests: 1, inputTokens: 100, outputTokens: 20, costComplete: false });
+    ui.setUsage({
+      llm: { requests: 1, inputTokens: 100, outputTokens: 20, costComplete: false },
+      jev: { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true },
+    });
     document.querySelector<HTMLButtonElement>('[data-usage]')!.click();
     expect(document.querySelector('[data-usage-popover]')).not.toBeNull();
 

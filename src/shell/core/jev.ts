@@ -35,7 +35,17 @@ export class OpenRouterJevAdapter implements DecisionModel {
     const probability = answer?.noul;
     if (typeof probability !== "number" || !Number.isFinite(probability) || probability < 0 || probability > 1) throw new Error("Jev provider returned a malformed Noul probability");
     const usage = body.usage as Record<string, unknown> | undefined;
-    return { probability, ...(typeof usage?.input_tokens === "number" ? { usage: { inputTokens: usage.input_tokens } } : {}) };
+    const inputTokens = typeof usage?.input_tokens === "number" ? usage.input_tokens : undefined;
+    const outputTokens = typeof usage?.output_tokens === "number" ? usage.output_tokens : undefined;
+    const cost = typeof usage?.cost === "number" ? usage.cost : undefined;
+    const normalizedUsage = inputTokens !== undefined || outputTokens !== undefined || cost !== undefined
+      ? {
+          ...(inputTokens !== undefined ? { inputTokens } : {}),
+          ...(outputTokens !== undefined ? { outputTokens } : {}),
+          ...(cost !== undefined ? { cost } : {}),
+        }
+      : undefined;
+    return { probability, ...(normalizedUsage ? { usage: normalizedUsage } : {}) };
   }
 }
 
