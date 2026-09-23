@@ -111,7 +111,7 @@ SURROUNDING RECENT INTERACTIONS
 ${JSON.stringify([...recent.values()].sort((a, b) => a.seq - b.seq), null, 2)}
 
 NEWEST SEMANTIC DOCUMENT
-${events.at(-1)?.document ?? ""}`;
+${(events.at(-1)?.document ?? "").slice(0, 12_000)}`;
 }
 
 export class ReactionBatcher {
