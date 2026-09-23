@@ -38,35 +38,46 @@ const RUNTIME_ASSETS: readonly RuntimeAsset[] = [
   { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.12.0/highlight.min.js", integrity: "sha512-gzqHAlI1hVdzJ4wiQj/MkppDr6zgEdCoBsrXKRidcaZsSPvNQ3Fy5p7PpMt/8mltxTxMHj1Ur5NWbJdqIfpxgA==" },
 ] as const;
 
-const BUILDING_STYLE = `
+export const BUILDING_STYLE = `
 [x-cloak] { display: none !important; }
 :is(#itsalive-root[data-itsalive-building], #itsalive-root [data-itsalive-building]) {
   position: relative;
   isolation: isolate;
 }
 :is(#itsalive-root[data-itsalive-building], #itsalive-root [data-itsalive-building])::after {
-  content: "Building…";
+  content: "";
   position: absolute;
   inset: 0;
   z-index: 2147483646;
-  display: grid;
-  place-items: center;
-  min-height: 80px;
-  background: color-mix(in srgb, Canvas 58%, transparent);
-  color: CanvasText;
-  backdrop-filter: blur(4px) saturate(.8);
-  -webkit-backdrop-filter: blur(4px) saturate(.8);
-  font: 600 13px/1.2 ui-sans-serif, system-ui, sans-serif;
-  letter-spacing: .01em;
+  min-height: 48px;
+  background:
+    linear-gradient(135deg,
+      color-mix(in srgb, Canvas 18%, transparent),
+      color-mix(in srgb, CanvasText 4%, transparent));
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, CanvasText 10%, transparent);
+  border-radius: inherit;
   pointer-events: none;
 }
-@media (prefers-reduced-motion: no-preference) {
+:is(#itsalive-root [data-itsalive-build-state="queued"])::after {
+  opacity: .68;
+}
+:is(#itsalive-root [data-itsalive-build-state="building"],
+    #itsalive-root [data-itsalive-build-state="repairing"],
+    #itsalive-root [data-itsalive-build-state="verifying"])::after {
+  opacity: .46;
+}
+:is(#itsalive-root [data-itsalive-build-state="failed"],
+    #itsalive-root [data-itsalive-build-state="blocked"])::after {
+  opacity: .26;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, CanvasText 24%, transparent);
+}
+@media (prefers-reduced-motion: reduce) {
   :is(#itsalive-root[data-itsalive-building], #itsalive-root [data-itsalive-building])::after {
-    animation: itsalive-building-pulse 1.4s ease-in-out infinite alternate;
+    animation: none !important;
+    transition: none !important;
   }
 }
-@keyframes itsalive-building-pulse { to { opacity: .72; } }
-`;
+`
 
 function installBuildingStyle(ownerDocument: Document): void {
   if (ownerDocument.querySelector("style[data-itsalive-runtime-style]")) return;
