@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, technicalIntentBlock, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, technicalIntentBlock, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
@@ -27,11 +27,15 @@ function loadSessionUsageState(): Partial<SessionUsageState> | undefined {
   }
 }
 const sessionUsage = new SessionUsageTracker(loadSessionUsageState());
+const llmTraceTracker = new LlmTraceTracker();
 function persistSessionUsage(): void {
   try { sessionStorage.setItem(SESSION_USAGE_STORAGE_KEY, JSON.stringify(sessionUsage.state())); }
   catch (error) { console.warn('[itsalive] Could not persist session usage', error); }
 }
-const registry = createDefaultRegistry(usage => { sessionUsage.recordLlmGeneration(usage); persistSessionUsage(); });
+const registry = createDefaultRegistry(
+  usage => { sessionUsage.recordLlmGeneration(usage); persistSessionUsage(); },
+  event => llmTraceTracker.record(event),
+);
 let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
@@ -155,6 +159,10 @@ const ui = new ShellUI(root, {
     await diagnostics.write('info', 'logging', 'Diagnostic export requested');
     const usage = sessionUsage.snapshot();
     await diagnostics.write('info', 'usage', 'Session usage snapshot', { llm: usage.llm, jev: usage.jev });
+    await diagnostics.write('info', 'llm-trace', 'LLM trace rollups', {
+      requests: llmTraceTracker.snapshot().length,
+      rollups: llmTraceTracker.rollups(),
+    });
     await diagnostics.flush();
     const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
     if (!logs.length) throw new Error('Diagnostic storage returned no log entries');
@@ -343,16 +351,15 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
   }
   try {
     const model = await modelConfig();
-    const generated = await registry.generate(
-      buildUserIntentRequest({
-        appPrompt: app.prompt,
-        behaviorSummary: app.behaviorSummary,
-        userText,
-        source,
-        ...(telemetrySummary?.trim() ? { telemetrySummary } : {}),
-      }, model, intentController.signal),
-      credential(),
-    );
+    const intentRequest = buildUserIntentRequest({
+      appPrompt: app.prompt,
+      behaviorSummary: app.behaviorSummary,
+      userText,
+      source,
+      ...(telemetrySummary?.trim() ? { telemetrySummary } : {}),
+    }, model, intentController.signal);
+    intentRequest.trace = createLlmTraceIdentity('user-intent', 'user-intent-default', { scope: appId });
+    const generated = await registry.generate(intentRequest, credential());
     syncUsage();
     const decision = parseUserIntentDecision(generated.text, {
       appPrompt: app.prompt,
@@ -431,8 +438,9 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
   running = true;
   ui.setBusy(true);
   ui.setAgentProgress(isInitialBuild ? 'Preparing the first version…' : 'Applying your change…');
+  const trace: LlmTraceIdentity = createLlmTraceIdentity('coding-agent', 'coding-default', { scope: app.id });
   try {
-    await log('info', `agent:${app.id}`, 'Agent run started', { technicalIntent: trigger }, app.id);
+    await log('info', `agent:${app.id}`, 'Agent run started', { technicalIntent: trigger, trace }, app.id);
     const runner = new AgentRunner(db, registry, executor);
     const model = await modelConfig();
     const result = await runner.run({
@@ -442,6 +450,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       trigger,
       persistTrigger: false,
       model,
+      trace,
       credential: credential(),
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
@@ -451,7 +460,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
         syncUsage();
       },
     });
-    await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns }, app.id);
+    await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns, trace }, app.id);
     if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
     if (result.status === 'stalled') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I stopped a repeated verification loop because it was no longer changing the app. Your changes were preserved; ask me to continue if you want another repair attempt.' });
   } catch (error) {
@@ -460,6 +469,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       kind: failure.kind,
       resumable: failure.resumable,
       technical: failure.technical,
+      trace,
       error,
     }, app.id);
     if (failure.kind === 'app-switch') {
@@ -636,6 +646,7 @@ async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
       model: await modelConfig(),
       system: 'Curate a compact behavioral summary for future application reasoning. Return only the summary.',
       messages: [{ role: 'user', content: behaviorRewritePrompt(app.behaviorSummary, batch) }],
+      trace: createLlmTraceIdentity('behavior-summary', 'behavior-summary-default', { scope: appId }),
     }, key);
     syncUsage();
     const summary = result.text.trim().slice(0, MAX_BEHAVIOR_SUMMARY_CHARACTERS);
@@ -776,7 +787,13 @@ async function fireDueSchedules(): Promise<void> {
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
   try {
-    const result = await registry.generate({ purpose: 'app itsalive.llm.ask', model: await modelConfig(), system: 'Respond helpfully to this request from the active app.', messages: [{ role: 'user', content: message.prompt }] }, credential());
+    const result = await registry.generate({
+      purpose: 'app itsalive.llm.ask',
+      model: await modelConfig(),
+      system: 'Respond helpfully to this request from the active app.',
+      messages: [{ role: 'user', content: message.prompt }],
+      trace: createLlmTraceIdentity('runtime-llm', 'runtime-llm-default', { scope: message.appId }),
+    }, credential());
     syncUsage();
     respond(message, { type: 'llm.response', result: result.text });
   } catch (error) { respond(message, { type: 'llm.response', error: serializeError(error) }); }
@@ -800,7 +817,10 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
     fetchOpenRouterContextCapacity(OPENROUTER_MODEL, key),
     fetchOpenRouterKeyInfo(key),
   ]);
-  if (apiKey !== settings.apiKey) sessionUsage.reset();
+  if (apiKey !== settings.apiKey) {
+    sessionUsage.reset();
+    llmTraceTracker.reset();
+  }
   modelContextTokens = capacity;
   sessionUsage.setKeyInfo(keyInfo);
   return { apiKey, historyContextTokens };
