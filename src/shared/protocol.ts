@@ -126,7 +126,7 @@ export function isAppDocumentSnapshot(value: unknown): value is AppDocumentSnaps
     if (!isObject(script.attributes) || Object.keys(script.attributes).length > 50 || !Object.entries(script.attributes).every(([name, attributeValue]) => name.length <= 100 && typeof attributeValue === "string" && attributeValue.length <= 10_000)) return false;
     if (typeof script.content !== "string") return false;
   }
-  return appDocumentCharacterSize(value as AppDocumentSnapshot) <= MAX_SAVED_DOCUMENT_CHARACTERS;
+  return appDocumentCharacterSize(value as unknown as AppDocumentSnapshot) <= MAX_SAVED_DOCUMENT_CHARACTERS;
 }
 
 export function createBootstrapReady(appId: string): BootstrapReadyMessage {
