@@ -67,7 +67,7 @@ export function buildUserIntentRequest(input: UserIntentInput, model: ModelConfi
 
 function stripJsonFence(value: string): string {
   const trimmed = value.trim();
-  const fenced = trimmed.match(/^\`\`\`(?:json)?\s*([\s\S]*?)\s*\`\`\`$/i);
+  const fenced = trimmed.match(/^```(?:json)?\\s*([\\s\\S]*?)\\s*```$/i);
   return fenced ? fenced[1]!.trim() : trimmed;
 }
 
