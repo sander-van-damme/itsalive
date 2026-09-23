@@ -51,7 +51,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     const content = section("NEW ENVIRONMENT OBSERVATION", truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count));
     if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
   }
-  const candidates = historyCandidates(input.history, input.trigger, input.observation);
+  const candidates = historyCandidates(input.history, input.observation);
   const historyBudget = Math.min(
     Math.max(0, budget - used),
     Math.max(0, input.model.historyContextTokens),
@@ -81,7 +81,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   };
 }
 
-function historyCandidates(history: HistoryEntry[], trigger: string, observation?: string): HistoryEntry[] {
+function historyCandidates(history: HistoryEntry[], observation?: string): HistoryEntry[] {
   const excluded = new Set<number>();
   const newestMatching = (predicate: (entry: HistoryEntry) => boolean) => {
     for (let index = history.length - 1; index >= 0; index--) {
