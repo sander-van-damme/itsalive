@@ -1,5 +1,6 @@
 export * from "./agent-runner";
 export * from "./agent-context";
+export * from "./agent-profiles";
 export * from "./app-metadata";
 export * from "./app-creation";
 export * from "./app-deletion";
