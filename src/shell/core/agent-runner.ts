@@ -359,6 +359,10 @@ export class AgentRunner {
               await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
+              const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
+              const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+              if (routeStop) return routeStop;
+              if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
@@ -388,6 +392,10 @@ export class AgentRunner {
               await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
+              const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
+              const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+              if (routeStop) return routeStop;
+              if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
