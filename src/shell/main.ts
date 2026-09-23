@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -600,8 +600,7 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     if (!key) throw new Error('OpenRouter is not configured');
     jevSessionStats.requests++;
     jevSessionStats.coalescedEvents += state.pattern?.coalescedCount ?? 0;
-    const decisionModel: DecisionModel = new OpenRouterJevAdapter();
-    const result = await decisionModel.evaluate({ state, signal: controller.signal }, key);
+    const result = await new OpenRouterJevAdapter().evaluate({ state, signal: controller.signal }, key);
     if (!current()) return;
     const usage = result.usage;
     jevSessionStats.inputTokens += usage?.inputTokens ?? 0;
@@ -615,16 +614,20 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const decision = decideJevEscalation(result.probability, state);
     if (decision.escalated) jevSessionStats.escalations++;
     await log('info', 'jev', 'Interaction decision', {
+      ...compactJevDecisionTelemetry({
+        correlationId: message.requestId,
+        decisionKind: 'interaction-wake',
+        questionSetVersion: JEV_INTERACTION_QUESTION_SET_VERSION,
+        result,
+        policy: { threshold: JEV_ESCALATION_THRESHOLD, patternSignalFloor: JEV_PATTERN_SIGNAL_FLOOR },
+        action: decision.escalated ? 'escalate-to-confirmation' : 'no-op',
+      }),
       probability: result.probability,
-      threshold: JEV_ESCALATION_THRESHOLD,
       escalated: decision.escalated,
       escalationReason: decision.reason,
       pattern: state.pattern,
       durationMs: Math.round(performance.now() - startedAt),
       snapshotCharacters: state.document.length,
-      inputTokens: usage?.inputTokens,
-      outputTokens: usage?.outputTokens,
-      cost: usage?.cost,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
