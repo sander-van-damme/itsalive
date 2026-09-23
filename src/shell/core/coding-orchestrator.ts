@@ -11,8 +11,14 @@ import { createLlmTraceIdentity } from "./llm-trace";
 import type { Credential, LlmTraceIdentity } from "./types";
 
 export interface CodingManagerSharedContracts {
+  ref: string;
   design: string[];
   state: string[];
+}
+
+export interface WorkerBudgetOverride {
+  maxDurationMs?: number;
+  maxCostUsd?: number | null;
 }
 
 export interface CodingWorkerTask {
@@ -23,6 +29,9 @@ export interface CodingWorkerTask {
   dependencies: string[];
   capabilityIds: PlatformCapabilityId[];
   profile: "component-worker" | "repair-worker";
+  sharedContractRef: string;
+  parallel: boolean;
+  budget?: WorkerBudgetOverride;
 }
 
 export interface CodingManagerPlan {
@@ -74,6 +83,10 @@ const MANAGER_PLAN_SYSTEM = [
   "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
   "- Reuse an existing component id from APP OUTLINE when it clearly owns the work; otherwise choose a new stable id.",
   "- Dependencies may reference only earlier task ids.",
+  "- shared.ref is a compact version/reference. Every task must repeat that exact value in sharedContractRef.",
+  "- Set parallel=true only when the task can safely overlap other dependency-ready tasks on a different scope.",
+  "- Use parallel=false for manager-ordered/shared-state-sensitive work.",
+  "- Worker budget overrides may only tighten maxDurationMs/maxCostUsd; profile defaults remain the ceiling.",
   "- component-worker is the default. Use repair-worker only when the task is primarily diagnosis/repair.",
   "- capabilityIds may contain only platform capability ids relevant to that worker.",
   "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
@@ -100,7 +113,8 @@ const WORKER_SYSTEM = [
   "",
   "HANDOFF",
   "On success, the final done payload must be JSON only with:",
-  "{\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[]}",
+  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[],\"requestedScope\":\"#broader-scope-or-empty\"}",
+  "If the task needs ownership outside ASSIGNED SCOPE, do not edit there. Return status=blocked with requestedScope and explain the dependency in unresolved.",
   "Keep it compact."
 ].join("\n");
 
@@ -256,6 +270,7 @@ function managerVerificationInput(
 ): string {
   return [
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
+    "SHARED CONTRACT REF\n" + plan.shared.ref,
     "SHARED DESIGN\n" + list(plan.shared.design),
     "SHARED STATE\n" + list(plan.shared.state),
     "WORKER HANDOFFS\n" + (handoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
@@ -274,11 +289,26 @@ function workerTaskInput(
     "GOAL\n" + task.goal,
     "ASSIGNED SCOPE\n" + task.scope,
     "ACCEPTANCE CRITERIA\n" + list(task.acceptanceCriteria),
+    "SHARED CONTRACT REF\n" + task.sharedContractRef,
     "SHARED DESIGN CONTRACT\n" + list(plan.shared.design),
     "SHARED STATE CONTRACT\n" + list(plan.shared.state),
     "DEPENDENCY HANDOFFS\n" + (dependencyHandoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
     "RELEVANT PLATFORM CAPABILITIES\n" + platformCapabilityHelp(task.capabilityIds),
   ].join("\n\n");
+}
+
+function parseWorkerBudget(value: unknown): WorkerBudgetOverride | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const budget: WorkerBudgetOverride = {};
+  if (typeof record.maxDurationMs === "number" && Number.isFinite(record.maxDurationMs) && record.maxDurationMs > 0) {
+    budget.maxDurationMs = Math.floor(record.maxDurationMs);
+  }
+  if (record.maxCostUsd === null) budget.maxCostUsd = null;
+  else if (typeof record.maxCostUsd === "number" && Number.isFinite(record.maxCostUsd) && record.maxCostUsd > 0) {
+    budget.maxCostUsd = record.maxCostUsd;
+  }
+  return Object.keys(budget).length ? budget : undefined;
 }
 
 function list(values: readonly string[]): string {
@@ -310,7 +340,11 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
   const sharedRecord = sharedRaw && typeof sharedRaw === "object" && !Array.isArray(sharedRaw)
     ? sharedRaw as Record<string, unknown>
     : {};
+  const sharedRef = typeof sharedRecord.ref === "string" && TASK_ID.test(sharedRecord.ref.trim())
+    ? sharedRecord.ref.trim()
+    : "shared-v1";
   const shared: CodingManagerSharedContracts = {
+    ref: sharedRef,
     design: stringArray(sharedRecord.design, 16),
     state: stringArray(sharedRecord.state, 16),
   };
@@ -334,6 +368,12 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
     }
     const profile = task.profile === "repair-worker" ? "repair-worker" : "component-worker";
     const capabilityIds = stringArray(task.capabilityIds, 12).filter(isPlatformCapabilityId);
+    const sharedContractRef = typeof task.sharedContractRef === "string" && task.sharedContractRef.trim()
+      ? task.sharedContractRef.trim()
+      : shared.ref;
+    if (sharedContractRef !== shared.ref) throw new Error("Coding manager task " + id + " references a different shared contract");
+    const parallel = task.parallel === true;
+    const budget = parseWorkerBudget(task.budget);
     seen.add(id);
     return {
       id,
@@ -343,6 +383,9 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
       dependencies,
       capabilityIds,
       profile,
+      sharedContractRef,
+      parallel,
+      ...(budget ? { budget } : {}),
     };
   });
   return { shared, tasks };
@@ -385,13 +428,18 @@ function workerHandoff(
         const record = parsed as Record<string, unknown>;
         const unresolved = stringArray(record.unresolved, 12);
         const sharedContractChanges = stringArray(record.sharedContractChanges, 12);
+        const requestedScope = typeof record.requestedScope === "string" && record.requestedScope.trim()
+          ? record.requestedScope.trim()
+          : undefined;
+        const handoffStatus = record.status === "blocked" || requestedScope ? "blocked" : "done";
         return {
-          status: "done",
+          status: handoffStatus,
           scope: task.scope,
           changed: stringArray(record.changed, 12),
           verified: stringArray(record.verified, 12),
           ...(unresolved.length ? { unresolved } : {}),
           ...(sharedContractChanges.length ? { sharedContractChanges } : {}),
+          ...(requestedScope ? { requestedScope } : {}),
         };
       }
     } catch {
