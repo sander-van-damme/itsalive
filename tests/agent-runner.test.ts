@@ -68,7 +68,7 @@ describe('AgentRunner lifecycle', () => {
       onContext: context => contexts.push(context),
     });
 
-    const request = providers.generate.mock.calls[0]?.[0] as {
+    const request = (providers.generate.mock.calls as unknown[][])[0]?.[0] as {
       trace?: {
         runId: string;
         agentId: string;
