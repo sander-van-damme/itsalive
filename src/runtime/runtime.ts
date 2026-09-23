@@ -5,7 +5,7 @@ import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
 import type { ItsaliveRuntimeApi } from "./globals";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
-import { MAX_SAVED_DOCUMENT_CHARACTERS, serializeError } from "../shared";
+import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 import { COMPONENTS } from "./components";
@@ -113,11 +113,11 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (!message) return;
     if (bridge.acceptResponse(message)) return;
     if (message.type === "document.snapshot") {
-      const html = serializeAppDocument();
-      if (html.length > MAX_SAVED_DOCUMENT_CHARACTERS) {
+      const document = serializeAppDocument();
+      if (appDocumentCharacterSize(document) > MAX_SAVED_DOCUMENT_CHARACTERS) {
         bridge.post({ type: "execution.error", error: serializeError(new Error("Saved document is too large")) }, message.requestId);
       } else {
-        bridge.post({ type: "result", result: { html } }, message.requestId);
+        bridge.post({ type: "result", result: { document } }, message.requestId);
       }
     } else if (message.type === "execute") {
       try {
@@ -153,14 +153,17 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
   bridge.addMessageListener(listener);
 
-  if (options.documentHtml) await restoreAppDocument(options.documentHtml);
+  const saved = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "document.request" }, 10_000);
+  if (saved.type !== "document.response") throw new Error(`Unexpected document response: ${saved.type}`);
+  if (saved.error) throw new Error(saved.error.message);
+  if (saved.document) await restoreAppDocument(saved.document);
   ensureCanonicalAppRoot();
-  const autosave = installAutosave(html => {
-    if (html.length > MAX_SAVED_DOCUMENT_CHARACTERS) {
+  const autosave = installAutosave(document => {
+    if (appDocumentCharacterSize(document) > MAX_SAVED_DOCUMENT_CHARACTERS) {
       logs.add("error", [`Saved document exceeds ${MAX_SAVED_DOCUMENT_CHARACTERS} characters; snapshot was not persisted`], "bridge");
       return;
     }
-    bridge.post({ type: "document.save", html });
+    bridge.post({ type: "document.save", document });
   }, options.autosaveDelay);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
