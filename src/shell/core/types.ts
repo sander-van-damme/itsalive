@@ -1,3 +1,5 @@
+import type { AppScriptSnapshot } from "../../shared";
+
 export type HistoryRole = "user" | "assistant" | "agent" | "observation" | "system";
 
 export interface AppRecord {
@@ -13,6 +15,7 @@ export interface AppRecord {
 export interface AppDocumentRecord {
   appId: string;
   html: string;
+  scripts: AppScriptSnapshot[];
   updatedAt: number;
 }
 

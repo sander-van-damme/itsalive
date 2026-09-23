@@ -27,7 +27,6 @@ export class RuntimeSession {
 
   private port: MessagePort | undefined;
   private runtimeSource: string | undefined;
-  private documentHtml: string | undefined;
   private bootstrapAccepted = false;
   private readonly pending = new Map<string, PendingRequest>();
 
@@ -60,7 +59,7 @@ export class RuntimeSession {
     this.port.addEventListener("message", this.onPortMessage as EventListener);
     this.port.start();
     this.executor = new PostMessageExecutor(this.port, appId);
-    frameWindow.postMessage(createBootstrapInit(appId, source, this.documentHtml), origin, [channel.port2]);
+    frameWindow.postMessage(createBootstrapInit(appId, source), origin, [channel.port2]);
   };
 
   private readonly onPortMessage = (event: MessageEvent<unknown>) => {
@@ -87,7 +86,7 @@ export class RuntimeSession {
     private readonly onError: (error: Error) => void = () => undefined,
   ) {}
 
-  switchTo(appId: string, origin: string, runtimeSource: string, documentHtml?: string): HTMLIFrameElement {
+  switchTo(appId: string, origin: string, runtimeSource: string): HTMLIFrameElement {
     this.dispose();
     if (!runtimeSource.trim()) throw new Error("Runtime source must not be empty");
 
@@ -100,7 +99,6 @@ export class RuntimeSession {
     this.appId = appId;
     this.origin = new URL(origin).origin;
     this.runtimeSource = runtimeSource;
-    this.documentHtml = documentHtml;
     this.bootstrapAccepted = false;
     this.state = "loading";
 
@@ -109,12 +107,11 @@ export class RuntimeSession {
     return frame;
   }
 
-  reload(documentHtml?: string): void {
+  reload(): void {
     const frame = this.frame;
     const origin = this.origin;
     if (!frame || !origin || this.state === "disposed") throw new Error("App runtime is unavailable");
     this.resetChannel("Runtime reloading");
-    this.documentHtml = documentHtml;
     this.bootstrapAccepted = false;
     this.state = "loading";
     frame.src = origin;
@@ -183,7 +180,6 @@ export class RuntimeSession {
     this.appId = undefined;
     this.origin = undefined;
     this.runtimeSource = undefined;
-    this.documentHtml = undefined;
     this.bootstrapAccepted = false;
     this.state = "disposed";
   }

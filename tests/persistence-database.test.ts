@@ -9,27 +9,45 @@ import { DiagnosticLog, buildDiagnosticExport } from "../src/shell/core/diagnost
 const APP_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("runtime document persistence client", () => {
-  it("serializes durable document state without runtime elements and restores it", async () => {
+  it("separates app setup from markup and hydrates Alpine only after setup is restored", async () => {
     document.documentElement.lang = "en";
-    document.head.innerHTML = '<title>Saved app</title><script data-app-runtime src="/bootstrap.js"></script>';
-    document.body.innerHTML = '<main id="saved"><input value="old"><textarea>old</textarea></main>';
+    document.head.innerHTML = '<title>Saved app</title><script data-app-runtime src="/bootstrap.js"></script><script data-app-setup>window.__restoredSetup = true;</script>';
+    document.body.innerHTML = '<main id="itsalive-root" x-data="restoredApp()"><input value="old"><textarea>old</textarea></main>';
     const input = document.querySelector("input")!;
     const textarea = document.querySelector("textarea")!;
     input.value = "current";
     textarea.value = "current text";
 
-    const html = serializeAppDocument();
-    expect(html).toContain('value="current"');
-    expect(html).toContain("current text");
-    expect(html).not.toContain("bootstrap.js");
+    const snapshot = serializeAppDocument();
+    expect(snapshot.html).toContain('value="current"');
+    expect(snapshot.html).toContain("current text");
+    expect(snapshot.html).not.toContain("bootstrap.js");
+    expect(snapshot.html).not.toContain("data-app-setup");
+    expect(snapshot.scripts).toEqual([
+      expect.objectContaining({ placement: "head", attributes: expect.objectContaining({ "data-app-setup": "" }), content: "window.__restoredSetup = true;" }),
+    ]);
 
+    delete (window as unknown as Record<string, unknown>).__restoredSetup;
     document.title = "Changed";
     document.body.replaceChildren();
-    await restoreAppDocument(html);
+    const order: string[] = [];
+    const target = window as unknown as Record<string, unknown>;
+    target.Alpine = {
+      stopObservingMutations: () => order.push("paused"),
+      startObservingMutations: () => order.push("resumed"),
+      initTree: () => order.push(`hydrated:${String(Boolean(document.querySelector("script[data-app-setup]")))}`),
+    };
+
+    await restoreAppDocument(snapshot);
 
     expect(document.title).toBe("Saved app");
     expect(document.querySelector<HTMLInputElement>("input")?.value).toBe("current");
     expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("current text");
+    expect(order).toEqual(["paused", "hydrated:true", "resumed"]);
+    expect(document.querySelector("script[data-app-setup]")).not.toBeNull();
+    document.querySelector("script[data-app-setup]")?.remove();
+    delete target.Alpine;
+    delete target.__restoredSetup;
   });
 
   it("debounces document snapshots through the supplied shell persistence callback", async () => {
@@ -41,7 +59,7 @@ describe("runtime document persistence client", () => {
     await new Promise(resolve => setTimeout(resolve, 10));
 
     expect(persist).toHaveBeenCalled();
-    expect(String(persist.mock.calls.at(-1)?.[0])).toContain("Updated");
+    expect(persist.mock.calls.at(-1)?.[0]).toMatchObject({ html: expect.stringContaining("Updated"), scripts: [] });
 
     autosave.disconnect();
   });
@@ -81,7 +99,7 @@ describe("shell persistence", () => {
       behaviorSummary: "Prefers fast feedback.",
       behaviorSummaryUpdatedAt: 2,
     });
-    await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", updatedAt: 2 });
+    await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", scripts: [], updatedAt: 2 });
     await db.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "hello" });
     await db.logs.add({ appId: APP_ID, timestamp: 4, level: "info", source: "test", message: "saved" });
     await db.schedules.put({ id: `${APP_ID}:daily`, appId: APP_ID, expression: "0 8 * * *", registeredAt: 5, nextRun: 6 });
@@ -91,7 +109,7 @@ describe("shell persistence", () => {
       name: "Test",
       behaviorSummary: "Prefers fast feedback.",
     });
-    expect(await reloadedShell.documents.get(APP_ID)).toMatchObject({ html: "<!doctype html><main>saved</main>" });
+    expect(await reloadedShell.documents.get(APP_ID)).toMatchObject({ html: "<!doctype html><main>saved</main>", scripts: [] });
     expect(await reloadedShell.history.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.logs.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.schedules.forApp(APP_ID)).toHaveLength(1);
@@ -102,7 +120,7 @@ describe("shell persistence", () => {
     const otherId = "650e8400-e29b-41d4-a716-446655440000";
     for (const id of [APP_ID, otherId]) {
       await db.apps.put({ id, name: id, prompt: "Build", createdAt: 1, updatedAt: 1 });
-      await db.documents.put({ appId: id, html: `<main>${id}</main>`, updatedAt: 2 });
+      await db.documents.put({ appId: id, html: `<main>${id}</main>`, scripts: [], updatedAt: 2 });
       await db.history.add({ appId: id, timestamp: 3, role: "user", kind: "chat", content: id });
       await db.logs.add({ appId: id, timestamp: 4, level: "info", source: "test", message: id });
       await db.schedules.put({ id: `${id}:daily`, appId: id, expression: "0 8 * * *", registeredAt: 5 });
@@ -122,7 +140,7 @@ describe("shell persistence", () => {
     const databaseName = `shell-${crypto.randomUUID()}`;
     const firstShell = new ShellDatabase(databaseName);
     await firstShell.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
-    await firstShell.documents.put({ appId: APP_ID, html: "<main>saved</main>", updatedAt: 2 });
+    await firstShell.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], updatedAt: 2 });
     await firstShell.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "build something" });
 
     const diagnostics = new DiagnosticLog(firstShell, () => APP_ID);
@@ -148,7 +166,7 @@ describe("app deletion cleanup", () => {
   it("forgets shell state before attempting best-effort origin cleanup", async () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
     await db.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
-    await db.documents.put({ appId: APP_ID, html: "<main>saved</main>", updatedAt: 2 });
+    await db.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], updatedAt: 2 });
 
     const cleanup = vi.fn(async () => {
       expect(await db.apps.get(APP_ID)).toBeUndefined();

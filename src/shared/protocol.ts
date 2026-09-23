@@ -6,10 +6,22 @@ export const BOOTSTRAP_PROTOCOL = "itsalive-bootstrap" as const;
 export const BOOTSTRAP_VERSION = 1 as const;
 export const RUNTIME_BOOTSTRAP_KEY = "__itsaliveShellRuntimeInitV1" as const;
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 4 as const;
+export const BRIDGE_VERSION = 5 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
 export const MAX_SAVED_DOCUMENT_CHARACTERS = 5_000_000;
+export const MAX_SAVED_APP_SCRIPTS = 256;
+
+export interface AppScriptSnapshot {
+  placement: "head" | "body";
+  attributes: Record<string, string>;
+  content: string;
+}
+
+export interface AppDocumentSnapshot {
+  html: string;
+  scripts: AppScriptSnapshot[];
+}
 
 export type BootstrapReadyMessage = {
   protocol: typeof BOOTSTRAP_PROTOCOL;
@@ -24,7 +36,6 @@ export type BootstrapInitMessage = {
   type: "init";
   appId: string;
   runtimeSource: string;
-  documentHtml?: string;
 };
 
 export type BootstrapErrorMessage = {
@@ -62,6 +73,7 @@ export interface JevState { interaction: InteractionSnapshot; recentInteractions
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
   | { type: "document.snapshot" }
+  | { type: "document.response"; document?: AppDocumentSnapshot; error?: SerializedError }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
   | { type: "history.response"; results?: unknown[]; error?: SerializedError }
   | { type: "logs.response"; results?: LogRecord[]; error?: SerializedError }
@@ -70,7 +82,8 @@ export type ShellToAppPayload =
 
 export type AppToShellPayload =
   | { type: "result"; result?: unknown; done?: boolean; message?: string }
-  | { type: "document.save"; html: string }
+  | { type: "document.request" }
+  | { type: "document.save"; document: AppDocumentSnapshot }
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
   | { type: "llm.request"; prompt: string }
@@ -89,30 +102,42 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "llm.response", "history.response", "logs.response", "jev.response", "cron.fire"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.save", "wake", "llm.request", "history.request", "logs.request", "jev.request", "log", "cron.register", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "document.response", "llm.response", "history.response", "logs.response", "jev.response", "cron.fire"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.request", "document.save", "wake", "llm.request", "history.request", "logs.request", "jev.request", "log", "cron.register", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
 const hasOnly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key));
+
+export function appDocumentCharacterSize(value: AppDocumentSnapshot): number {
+  let size = value.html.length;
+  for (const script of value.scripts) {
+    size += script.content.length;
+    for (const [name, attributeValue] of Object.entries(script.attributes)) size += name.length + attributeValue.length;
+  }
+  return size;
+}
+
+export function isAppDocumentSnapshot(value: unknown): value is AppDocumentSnapshot {
+  if (!isObject(value) || !hasOnly(value, ["html", "scripts"]) || typeof value.html !== "string" || !Array.isArray(value.scripts) || value.scripts.length > MAX_SAVED_APP_SCRIPTS) return false;
+  for (const script of value.scripts) {
+    if (!isObject(script) || !hasOnly(script, ["placement", "attributes", "content"])) return false;
+    if (script.placement !== "head" && script.placement !== "body") return false;
+    if (!isObject(script.attributes) || Object.keys(script.attributes).length > 50 || !Object.entries(script.attributes).every(([name, attributeValue]) => name.length <= 100 && typeof attributeValue === "string" && attributeValue.length <= 10_000)) return false;
+    if (typeof script.content !== "string") return false;
+  }
+  return appDocumentCharacterSize(value as unknown as AppDocumentSnapshot) <= MAX_SAVED_DOCUMENT_CHARACTERS;
+}
 
 export function createBootstrapReady(appId: string): BootstrapReadyMessage {
   if (!isValidAppId(appId)) throw new Error("Invalid app id");
   return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "ready", appId };
 }
 
-export function createBootstrapInit(appId: string, runtimeSource: string, documentHtml?: string): BootstrapInitMessage {
+export function createBootstrapInit(appId: string, runtimeSource: string): BootstrapInitMessage {
   if (!isValidAppId(appId)) throw new Error("Invalid app id");
   if (!runtimeSource.trim()) throw new Error("Runtime source must not be empty");
-  if (documentHtml !== undefined && documentHtml.length > MAX_SAVED_DOCUMENT_CHARACTERS) throw new Error("Saved document is too large");
-  return {
-    protocol: BOOTSTRAP_PROTOCOL,
-    version: BOOTSTRAP_VERSION,
-    type: "init",
-    appId,
-    runtimeSource,
-    ...(documentHtml !== undefined ? { documentHtml } : {}),
-  };
+  return { protocol: BOOTSTRAP_PROTOCOL, version: BOOTSTRAP_VERSION, type: "init", appId, runtimeSource };
 }
 
 export function createBootstrapError(appId: string, error: SerializedError): BootstrapErrorMessage {
@@ -131,14 +156,13 @@ export function isBootstrapReadyMessage(value: unknown): value is BootstrapReady
 
 export function isBootstrapInitMessage(value: unknown): value is BootstrapInitMessage {
   return isObject(value)
-    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource", "documentHtml"])
+    && hasOnly(value, ["protocol", "version", "type", "appId", "runtimeSource"])
     && value.protocol === BOOTSTRAP_PROTOCOL
     && value.version === BOOTSTRAP_VERSION
     && value.type === "init"
     && isValidAppId(value.appId)
     && typeof value.runtimeSource === "string"
-    && value.runtimeSource.length > 0
-    && (value.documentHtml === undefined || typeof value.documentHtml === "string" && value.documentHtml.length <= MAX_SAVED_DOCUMENT_CHARACTERS);
+    && value.runtimeSource.length > 0;
 }
 
 export function isBootstrapErrorMessage(value: unknown): value is BootstrapErrorMessage {
@@ -157,7 +181,10 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
       !isValidAppId(value.appId) || !isValidId(value.requestId) || typeof value.type !== "string" || !ALL_TYPES.has(value.type)) return false;
   switch (value.type) {
     case "execute": return typeof value.code === "string";
-    case "document.save": return typeof value.html === "string" && value.html.length <= MAX_SAVED_DOCUMENT_CHARACTERS;
+    case "document.request": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId"]);
+    case "document.save": return isAppDocumentSnapshot(value.document);
+    case "document.response": return (value.document === undefined || isAppDocumentSnapshot(value.document))
+      && (value.error === undefined || isSerializedError(value.error));
     case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
     case "history.request": return typeof value.query === "string";
     case "logs.request": return (value.level === undefined || ["debug", "info", "warn", "error"].includes(String(value.level)))

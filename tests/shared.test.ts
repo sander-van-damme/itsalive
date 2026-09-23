@@ -63,25 +63,24 @@ describe("bootstrap protocol", () => {
   it("uses a separate strict one-shot bootstrap envelope", () => {
     expect(BOOTSTRAP_VERSION).toBe(1);
     const ready = createBootstrapReady(APP_ID);
-    const init = createBootstrapInit(APP_ID, "runtime();", "<!doctype html><main>saved</main>");
+    const init = createBootstrapInit(APP_ID, "runtime();");
     const failure = createBootstrapError(APP_ID, serializeError(new Error("boom")));
 
     expect(isBootstrapReadyMessage(ready)).toBe(true);
     expect(isBootstrapInitMessage(init)).toBe(true);
-    expect(init.documentHtml).toContain("saved");
     expect(isBootstrapErrorMessage(failure)).toBe(true);
 
     expect(isBootstrapReadyMessage({ ...ready, extra: true })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, runtimeSource: "" })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, appId: APP_ID.toUpperCase() })).toBe(false);
-    expect(isBootstrapInitMessage({ ...init, documentHtml: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
+    expect(isBootstrapInitMessage({ ...init, documentHtml: "<main>saved</main>" })).toBe(false);
     expect(isBootstrapErrorMessage({ ...failure, version: 2 })).toBe(false);
   });
 });
 
 describe("bridge protocol", () => {
-  it("uses bridge version 4 and recognizes messages by direction", () => {
-    expect(BRIDGE_VERSION).toBe(4);
+  it("uses bridge version 5 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(5);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
@@ -93,12 +92,22 @@ describe("bridge protocol", () => {
     expect(isAppToShellMessage(result)).toBe(true);
   });
 
-  it("validates bounded shell-owned document snapshots", () => {
-    const save = createBridgeMessage(APP_ID, "req_doc123", { type: "document.save", html: "<!doctype html><main>ok</main>" });
+  it("validates split shell-owned document request, save, and response messages", () => {
+    const document = {
+      html: "<!doctype html><html><body><main>ok</main></body></html>",
+      scripts: [{ placement: "body" as const, attributes: { "data-app-setup": "" }, content: "window.setup = true;" }],
+    };
+    const request = createBridgeMessage(APP_ID, "req_doc_get", { type: "document.request" });
+    const save = createBridgeMessage(APP_ID, "req_doc_save", { type: "document.save", document });
+    const response = createBridgeMessage(APP_ID, "req_doc_get", { type: "document.response", document });
+
+    expect(isAppToShellMessage(request)).toBe(true);
     expect(isAppToShellMessage(save)).toBe(true);
-    expect(isShellToAppMessage(save)).toBe(false);
-    expect(isBridgeMessage({ ...save, html: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
-    expect(isBridgeMessage({ ...save, html: 42 })).toBe(false);
+    expect(isShellToAppMessage(response)).toBe(true);
+    expect(isBridgeMessage({ ...request, extra: true })).toBe(false);
+    expect(isBridgeMessage({ ...save, document: { ...document, html: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) } })).toBe(false);
+    expect(isBridgeMessage({ ...save, document: { ...document, scripts: [{ placement: "elsewhere", attributes: {}, content: "" }] } })).toBe(false);
+    expect(isBridgeMessage({ ...response, document: { html: 42, scripts: [] } })).toBe(false);
   });
 
   it("uses the LLM request and response protocol", () => {
@@ -124,14 +133,14 @@ describe("bridge protocol", () => {
   });
 
   it("rejects unused cron fields and runtime statuses", () => {
-    const envelope = { protocol: "itsalive", version: 4, appId: APP_ID, requestId: "req_fields" };
+    const envelope = { protocol: "itsalive", version: 5, appId: APP_ID, requestId: "req_fields" };
     expect(isBridgeMessage({ ...envelope, type: "cron.register", registration: { callbackId: "daily", schedule: "0 8 * * *", description: "unused" } })).toBe(false);
     for (const status of ["booting", "busy", "saving", "error"]) expect(isBridgeMessage({ ...envelope, type: "status", status })).toBe(false);
     expect(isBridgeMessage({ ...envelope, type: "status", status: "ready" })).toBe(true);
   });
 
   it("bounds every Jev bridge field and rejects unexpected payload data", () => {
-    const envelope = { protocol: "itsalive", version: 4, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
+    const envelope = { protocol: "itsalive", version: 5, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
     const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
     const valid = { ...envelope, state: { interaction, document: "<main>ok</main>" } };
     expect(isBridgeMessage(valid)).toBe(true);

@@ -14,7 +14,6 @@ interface RuntimeBootstrapContext {
   appId: string;
   rootOrigin: string;
   port: MessagePort;
-  documentHtml?: string;
 }
 
 const root = rootOrigin(ROOT_DOMAIN, location.protocol === "http:" ? "http:" : "https:");
@@ -55,7 +54,7 @@ try {
       accepted = true;
       window.removeEventListener("message", onMessage);
 
-      const context: RuntimeBootstrapContext = { appId, rootOrigin: root, port, ...(event.data.documentHtml !== undefined ? { documentHtml: event.data.documentHtml } : {}) };
+      const context: RuntimeBootstrapContext = { appId, rootOrigin: root, port };
       Object.defineProperty(window, RUNTIME_BOOTSTRAP_KEY, {
         value: context,
         writable: false,
