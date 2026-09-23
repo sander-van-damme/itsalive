@@ -36,6 +36,7 @@ let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
 let activeRunFinished: Promise<void> | undefined;
+let activeIntent: AbortController | undefined;
 let interpreting = false;
 let connectionTimer: number | undefined;
 let runtimeLogWrites: Promise<void> = Promise.resolve();
@@ -111,7 +112,11 @@ const ui = new ShellUI(root, {
     if (activeId !== targetAppId) return;
     await handleUserFacingInput(content, 'chat');
   },
-  stopAgent: () => { stopActiveRun('user-stop'); },
+  stopAgent: () => {
+    if (!stopActiveRun('user-stop') && activeIntent && !activeIntent.signal.aborted) {
+      activeIntent.abort(new DOMException('Stopped', 'AbortError'));
+    }
+  },
   resumePausedRun: async id => { await resumePausedRun(id); },
   resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
   renameApp: async name => {
@@ -211,6 +216,9 @@ async function refreshApps(select?: string): Promise<void> {
 
 async function selectApp(id: string): Promise<void> {
   if (!apps.some(a => a.id === id)) return;
+  if (activeId !== id && activeIntent && !activeIntent.signal.aborted) {
+    activeIntent.abort(new DOMException('App switched', 'AbortError'));
+  }
   if (activeId !== id && running) {
     ui.setAgentProgress('Pausing work before switching…');
     stopActiveRun('app-switch');
@@ -324,6 +332,8 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
   const userText = content.trim();
   if (!app || !userText || interpreting) return;
   const appId = app.id;
+  const intentController = new AbortController();
+  activeIntent = intentController;
   interpreting = true;
   await appendHistory(db, { appId, role: 'user', kind: 'chat', content: userText });
   if (activeId === appId) {
@@ -340,7 +350,7 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
         userText,
         source,
         ...(telemetrySummary?.trim() ? { telemetrySummary } : {}),
-      }, model),
+      }, model, intentController.signal),
       credential(),
     );
     syncUsage();
@@ -374,12 +384,17 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
     ui.setAgentProgress('Planning your change…');
     await runAgent(technicalIntentBlock(decision.technicalIntent));
   } catch (error) {
-    await log('error', 'intent', 'User intent interpretation failed', {
-      source,
-      error: error instanceof Error ? error.message : String(error),
-    }, appId);
-    if (activeId === appId) ui.showError(error instanceof Error ? error.message : String(error));
+    if (intentController.signal.aborted) {
+      await log('info', 'intent', 'User intent interpretation stopped', { source }, appId);
+    } else {
+      await log('error', 'intent', 'User intent interpretation failed', {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      }, appId);
+      if (activeId === appId) ui.showError(error instanceof Error ? error.message : String(error));
+    }
   } finally {
+    if (activeIntent === intentController) activeIntent = undefined;
     interpreting = false;
     if (!running) {
       ui.setBusy(false);
