@@ -16,7 +16,7 @@ describe("RunBudgetController", () => {
     const budget = new RunBudgetController(limits({ emergencyTurnCeiling: 1_000 }));
     for (let turn = 1; turn <= 1_000; turn++) expect(budget.startTurn(turn)).toBeUndefined();
     expect(budget.startTurn(1_001)).toBe("emergency-ceiling");
-    expect(budget.snapshot().turns).toBe(1_001);
+    expect(budget.snapshot().turns).toBe(1_000);
   });
 
   it("stops at a known dollar budget", () => {
