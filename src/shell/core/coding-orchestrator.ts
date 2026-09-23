@@ -64,6 +64,27 @@ export interface WorkerTimelineEntry {
   status: string;
 }
 
+export type ComponentBuildState =
+  | "queued"
+  | "building"
+  | "repairing"
+  | "verifying"
+  | "ready"
+  | "failed"
+  | "blocked";
+
+export interface CodingLifecycleSummary {
+  phase: "planning" | "working" | "integration-verification";
+  total: number;
+  queued: number;
+  building: number;
+  repairing: number;
+  verifying: number;
+  ready: number;
+  failed: number;
+  blocked: number;
+}
+
 export interface CodingOrchestratorResult {
   status: CodingOrchestratorStatus;
   message?: string;
@@ -86,6 +107,8 @@ export interface CodingOrchestratorOptions {
   maxParallelWorkers?: number;
   consumeEnvironmentObservations?: () => string[];
   onProgress?: (progress: AgentProgress & { workerId?: string; scope?: string }) => void;
+  /** Aggregate component lifecycle, used by shell progress UI. */
+  onLifecycle?: (summary: CodingLifecycleSummary) => void;
   onContext?: (context: AgentContextDiagnostic) => void;
 }
 
@@ -136,7 +159,8 @@ const WORKER_SYSTEM = [
   "Use durable app-authored markup/setup/state. Do not leave behavior dependent on transient command listeners/closures. Keep setup idempotent.",
   "",
   "BUILD STATE",
-  "The assigned component may start data-itsalive-building + inert + aria-busy. Remove those attributes only when this scope is actually usable.",
+  "The shell owns data-itsalive-building, data-itsalive-build-state, data-itsalive-build-owner, inert, and aria-busy on the assigned component root.",
+  "Do not remove or rewrite those root lifecycle attributes. Build and verify the content while the region is inert; the shell reveals it after scoped verification.",
   "",
   "HANDOFF",
   "On success, the final done payload must be JSON only with:",
@@ -188,6 +212,7 @@ export class CodingOrchestrator {
     let workerTurns = 0;
 
     try {
+      options.onLifecycle?.(emptyLifecycleSummary("planning"));
       const initialOutline = await inspectAppOutline(this.executor, options.appId, controller.signal);
       const planned = await this.providers.generate({
         purpose: "coding manager plan",
@@ -203,10 +228,18 @@ export class CodingOrchestrator {
 
       const maxParallelWorkers = normalizeParallelism(options.maxParallelWorkers);
       const uniqueScopes = [...new Set(plan.tasks.map(task => task.scope))];
+      const scopeStates = new Map<string, ComponentBuildState>(uniqueScopes.map(scope => [scope, "queued"]));
+      const reportScopeState = (scope: string, state: ComponentBuildState) => {
+        scopeStates.set(scope, state);
+        const summary = lifecycleSummary(scopeStates, "working");
+        console.info("Component lifecycle", { parentRunId: options.managerTrace.runId, scope, state, summary });
+        options.onLifecycle?.(summary);
+      };
       for (const scope of uniqueScopes) {
         if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
         await ensureWorkerScope(this.executor, options.appId, scope, controller.signal);
       }
+      options.onLifecycle?.(lifecycleSummary(scopeStates, "working"));
       const scopeConflicts = await inspectScopeConflicts(this.executor, options.appId, uniqueScopes, controller.signal);
       const handoffByTask = new Map<string, WorkerHandoff>();
       const pending = new Set(plan.tasks.map(task => task.id));
@@ -215,7 +248,12 @@ export class CodingOrchestrator {
       while (pending.size) {
         if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
 
-        propagateBlockedDependencies(plan, pending, handoffByTask);
+        const newlyBlocked = propagateBlockedDependencies(plan, pending, handoffByTask);
+        for (const taskId of newlyBlocked) {
+          const task = plan.tasks.find(candidate => candidate.id === taskId)!;
+          await setWorkerScopeState(this.executor, options.appId, task.scope, "blocked", controller.signal);
+          reportScopeState(task.scope, "blocked");
+        }
 
         const ready = plan.tasks.filter(task =>
           pending.has(task.id)
@@ -234,6 +272,8 @@ export class CodingOrchestrator {
               unresolved: ["Blocked by dependency: " + (blockers.join(", ") || "unknown dependency")],
             });
             pending.delete(task.id);
+            await setWorkerScopeState(this.executor, options.appId, task.scope, "blocked", controller.signal);
+            reportScopeState(task.scope, "blocked");
           }
           break;
         }
@@ -264,6 +304,8 @@ export class CodingOrchestrator {
             task.dependencies.map(id => handoffByTask.get(id)).filter((value): value is WorkerHandoff => Boolean(value)),
             rootBudget,
             controller.signal,
+            reportScopeState,
+            !plan.tasks.some(other => pending.has(other.id) && other.id !== task.id && other.scope === task.scope),
           )
         ));
         if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
@@ -280,6 +322,19 @@ export class CodingOrchestrator {
 
         const rootStop = rootBudget.currentStopReason();
         if (rootStop) {
+          for (const task of plan.tasks) {
+            if (!pending.has(task.id)) continue;
+            handoffByTask.set(task.id, {
+              status: "blocked",
+              scope: task.scope,
+              changed: [],
+              verified: [],
+              unresolved: ["Run stopped before this component could finish: " + rootStop],
+            });
+            pending.delete(task.id);
+            await setWorkerScopeState(this.executor, options.appId, task.scope, "blocked", controller.signal);
+            reportScopeState(task.scope, "blocked");
+          }
           const ordered = orderedHandoffs(plan, handoffByTask);
           return {
             ...stopResult(rootStop, ordered, workerTurns, timeline),
@@ -290,6 +345,7 @@ export class CodingOrchestrator {
 
       handoffs.push(...orderedHandoffs(plan, handoffByTask));
 
+      options.onLifecycle?.(lifecycleSummary(scopeStates, "integration-verification"));
       const finalOutline = await inspectAppOutline(this.executor, options.appId, controller.signal);
       const verified = await this.providers.generate({
         purpose: "coding manager integration verification",
@@ -337,6 +393,8 @@ export class CodingOrchestrator {
     dependencyHandoffs: WorkerHandoff[],
     rootBudget: RunBudgetController,
     parentSignal: AbortSignal,
+    reportScopeState: (scope: string, state: ComponentBuildState) => void,
+    revealOnSuccess: boolean,
   ): Promise<WorkerRunOutcome> {
     const profile = await options.resolveProfile(task.profile);
     const workerTrace = createLlmTraceIdentity(profile.role, profile.id, {
@@ -354,8 +412,20 @@ export class CodingOrchestrator {
     let turns = 0;
     let status = "worker-error";
     let handoff: WorkerHandoff;
+    let stateWrites = Promise.resolve();
+    let queuedState: ComponentBuildState = "building";
+    const queueState = (state: ComponentBuildState) => {
+      if (queuedState === state) return;
+      queuedState = state;
+      reportScopeState(task.scope, state);
+      stateWrites = stateWrites
+        .then(() => setWorkerScopeState(this.executor, options.appId, task.scope, state, parentSignal))
+        .catch(error => console.warn("Component lifecycle update failed", { taskId: task.id, scope: task.scope, state, error }));
+    };
 
     try {
+      await setWorkerScopeState(this.executor, options.appId, task.scope, "building", parentSignal);
+      reportScopeState(task.scope, "building");
       const isolatedHistory = new IsolatedAgentHistory();
       const runner = new AgentRunner(this.db, this.providers, this.executor);
       const result = await runner.run({
@@ -373,13 +443,24 @@ export class CodingOrchestrator {
         credential: options.credential,
         signal: child.signal,
         consumeEnvironmentObservations: options.consumeEnvironmentObservations,
-        onProgress: progress => options.onProgress?.({ ...progress, workerId: task.id, scope: task.scope }),
+        onProgress: progress => {
+          options.onProgress?.({ ...progress, workerId: task.id, scope: task.scope });
+          const state = componentStateForProgress(progress.phase);
+          if (state) queueState(state);
+        },
         onContext: options.onContext,
       });
       turns = result.turns;
+      await stateWrites;
       handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
       status = handoff.status === "done" ? result.status : "blocked";
+      const terminalState: ComponentBuildState = handoff.status === "done"
+        ? (revealOnSuccess ? "ready" : "queued")
+        : handoff.status === "failed" ? "failed" : "blocked";
+      await setWorkerScopeState(this.executor, options.appId, task.scope, terminalState, parentSignal);
+      reportScopeState(task.scope, terminalState);
     } catch (error) {
+      await stateWrites;
       status = child.signal.aborted ? "worker-cancelled" : "worker-error";
       handoff = {
         status: "failed",
@@ -388,6 +469,10 @@ export class CodingOrchestrator {
         verified: [],
         unresolved: [error instanceof Error ? error.message : String(error)],
       };
+      const terminalState: ComponentBuildState = child.signal.aborted ? "blocked" : "failed";
+      try { await setWorkerScopeState(this.executor, options.appId, task.scope, terminalState, parentSignal); }
+      catch (stateError) { console.warn("Could not persist terminal component state", { taskId: task.id, state: terminalState, stateError }); }
+      reportScopeState(task.scope, terminalState);
     } finally {
       parentSignal.removeEventListener("abort", relayParent);
       if (this.activeWorkers.get(task.id) === child) this.activeWorkers.delete(task.id);
@@ -409,6 +494,37 @@ export class CodingOrchestrator {
     console.info("Worker lifecycle", timeline);
     return { task, handoff, turns, timeline };
   }
+}
+
+function emptyLifecycleSummary(phase: CodingLifecycleSummary["phase"]): CodingLifecycleSummary {
+  return {
+    phase,
+    total: 0,
+    queued: 0,
+    building: 0,
+    repairing: 0,
+    verifying: 0,
+    ready: 0,
+    failed: 0,
+    blocked: 0,
+  };
+}
+
+function lifecycleSummary(
+  states: ReadonlyMap<string, ComponentBuildState>,
+  phase: CodingLifecycleSummary["phase"],
+): CodingLifecycleSummary {
+  const summary = emptyLifecycleSummary(phase);
+  summary.total = states.size;
+  for (const state of states.values()) summary[state]++;
+  return summary;
+}
+
+function componentStateForProgress(phase: AgentProgress["phase"]): ComponentBuildState | undefined {
+  if (phase === "repairing") return "repairing";
+  if (phase === "verifying" || phase === "finishing") return "verifying";
+  if (phase === "generating" || phase === "executing") return "building";
+  return undefined;
 }
 
 function normalizeParallelism(value: number | undefined): number {
@@ -460,7 +576,8 @@ function propagateBlockedDependencies(
   plan: CodingManagerPlan,
   pending: Set<string>,
   handoffs: Map<string, WorkerHandoff>,
-): void {
+): string[] {
+  const blocked: string[] = [];
   let changed = true;
   while (changed) {
     changed = false;
@@ -479,9 +596,11 @@ function propagateBlockedDependencies(
         unresolved: ["Blocked by dependency: " + blockers.join(", ")],
       });
       pending.delete(task.id);
+      blocked.push(task.id);
       changed = true;
     }
   }
+  return blocked;
 }
 
 function orderedHandoffs(plan: CodingManagerPlan, handoffs: ReadonlyMap<string, WorkerHandoff>): WorkerHandoff[] {
@@ -730,6 +849,7 @@ async function inspectAppOutline(executor: AppExecutor, appId: string, signal: A
     '    id: element.id || null,',
     '    component: element.getAttribute("data-itsalive-component"),',
     '    building: element.hasAttribute("data-itsalive-building"),',
+    '    buildState: element.getAttribute("data-itsalive-build-state"),',
     '    textPreview: (element.textContent ?? "").replace(/\\s+/g, " ").trim().slice(0, 180),',
     '  })),',
     '} : { exists: false, childCount: 0, children: [] };',
@@ -737,6 +857,39 @@ async function inspectAppOutline(executor: AppExecutor, appId: string, signal: A
   const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
   if (result.error) throw new Error("Could not inspect app outline: " + result.error.message);
   return result.value;
+}
+
+async function setWorkerScopeState(
+  executor: AppExecutor,
+  appId: string,
+  scope: string,
+  state: ComponentBuildState,
+  signal: AbortSignal,
+): Promise<void> {
+  const code = [
+    'const component = document.querySelector(' + JSON.stringify(scope) + ');',
+    'if (!component) return { ok: false, reason: "missing-scope" };',
+    'const state = ' + JSON.stringify(state) + ';',
+    'if (state === "ready") {',
+    '  component.removeAttribute("data-itsalive-building");',
+    '  component.removeAttribute("data-itsalive-build-state");',
+    '  component.removeAttribute("data-itsalive-build-owner");',
+    '  component.removeAttribute("inert");',
+    '  component.removeAttribute("aria-busy");',
+    '} else {',
+    '  component.setAttribute("data-itsalive-build-owner", "shell");',
+    '  component.setAttribute("data-itsalive-build-state", state);',
+    '  component.setAttribute("data-itsalive-building", "");',
+    '  component.setAttribute("inert", "");',
+    '  if (state === "failed" || state === "blocked") component.removeAttribute("aria-busy");',
+    '  else component.setAttribute("aria-busy", "true");',
+    '}',
+    'return { ok: true, state };',
+  ].join("\n");
+  const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
+  if (result.error) throw new Error("Could not set worker scope " + scope + " to " + state + ": " + result.error.message);
+  const value = result.value as { ok?: boolean; reason?: string } | undefined;
+  if (!value?.ok) throw new Error("Could not set worker scope " + scope + " to " + state + ": " + (value?.reason ?? "unknown error"));
 }
 
 async function ensureWorkerScope(
@@ -757,10 +910,12 @@ async function ensureWorkerScope(
     '  component.setAttribute("data-itsalive-component", ' + JSON.stringify(id) + ');',
     '  root.append(component);',
     '}',
+    'component.setAttribute("data-itsalive-build-owner", "shell");',
+    'component.setAttribute("data-itsalive-build-state", "queued");',
     'component.setAttribute("data-itsalive-building", "");',
     'component.setAttribute("inert", "");',
     'component.setAttribute("aria-busy", "true");',
-    'return { ok: true };',
+    'return { ok: true, state: "queued" };',
   ].join("\n");
   const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
   if (result.error) throw new Error("Could not prepare worker scope " + scope + ": " + result.error.message);

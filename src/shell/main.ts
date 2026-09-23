@@ -1,7 +1,8 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
+import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
@@ -198,17 +199,6 @@ if (settings.apiKey) {
 window.addEventListener('unhandledrejection', event => { void log('error', 'shell', String(event.reason), event.reason); });
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
 setInterval(() => { void fireDueSchedules(); }, 30_000);
-
-function agentProgressLabel(phase: AgentProgressPhase, initialBuild: boolean, step?: number): string {
-  if (phase === 'executing') {
-    const part = step && step > 1 ? ` · part ${step}` : '';
-    return initialBuild ? `Building your app${part}…` : `Applying your change${part}…`;
-  }
-  if (phase === 'repairing') return 'Fixing something that didn’t work…';
-  if (phase === 'verifying') return 'Checking the result…';
-  if (phase === 'finishing') return 'Finishing up…';
-  return initialBuild ? 'Planning your app…' : 'Planning your change…';
-}
 
 async function refreshApps(select?: string): Promise<void> {
   apps = (await db.apps.list()).sort((a,b) => b.updatedAt - a.updatedAt);
@@ -463,7 +453,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       signal: runController.signal,
       managerTrace: trace,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
-      onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild, progress.step)),
+      onLifecycle: summary => ui.setAgentProgress(codingLifecycleLabel(summary, isInitialBuild)),
       onContext: context => {
         sessionUsage.setContext(context.estimatedInputTokens, context.maxContextTokens);
         syncUsage();

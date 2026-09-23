@@ -664,6 +664,8 @@ const component = document.querySelector(${JSON.stringify(selector)});
 return component ? {
   html: component.innerHTML,
   buildingCount: component.querySelectorAll('[data-itsalive-building]').length + (component.matches('[data-itsalive-building]') ? 1 : 0),
+  nestedBuildingCount: component.querySelectorAll('[data-itsalive-building]').length,
+  buildOwner: component.getAttribute('data-itsalive-build-owner'),
   inert: component.hasAttribute('inert'),
   ariaBusy: component.getAttribute('aria-busy'),
 } : null;
@@ -674,7 +676,12 @@ return component ? {
   if (inspection.error) return { ok: false, reason: `could not inspect assigned component ${selector}` };
   if (!inspection.value || typeof inspection.value !== "object") return { ok: false, reason: `assigned component ${selector} no longer exists` };
   const value = inspection.value as Record<string, unknown>;
-  if ((value.buildingCount as number | undefined ?? 0) > 0 || value.inert === true || value.ariaBusy === "true") {
+  const shellOwned = value.buildOwner === "shell";
+  const nestedBuildingCount = value.nestedBuildingCount as number | undefined ?? 0;
+  if (nestedBuildingCount > 0) {
+    return { ok: false, reason: `assigned component ${selector} still contains an unfinished nested region` };
+  }
+  if (!shellOwned && ((value.buildingCount as number | undefined ?? 0) > 0 || value.inert === true || value.ariaBusy === "true")) {
     return { ok: false, reason: `assigned component ${selector} is still marked as building/busy` };
   }
   return assessCompletionTree(typeof value.html === "string" ? value.html : "");

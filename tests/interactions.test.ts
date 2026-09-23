@@ -70,10 +70,12 @@ describe("continuous interaction observation", () => {
   });
 
 
-  it("preserves unfinished scaffold state in semantic context", () => {
-    document.body.innerHTML = '<main id="itsalive-root"><section data-itsalive-building inert aria-busy="true"><button disabled>Start</button></section></main>';
+  it("preserves shell-owned component lifecycle state in semantic context", () => {
+    document.body.innerHTML = '<main id="itsalive-root"><section data-itsalive-building data-itsalive-build-owner="shell" data-itsalive-build-state="verifying" inert aria-busy="true"><button disabled>Start</button></section></main>';
     const result = serializeSemanticDocument();
     expect(result).toContain('data-itsalive-building=""');
+    expect(result).toContain('data-itsalive-build-owner="shell"');
+    expect(result).toContain('data-itsalive-build-state="verifying"');
     expect(result).toContain('inert=""');
     expect(result).toContain('aria-busy="true"');
     expect(result).toContain('disabled=""');
