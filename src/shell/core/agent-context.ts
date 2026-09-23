@@ -148,6 +148,8 @@ export interface WorkerHandoff {
   verified: string[];
   unresolved?: string[];
   sharedContractChanges?: string[];
+  /** A broader/different scope the worker needs instead of silently expanding ownership. */
+  requestedScope?: string;
 }
 
 /**
@@ -166,5 +168,6 @@ export function compactWorkerHandoff(handoff: WorkerHandoff): string {
     ...(handoff.sharedContractChanges?.length
       ? { sharedContractChanges: handoff.sharedContractChanges.map(value => value.trim()).filter(Boolean) }
       : {}),
+    ...(handoff.requestedScope?.trim() ? { requestedScope: handoff.requestedScope.trim() } : {}),
   });
 }

@@ -5,14 +5,20 @@ import type { ShellDatabase } from "./database";
 import { platformCapabilityHelp, isPlatformCapabilityId, type PlatformCapabilityId } from "./capabilities";
 import type { AgentProfileId, ResolvedAgentProfile } from "./agent-profiles";
 import type { ProviderRegistry } from "./providers";
-import { RunBudgetController, runBudgetMessage, type RunBudgetStopKind } from "./run-budget";
+import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
 import { createAgentTimeout } from "./run-lifecycle";
 import { createLlmTraceIdentity } from "./llm-trace";
 import type { Credential, LlmTraceIdentity } from "./types";
 
 export interface CodingManagerSharedContracts {
+  ref: string;
   design: string[];
   state: string[];
+}
+
+export interface WorkerBudgetOverride {
+  maxDurationMs?: number;
+  maxCostUsd?: number | null;
 }
 
 export interface CodingWorkerTask {
@@ -23,6 +29,9 @@ export interface CodingWorkerTask {
   dependencies: string[];
   capabilityIds: PlatformCapabilityId[];
   profile: "component-worker" | "repair-worker";
+  sharedContractRef: string;
+  parallel: boolean;
+  budget?: WorkerBudgetOverride;
 }
 
 export interface CodingManagerPlan {
@@ -36,7 +45,24 @@ export interface ManagerVerification {
   unresolved: string[];
 }
 
-export type CodingOrchestratorStatus = "done" | "manager-verification-failed" | RunBudgetStopKind;
+export type CodingOrchestratorStatus =
+  | "done"
+  | "manager-verification-failed"
+  | "worker-error"
+  | RunBudgetStopKind;
+
+export interface WorkerTimelineEntry {
+  taskId: string;
+  runId: string;
+  agentId: string;
+  scope: string;
+  profile: AgentProfileId;
+  model: string;
+  startedAt: number;
+  endedAt: number;
+  elapsedMs: number;
+  status: string;
+}
 
 export interface CodingOrchestratorResult {
   status: CodingOrchestratorStatus;
@@ -44,6 +70,7 @@ export interface CodingOrchestratorResult {
   plan?: CodingManagerPlan;
   handoffs: WorkerHandoff[];
   workerTurns: number;
+  timeline: WorkerTimelineEntry[];
 }
 
 export interface CodingOrchestratorOptions {
@@ -55,9 +82,18 @@ export interface CodingOrchestratorOptions {
   credential?: Credential;
   signal?: AbortSignal;
   managerTrace: LlmTraceIdentity;
+  /** Bounded worker concurrency. Defaults to 3. */
+  maxParallelWorkers?: number;
   consumeEnvironmentObservations?: () => string[];
   onProgress?: (progress: AgentProgress & { workerId?: string; scope?: string }) => void;
   onContext?: (context: AgentContextDiagnostic) => void;
+}
+
+interface WorkerRunOutcome {
+  task: CodingWorkerTask;
+  handoff: WorkerHandoff;
+  turns: number;
+  timeline: WorkerTimelineEntry;
 }
 
 const MANAGER_PLAN_SYSTEM = [
@@ -65,7 +101,7 @@ const MANAGER_PLAN_SYSTEM = [
   "Plan implementation; do not write DOM mutation code.",
   "",
   "Return JSON only:",
-  "{\"shared\":{\"design\":[\"...\"],\"state\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\"}]}",
+  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
   "",
   "Rules:",
   "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
@@ -74,6 +110,10 @@ const MANAGER_PLAN_SYSTEM = [
   "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
   "- Reuse an existing component id from APP OUTLINE when it clearly owns the work; otherwise choose a new stable id.",
   "- Dependencies may reference only earlier task ids.",
+  "- shared.ref is a compact version/reference. Every task must repeat that exact value in sharedContractRef.",
+  "- Set parallel=true only when the task can safely overlap other dependency-ready tasks on a different scope.",
+  "- Use parallel=false for manager-ordered/shared-state-sensitive work.",
+  "- Worker budget overrides may only tighten maxDurationMs/maxCostUsd; profile defaults remain the ceiling.",
   "- component-worker is the default. Use repair-worker only when the task is primarily diagnosis/repair.",
   "- capabilityIds may contain only platform capability ids relevant to that worker.",
   "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
@@ -100,7 +140,8 @@ const WORKER_SYSTEM = [
   "",
   "HANDOFF",
   "On success, the final done payload must be JSON only with:",
-  "{\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[]}",
+  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[],\"requestedScope\":\"#broader-scope-or-empty\"}",
+  "If the task needs ownership outside ASSIGNED SCOPE, do not edit there. Return status=blocked with requestedScope and explain the dependency in unresolved.",
   "Keep it compact."
 ].join("\n");
 
@@ -118,11 +159,20 @@ const SIMPLE_SCOPE = /^#[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const TASK_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 export class CodingOrchestrator {
+  private readonly activeWorkers = new Map<string, AbortController>();
+
   constructor(
     private readonly db: ShellDatabase,
     private readonly providers: ProviderRegistry,
     private readonly executor: AppExecutor,
   ) {}
+
+  cancelWorker(taskId: string, reason: unknown = new DOMException("Worker interrupted", "AbortError")): boolean {
+    const controller = this.activeWorkers.get(taskId);
+    if (!controller || controller.signal.aborted) return false;
+    controller.abort(reason);
+    return true;
+  }
 
   async run(options: CodingOrchestratorOptions): Promise<CodingOrchestratorResult> {
     const controller = new AbortController();
@@ -151,56 +201,94 @@ export class CodingOrchestrator {
       if (planningStop) return stopResult(planningStop, handoffs, workerTurns);
       const plan = parseCodingManagerPlan(planned.text);
 
-      for (const task of plan.tasks) {
+      const maxParallelWorkers = normalizeParallelism(options.maxParallelWorkers);
+      const uniqueScopes = [...new Set(plan.tasks.map(task => task.scope))];
+      for (const scope of uniqueScopes) {
         if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
-        await ensureWorkerScope(this.executor, options.appId, task.scope, controller.signal);
+        await ensureWorkerScope(this.executor, options.appId, scope, controller.signal);
+      }
+      const scopeConflicts = await inspectScopeConflicts(this.executor, options.appId, uniqueScopes, controller.signal);
+      const handoffByTask = new Map<string, WorkerHandoff>();
+      const pending = new Set(plan.tasks.map(task => task.id));
+      const timeline: WorkerTimelineEntry[] = [];
 
-        const profile = await options.resolveProfile(task.profile);
-        const workerTrace = createLlmTraceIdentity(profile.role, profile.id, {
+      while (pending.size) {
+        if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+
+        propagateBlockedDependencies(plan, pending, handoffByTask);
+
+        const ready = plan.tasks.filter(task =>
+          pending.has(task.id)
+          && task.dependencies.every(dependency => handoffByTask.get(dependency)?.status === "done")
+        );
+        if (!ready.length) {
+          // Any remaining task is blocked by a failed/unresolved dependency.
+          for (const task of plan.tasks) {
+            if (!pending.has(task.id)) continue;
+            const blockers = task.dependencies.filter(id => handoffByTask.get(id)?.status !== "done");
+            handoffByTask.set(task.id, {
+              status: "blocked",
+              scope: task.scope,
+              changed: [],
+              verified: [],
+              unresolved: ["Blocked by dependency: " + (blockers.join(", ") || "unknown dependency")],
+            });
+            pending.delete(task.id);
+          }
+          break;
+        }
+
+        const wave = chooseWorkerWave(ready, scopeConflicts, maxParallelWorkers);
+        const waveIds = new Set(wave.map(task => task.id));
+        const conflictDeferred = ready.filter(task =>
+          !waveIds.has(task.id)
+          && task.parallel
+          && wave.some(active => scopesConflict(active.scope, task.scope, scopeConflicts))
+        );
+        if (conflictDeferred.length) {
+          console.info("Worker scope conflict serialized", {
+            parentRunId: options.managerTrace.runId,
+            deferred: conflictDeferred.map(task => ({ id: task.id, scope: task.scope })),
+            active: wave.map(task => ({ id: task.id, scope: task.scope })),
+          });
+        }
+        console.info("Worker wave started", {
           parentRunId: options.managerTrace.runId,
-          parentAgentId: options.managerTrace.agentId,
-          scope: task.scope,
+          tasks: wave.map(task => ({ id: task.id, scope: task.scope, profile: task.profile })),
         });
-        const relevantHandoffs = task.dependencies
-          .map(id => {
-            const dependencyTask = plan.tasks.find(candidate => candidate.id === id);
-            return dependencyTask ? handoffs.find(handoff => handoff.scope === dependencyTask.scope) : undefined;
-          })
-          .filter((handoff): handoff is WorkerHandoff => Boolean(handoff));
-        const isolatedHistory = new IsolatedAgentHistory();
-        const runner = new AgentRunner(this.db, this.providers, this.executor);
-        const result = await runner.run({
-          appId: options.appId,
-          appPrompt: options.appPrompt,
-          trigger: workerTaskInput(plan, task, relevantHandoffs),
-          persistTrigger: false,
-          model: profile.modelConfig,
-          systemPrompt: WORKER_SYSTEM,
-          history: isolatedHistory,
-          scopeSelector: task.scope,
-          includeRawCompletionMessage: true,
-          budgetController: rootBudget.fork(profile.budgets),
-          trace: workerTrace,
-          credential: options.credential,
-          signal: controller.signal,
-          consumeEnvironmentObservations: options.consumeEnvironmentObservations,
-          onProgress: progress => options.onProgress?.({ ...progress, workerId: task.id, scope: task.scope }),
-          onContext: options.onContext,
-        });
-        workerTurns += result.turns;
-
-        const handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
-        handoffs.push(handoff);
-        if (result.status !== "done") {
-          return {
-            status: result.status,
-            message: result.message,
+        const outcomes = await Promise.all(wave.map(task =>
+          this.runWorkerTask(
+            options,
             plan,
-            handoffs,
-            workerTurns,
+            task,
+            task.dependencies.map(id => handoffByTask.get(id)).filter((value): value is WorkerHandoff => Boolean(value)),
+            rootBudget,
+            controller.signal,
+          )
+        ));
+        if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+
+        outcomes.sort((left, right) =>
+          plan.tasks.findIndex(task => task.id === left.task.id) - plan.tasks.findIndex(task => task.id === right.task.id)
+        );
+        for (const outcome of outcomes) {
+          pending.delete(outcome.task.id);
+          handoffByTask.set(outcome.task.id, outcome.handoff);
+          workerTurns += outcome.turns;
+          timeline.push(outcome.timeline);
+        }
+
+        const rootStop = rootBudget.currentStopReason();
+        if (rootStop) {
+          const ordered = orderedHandoffs(plan, handoffByTask);
+          return {
+            ...stopResult(rootStop, ordered, workerTurns, timeline),
+            plan,
           };
         }
       }
+
+      handoffs.push(...orderedHandoffs(plan, handoffByTask));
 
       const finalOutline = await inspectAppOutline(this.executor, options.appId, controller.signal);
       const verified = await this.providers.generate({
@@ -216,28 +304,218 @@ export class CodingOrchestrator {
       }, options.credential);
       const finalCostStop = rootBudget.recordUsage(verified.usage?.cost);
       const verification = parseManagerVerification(verified.text);
-      if (verification.ok) {
+      const hasBlockedWorker = handoffs.some(handoff => handoff.status !== "done");
+      if (verification.ok && !hasBlockedWorker) {
         return {
           status: "done",
           message: verification.summary || "Done — it’s ready.",
           plan,
           handoffs,
           workerTurns,
+          timeline,
         };
       }
-      if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns), plan };
+      if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns, timeline), plan };
       return {
         status: "manager-verification-failed",
         message: verification.summary || "Final integration verification found unfinished work.",
         plan,
         handoffs,
         workerTurns,
+        timeline,
       };
     } finally {
       clearTimeout(deadline);
       options.signal?.removeEventListener("abort", relayAbort);
     }
   }
+
+  private async runWorkerTask(
+    options: CodingOrchestratorOptions,
+    plan: CodingManagerPlan,
+    task: CodingWorkerTask,
+    dependencyHandoffs: WorkerHandoff[],
+    rootBudget: RunBudgetController,
+    parentSignal: AbortSignal,
+  ): Promise<WorkerRunOutcome> {
+    const profile = await options.resolveProfile(task.profile);
+    const workerTrace = createLlmTraceIdentity(profile.role, profile.id, {
+      parentRunId: options.managerTrace.runId,
+      parentAgentId: options.managerTrace.agentId,
+      scope: task.scope,
+    });
+    const child = new AbortController();
+    const relayParent = () => child.abort(parentSignal.reason);
+    if (parentSignal.aborted) relayParent();
+    else parentSignal.addEventListener("abort", relayParent, { once: true });
+    this.activeWorkers.set(task.id, child);
+
+    const startedAt = Date.now();
+    let turns = 0;
+    let status = "worker-error";
+    let handoff: WorkerHandoff;
+
+    try {
+      const isolatedHistory = new IsolatedAgentHistory();
+      const runner = new AgentRunner(this.db, this.providers, this.executor);
+      const result = await runner.run({
+        appId: options.appId,
+        appPrompt: options.appPrompt,
+        trigger: workerTaskInput(plan, task, dependencyHandoffs),
+        persistTrigger: false,
+        model: profile.modelConfig,
+        systemPrompt: WORKER_SYSTEM,
+        history: isolatedHistory,
+        scopeSelector: task.scope,
+        includeRawCompletionMessage: true,
+        budgetController: rootBudget.fork(tightenWorkerBudget(profile.budgets, task.budget)),
+        trace: workerTrace,
+        credential: options.credential,
+        signal: child.signal,
+        consumeEnvironmentObservations: options.consumeEnvironmentObservations,
+        onProgress: progress => options.onProgress?.({ ...progress, workerId: task.id, scope: task.scope }),
+        onContext: options.onContext,
+      });
+      turns = result.turns;
+      handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
+      status = handoff.status === "done" ? result.status : "blocked";
+    } catch (error) {
+      status = child.signal.aborted ? "worker-cancelled" : "worker-error";
+      handoff = {
+        status: "failed",
+        scope: task.scope,
+        changed: [],
+        verified: [],
+        unresolved: [error instanceof Error ? error.message : String(error)],
+      };
+    } finally {
+      parentSignal.removeEventListener("abort", relayParent);
+      if (this.activeWorkers.get(task.id) === child) this.activeWorkers.delete(task.id);
+    }
+
+    const endedAt = Date.now();
+    const timeline: WorkerTimelineEntry = {
+      taskId: task.id,
+      runId: workerTrace.runId,
+      agentId: workerTrace.agentId,
+      scope: task.scope,
+      profile: profile.id,
+      model: profile.modelConfig.model,
+      startedAt,
+      endedAt,
+      elapsedMs: Math.max(0, endedAt - startedAt),
+      status,
+    };
+    console.info("Worker lifecycle", timeline);
+    return { task, handoff, turns, timeline };
+  }
+}
+
+function normalizeParallelism(value: number | undefined): number {
+  if (value == null) return 3;
+  if (!Number.isFinite(value)) return 3;
+  return Math.max(1, Math.min(6, Math.floor(value)));
+}
+
+function tightenWorkerBudget(base: RunBudgetLimits, override: WorkerBudgetOverride | undefined): RunBudgetLimits {
+  if (!override) return { ...base };
+  const maxDurationMs = override.maxDurationMs == null
+    ? base.maxDurationMs
+    : Math.min(base.maxDurationMs, Math.max(1, Math.floor(override.maxDurationMs)));
+  let maxCostUsd = base.maxCostUsd;
+  if (typeof override.maxCostUsd === "number" && override.maxCostUsd > 0) {
+    maxCostUsd = base.maxCostUsd == null ? override.maxCostUsd : Math.min(base.maxCostUsd, override.maxCostUsd);
+  }
+  return { ...base, maxDurationMs, maxCostUsd };
+}
+
+function scopeConflictKey(left: string, right: string): string {
+  return left < right ? left + "\u001f" + right : right + "\u001f" + left;
+}
+
+function scopesConflict(left: string, right: string, conflicts: ReadonlySet<string>): boolean {
+  return left === right || conflicts.has(scopeConflictKey(left, right));
+}
+
+function chooseWorkerWave(
+  ready: readonly CodingWorkerTask[],
+  conflicts: ReadonlySet<string>,
+  maxParallelWorkers: number,
+): CodingWorkerTask[] {
+  const first = ready[0];
+  if (!first) return [];
+  const wave = [first];
+  if (!first.parallel || maxParallelWorkers === 1) return wave;
+
+  for (const candidate of ready.slice(1)) {
+    if (!candidate.parallel) break;
+    if (wave.length >= maxParallelWorkers) break;
+    if (wave.some(active => scopesConflict(active.scope, candidate.scope, conflicts))) continue;
+    wave.push(candidate);
+  }
+  return wave;
+}
+
+function propagateBlockedDependencies(
+  plan: CodingManagerPlan,
+  pending: Set<string>,
+  handoffs: Map<string, WorkerHandoff>,
+): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of plan.tasks) {
+      if (!pending.has(task.id)) continue;
+      const blockers = task.dependencies.filter(id => {
+        const handoff = handoffs.get(id);
+        return handoff != null && handoff.status !== "done";
+      });
+      if (!blockers.length) continue;
+      handoffs.set(task.id, {
+        status: "blocked",
+        scope: task.scope,
+        changed: [],
+        verified: [],
+        unresolved: ["Blocked by dependency: " + blockers.join(", ")],
+      });
+      pending.delete(task.id);
+      changed = true;
+    }
+  }
+}
+
+function orderedHandoffs(plan: CodingManagerPlan, handoffs: ReadonlyMap<string, WorkerHandoff>): WorkerHandoff[] {
+  return plan.tasks.map(task => handoffs.get(task.id)).filter((value): value is WorkerHandoff => Boolean(value));
+}
+
+async function inspectScopeConflicts(
+  executor: AppExecutor,
+  appId: string,
+  scopes: readonly string[],
+  signal: AbortSignal,
+): Promise<Set<string>> {
+  if (scopes.length < 2) return new Set();
+  const code = [
+    "const selectors = " + JSON.stringify(scopes) + ";",
+    "const nodes = selectors.map(selector => ({ selector, element: document.querySelector(selector) }));",
+    "const overlaps = [];",
+    "for (let i = 0; i < nodes.length; i++) {",
+    "  for (let j = i + 1; j < nodes.length; j++) {",
+    "    const left = nodes[i]; const right = nodes[j];",
+    "    if (left.element && right.element && (left.element.contains(right.element) || right.element.contains(left.element))) overlaps.push([left.selector, right.selector]);",
+    "  }",
+    "}",
+    "return overlaps;",
+  ].join("\n");
+  const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
+  if (result.error) throw new Error("Could not inspect worker scope conflicts: " + result.error.message);
+  const pairs = Array.isArray(result.value) ? result.value : [];
+  const conflicts = new Set<string>();
+  for (const pair of pairs) {
+    if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string" || typeof pair[1] !== "string") continue;
+    conflicts.add(scopeConflictKey(pair[0], pair[1]));
+  }
+  return conflicts;
 }
 
 function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown): string {
@@ -256,6 +534,7 @@ function managerVerificationInput(
 ): string {
   return [
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
+    "SHARED CONTRACT REF\n" + plan.shared.ref,
     "SHARED DESIGN\n" + list(plan.shared.design),
     "SHARED STATE\n" + list(plan.shared.state),
     "WORKER HANDOFFS\n" + (handoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
@@ -274,11 +553,26 @@ function workerTaskInput(
     "GOAL\n" + task.goal,
     "ASSIGNED SCOPE\n" + task.scope,
     "ACCEPTANCE CRITERIA\n" + list(task.acceptanceCriteria),
+    "SHARED CONTRACT REF\n" + task.sharedContractRef,
     "SHARED DESIGN CONTRACT\n" + list(plan.shared.design),
     "SHARED STATE CONTRACT\n" + list(plan.shared.state),
     "DEPENDENCY HANDOFFS\n" + (dependencyHandoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
     "RELEVANT PLATFORM CAPABILITIES\n" + platformCapabilityHelp(task.capabilityIds),
   ].join("\n\n");
+}
+
+function parseWorkerBudget(value: unknown): WorkerBudgetOverride | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const budget: WorkerBudgetOverride = {};
+  if (typeof record.maxDurationMs === "number" && Number.isFinite(record.maxDurationMs) && record.maxDurationMs > 0) {
+    budget.maxDurationMs = Math.floor(record.maxDurationMs);
+  }
+  if (record.maxCostUsd === null) budget.maxCostUsd = null;
+  else if (typeof record.maxCostUsd === "number" && Number.isFinite(record.maxCostUsd) && record.maxCostUsd > 0) {
+    budget.maxCostUsd = record.maxCostUsd;
+  }
+  return Object.keys(budget).length ? budget : undefined;
 }
 
 function list(values: readonly string[]): string {
@@ -310,7 +604,11 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
   const sharedRecord = sharedRaw && typeof sharedRaw === "object" && !Array.isArray(sharedRaw)
     ? sharedRaw as Record<string, unknown>
     : {};
+  const sharedRef = typeof sharedRecord.ref === "string" && TASK_ID.test(sharedRecord.ref.trim())
+    ? sharedRecord.ref.trim()
+    : "shared-v1";
   const shared: CodingManagerSharedContracts = {
+    ref: sharedRef,
     design: stringArray(sharedRecord.design, 16),
     state: stringArray(sharedRecord.state, 16),
   };
@@ -334,6 +632,12 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
     }
     const profile = task.profile === "repair-worker" ? "repair-worker" : "component-worker";
     const capabilityIds = stringArray(task.capabilityIds, 12).filter(isPlatformCapabilityId);
+    const sharedContractRef = typeof task.sharedContractRef === "string" && task.sharedContractRef.trim()
+      ? task.sharedContractRef.trim()
+      : shared.ref;
+    if (sharedContractRef !== shared.ref) throw new Error("Coding manager task " + id + " references a different shared contract");
+    const parallel = task.parallel === true;
+    const budget = parseWorkerBudget(task.budget);
     seen.add(id);
     return {
       id,
@@ -343,6 +647,9 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
       dependencies,
       capabilityIds,
       profile,
+      sharedContractRef,
+      parallel,
+      ...(budget ? { budget } : {}),
     };
   });
   return { shared, tasks };
@@ -385,13 +692,18 @@ function workerHandoff(
         const record = parsed as Record<string, unknown>;
         const unresolved = stringArray(record.unresolved, 12);
         const sharedContractChanges = stringArray(record.sharedContractChanges, 12);
+        const requestedScope = typeof record.requestedScope === "string" && record.requestedScope.trim()
+          ? record.requestedScope.trim()
+          : undefined;
+        const handoffStatus = record.status === "blocked" || requestedScope ? "blocked" : "done";
         return {
-          status: "done",
+          status: handoffStatus,
           scope: task.scope,
           changed: stringArray(record.changed, 12),
           verified: stringArray(record.verified, 12),
           ...(unresolved.length ? { unresolved } : {}),
           ...(sharedContractChanges.length ? { sharedContractChanges } : {}),
+          ...(requestedScope ? { requestedScope } : {}),
         };
       }
     } catch {
@@ -460,11 +772,13 @@ function stopResult(
   status: RunBudgetStopKind,
   handoffs: WorkerHandoff[],
   workerTurns: number,
+  timeline: WorkerTimelineEntry[] = [],
 ): CodingOrchestratorResult {
   return {
     status,
     message: runBudgetMessage(status),
     handoffs,
     workerTurns,
+    timeline,
   };
 }

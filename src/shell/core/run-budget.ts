@@ -121,6 +121,11 @@ export class RunBudgetController {
     this.stallRepeats = 0;
   }
 
+  /** Current root/local cost stop state without mutating turn telemetry. */
+  currentStopReason(): RunBudgetStopKind | undefined {
+    return this.costStopReason();
+  }
+
   snapshot(): RunBudgetSnapshot {
     return {
       turns: this.turns,
