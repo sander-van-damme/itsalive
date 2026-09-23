@@ -1,7 +1,7 @@
 export const PLATFORM_CAPABILITIES = [
   {
     id: "done",
-    signature: "return itsalive.done(message)",
+    signature: "return itsalive.done('Ready')",
     purpose: "Signal that the current coding task is actually complete and optionally provide a short user-facing completion message.",
     whenToUse: "Use only from the final coding command after the requested outcome works and verification is complete.",
     whenNotToUse: "Do not use while staged UI is unfinished or while a repair/verification step remains.",
@@ -17,7 +17,7 @@ export const PLATFORM_CAPABILITIES = [
   },
   {
     id: "history.search",
-    signature: "await itsalive.history.search({ query, limit? })",
+    signature: "await itsalive.history.search({ query: 'preferred tempo', limit: 5 })",
     purpose: "Search shell-owned app history with literal text retrieval.",
     whenToUse: "Use when runtime behavior genuinely needs earlier app conversation or events and a focused literal query is known.",
     whenNotToUse: "Do not use as a substitute for current DOM state or to load the entire chat transcript.",
@@ -25,7 +25,7 @@ export const PLATFORM_CAPABILITIES = [
   },
   {
     id: "logs.get",
-    signature: "await itsalive.logs.get({ level?, limit? })",
+    signature: "await itsalive.logs.get({ level: 'error', limit: 20 })",
     purpose: "Read bounded shell-owned runtime logs for diagnosis.",
     whenToUse: "Use when a runtime failure needs recent error or warning evidence.",
     whenNotToUse: "Do not poll logs for ordinary state or user-facing data.",
@@ -33,7 +33,7 @@ export const PLATFORM_CAPABILITIES = [
   },
   {
     id: "dom.screenshot",
-    signature: "await itsalive.dom.screenshot({ scale? })",
+    signature: "await itsalive.dom.screenshot()",
     purpose: "Capture a best-effort screenshot for visual verification.",
     whenToUse: "Use when visual layout or rendering needs verification beyond DOM inspection.",
     whenNotToUse: "Do not block completion solely because screenshot capture is unavailable.",
@@ -41,7 +41,7 @@ export const PLATFORM_CAPABILITIES = [
   },
   {
     id: "components",
-    signature: "itsalive.components[key]",
+    signature: "itsalive.components['modal']",
     purpose: "Read a platform-provided catalog of editable Alpine/Tailwind component recipes.",
     whenToUse: "Use when a known UI pattern such as a modal, picker, menu, or alternate example would save implementation work.",
     whenNotToUse: "Do not insert recipes blindly or treat the catalog as a runtime widget framework.",
@@ -49,7 +49,7 @@ export const PLATFORM_CAPABILITIES = [
   },
   {
     id: "cron",
-    signature: "itsalive.cron(id, schedule, callback)",
+    signature: "itsalive.cron('daily-review', '0 8 * * *', callback)",
     purpose: "Register a stable scheduled callback through the shell.",
     whenToUse: "Use when the app has an explicit recurring or scheduled behavior.",
     whenNotToUse: "Do not use for short timers, animation, or immediate interaction handling.",
@@ -57,7 +57,7 @@ export const PLATFORM_CAPABILITIES = [
   },
   {
     id: "agent.wake",
-    signature: "await itsalive.agent.wake(prompt)",
+    signature: "await itsalive.agent.wake('Describe the follow-up')",
     purpose: "Ask the shell to start another agent run for follow-up work.",
     whenToUse: "Use sparingly when app runtime evidence shows that another coding/agent turn is genuinely needed.",
     whenNotToUse: "Do not use for ordinary UI actions or as a general event bus.",
