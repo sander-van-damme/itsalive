@@ -81,6 +81,7 @@ describe("agent profile registry", () => {
       expect(profile.budgets.idleTimeoutMs).toBeGreaterThan(0);
       expect(profile.budgets.maxConsecutiveFailures).toBeGreaterThan(0);
       expect(profile.budgets.stallRepeatLimit).toBeGreaterThan(0);
+      expect(profile.budgets.emergencyTurnCeiling).toBeGreaterThan(12);
       expect(profile.budgets.maxCostUsd).toBeNull();
     }
   });
