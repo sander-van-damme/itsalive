@@ -1,10 +1,10 @@
 export type ExternalAgentAbortKind = "user-stop" | "app-switch" | "runtime-disposed";
-export type AgentTimeoutKind = "idle-timeout" | "safety-timeout";
+export type AgentTimeoutKind = "idle-timeout" | "time-budget";
 export type AgentRunFailureKind = ExternalAgentAbortKind | AgentTimeoutKind | "run-error";
 
 const REASON_PREFIX = "itsalive:";
 export const AGENT_IDLE_TIMEOUT_REASON = `${REASON_PREFIX}idle-timeout`;
-export const AGENT_SAFETY_TIMEOUT_REASON = `${REASON_PREFIX}safety-timeout`;
+export const AGENT_TIME_BUDGET_REASON = `${REASON_PREFIX}time-budget`;
 
 export interface NormalizedAgentRunFailure {
   kind: AgentRunFailureKind;
@@ -36,7 +36,7 @@ function errorDetails(error: unknown): { name: string; message: string } {
 function markerKind(message: string): AgentRunFailureKind | undefined {
   if (!message.startsWith(REASON_PREFIX)) return undefined;
   const value = message.slice(REASON_PREFIX.length);
-  if (value === "user-stop" || value === "app-switch" || value === "runtime-disposed" || value === "idle-timeout" || value === "safety-timeout") return value;
+  if (value === "user-stop" || value === "app-switch" || value === "runtime-disposed" || value === "idle-timeout" || value === "time-budget") return value;
   return undefined;
 }
 
@@ -64,11 +64,11 @@ export function normalizeAgentRunFailure(error: unknown, signal?: AbortSignal): 
       technical,
     };
   }
-  if (marked === "safety-timeout") {
+  if (marked === "time-budget") {
     return {
       kind: marked,
       resumable: false,
-      userMessage: "This run reached the maximum working time, so I stopped it. Changes already applied were kept.",
+      userMessage: "This run reached its working-time budget, so I stopped it. Changes already applied were kept.",
       technical,
     };
   }

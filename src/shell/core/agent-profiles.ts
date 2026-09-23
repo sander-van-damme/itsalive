@@ -1,5 +1,6 @@
 import type { AgentRole } from "./agent-context";
 import type { ModelConfig } from "./types";
+import type { RunBudgetLimits } from "./run-budget";
 
 export type AgentProfileId =
   | "user-intent"
@@ -19,14 +20,7 @@ export type AgentContextPolicyId =
   | "behavior-curation";
 export type CapabilityExposurePolicy = "index" | "selected" | "none";
 
-export interface AgentBudgetDefaults {
-  maxDurationMs: number;
-  idleTimeoutMs: number;
-  /** Null means cost enforcement is intentionally disabled until a product budget is chosen. */
-  maxCostUsd: number | null;
-  maxConsecutiveFailures: number;
-  stallRepeatLimit: number;
-}
+export type AgentBudgetDefaults = RunBudgetLimits;
 
 export interface AgentProfile {
   id: AgentProfileId;
@@ -65,6 +59,7 @@ const budget = (overrides: Partial<AgentBudgetDefaults> = {}): AgentBudgetDefaul
   maxCostUsd: null,
   maxConsecutiveFailures: 3,
   stallRepeatLimit: 2,
+  emergencyTurnCeiling: 1_000,
   ...overrides,
 });
 

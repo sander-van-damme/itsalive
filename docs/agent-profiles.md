@@ -37,9 +37,9 @@ The actual manager/worker prompts are introduced with the orchestration issues; 
 
 ## Budgets
 
-Profiles declare default time, idle, failure, stall, and cost fields. Issue #86 only defines those defaults. Enforcement belongs to #87.
+Profiles declare default time, idle, failure, stall, and cost fields. The runner enforces these defaults through the shared run-budget controller introduced in #87.
 
-`maxCostUsd` is deliberately `null` in this first registry. The product has not yet established an evidence-based dollar ceiling; #87 must not silently invent one. Once a budget is chosen, it can be changed centrally per role.
+`maxCostUsd` remains deliberately `null` until the product establishes an evidence-based dollar ceiling. Unknown provider cost is still tracked; when a dollar cap is enabled, unknown cost stops the run rather than being treated as zero. The 1000-turn ceiling is an emergency runaway guard only, not a normal work budget.
 
 ## Observability
 
