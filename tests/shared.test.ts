@@ -80,8 +80,8 @@ describe("bootstrap protocol", () => {
 });
 
 describe("bridge protocol", () => {
-  it("uses bridge version 4 and recognizes messages by direction", () => {
-    expect(BRIDGE_VERSION).toBe(4);
+  it("uses bridge version 5 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(5);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
@@ -93,12 +93,22 @@ describe("bridge protocol", () => {
     expect(isAppToShellMessage(result)).toBe(true);
   });
 
-  it("validates bounded shell-owned document snapshots", () => {
-    const save = createBridgeMessage(APP_ID, "req_doc123", { type: "document.save", html: "<!doctype html><main>ok</main>" });
+  it("validates split shell-owned document request, save, and response messages", () => {
+    const document = {
+      html: "<!doctype html><html><body><main>ok</main></body></html>",
+      scripts: [{ placement: "body" as const, attributes: { "data-app-setup": "" }, content: "window.setup = true;" }],
+    };
+    const request = createBridgeMessage(APP_ID, "req_doc_get", { type: "document.request" });
+    const save = createBridgeMessage(APP_ID, "req_doc_save", { type: "document.save", document });
+    const response = createBridgeMessage(APP_ID, "req_doc_get", { type: "document.response", document });
+
+    expect(isAppToShellMessage(request)).toBe(true);
     expect(isAppToShellMessage(save)).toBe(true);
-    expect(isShellToAppMessage(save)).toBe(false);
-    expect(isBridgeMessage({ ...save, html: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
-    expect(isBridgeMessage({ ...save, html: 42 })).toBe(false);
+    expect(isShellToAppMessage(response)).toBe(true);
+    expect(isBridgeMessage({ ...request, extra: true })).toBe(false);
+    expect(isBridgeMessage({ ...save, document: { ...document, html: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) } })).toBe(false);
+    expect(isBridgeMessage({ ...save, document: { ...document, scripts: [{ placement: "elsewhere", attributes: {}, content: "" }] } })).toBe(false);
+    expect(isBridgeMessage({ ...response, document: { html: 42, scripts: [] } })).toBe(false);
   });
 
   it("uses the LLM request and response protocol", () => {
