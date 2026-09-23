@@ -44,9 +44,9 @@ export function reactionBatchFingerprint(batch: ReactionBatch): string {
 export function interactionConfirmationMessage(batch: ReactionBatch): string {
   const newest = [...batch.events].sort((a, b) => a.interaction.seq - b.interaction.seq).at(-1);
   if (newest?.pattern?.frustrationSignal) {
-    return "It looks like you tried the same thing several times without getting the response you expected. What were you trying to make happen?";
+    return "It looks like you tried the same thing several times without getting the response you expected. What happened, or what were you trying to make happen?";
   }
-  return "I noticed an interaction that may not have done what you expected. What were you trying to make happen?";
+  return "I noticed an interaction that may not have done what you expected. What happened, or what were you trying to make happen?";
 }
 
 export class ReactionConfirmationGate {
