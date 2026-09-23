@@ -6,6 +6,7 @@ import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
 import { createAgentTimeout } from "./run-lifecycle";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
+import { appendFailureRoute, assessFailureRoute, failureRouteStopResult } from "./failure-routing";
 
 export interface ExecutionResult {
   value?: unknown;
