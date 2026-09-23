@@ -54,6 +54,30 @@ export type CompletionAssessor = (
   signal: AbortSignal,
 ) => Promise<CompletionAssessmentDecision>;
 
+export type FailureAssessmentPhase = "generation" | "runtime";
+
+export interface FailureAssessmentState {
+  correlationId: string;
+  requestedOutcome: string;
+  phase: FailureAssessmentPhase;
+  failureEvidence: string;
+  latestObservation?: string;
+  scopeSelector?: string;
+  attempt: number;
+  maxAttempts: number;
+}
+
+export interface FailureAssessmentDecision {
+  action: "repair" | "retry" | "clarify" | "stop" | "uncertain";
+  reason: string;
+  failureClass?: string;
+}
+
+export type FailureAssessor = (
+  state: FailureAssessmentState,
+  signal: AbortSignal,
+) => Promise<FailureAssessmentDecision>;
+
 export interface RunOptions {
   appId: string;
   appPrompt: string;
@@ -90,10 +114,12 @@ export interface RunOptions {
   completionAssessor?: CompletionAssessor;
   /** JEV-style completion rejection gets at most this many extra repair turns. Defaults to one. */
   maxCompletionAssessmentRepairs?: number;
+  /** Optional bounded semantic routing after a generation/runtime failure and before another model turn. */
+  failureAssessor?: FailureAssessor;
 }
 
 export interface RunResult {
-  status: "done" | RunBudgetStopKind;
+  status: "done" | "clarification-needed" | "failure-stop" | RunBudgetStopKind;
   message?: string;
   /** Unsanitized done() payload for structured worker handoff parsing. */
   rawMessage?: string;
