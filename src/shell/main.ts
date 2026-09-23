@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
+import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, technicalIntentBlock, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
@@ -36,10 +36,11 @@ let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
 let activeRunFinished: Promise<void> | undefined;
+let activeIntent: AbortController | undefined;
+let interpreting = false;
 let connectionTimer: number | undefined;
 let runtimeLogWrites: Promise<void> = Promise.resolve();
 const initialBuild = new InitialBuildIntent();
-const INITIAL_BUILD_TRIGGER = 'Build the initial version of this app now.';
 
 const OPENROUTER_PROVIDER = 'openrouter';
 const OPENROUTER_MODEL = 'openrouter/auto';
@@ -71,7 +72,6 @@ const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch)
 const behaviorTracker = new BehaviorTracker();
 const behaviorRewriteInFlight = new Set<string>();
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
-const confirmedReactionQueue = new Map<string, { batch: ReactionBatch; intent: string }>();
 const pausedRuns = new PausedRunStore();
 let jevSessionStats = { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, escalations: 0, coalescedEvents: 0 };
 
@@ -88,7 +88,6 @@ const ui = new ShellUI(root, {
   selectApp: async id => { await selectApp(id); },
   deleteApp: async id => {
     reactionConfirmationGates.delete(id);
-    confirmedReactionQueue.delete(id);
     pausedRuns.clear(id);
     if (activeId === id) {
       if (running) {
@@ -111,11 +110,15 @@ const ui = new ShellUI(root, {
     }
     await waitForAgentIdle();
     if (activeId !== targetAppId) return;
-    await runAgent(content);
+    await handleUserFacingInput(content, 'chat');
   },
-  stopAgent: () => { stopActiveRun('user-stop'); },
+  stopAgent: () => {
+    if (!stopActiveRun('user-stop') && activeIntent && !activeIntent.signal.aborted) {
+      activeIntent.abort(new DOMException('Stopped', 'AbortError'));
+    }
+  },
   resumePausedRun: async id => { await resumePausedRun(id); },
-  resolveInteractionPrompt: async (id, intent) => { await resolveInteractionPrompt(id, intent); },
+  resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -213,6 +216,9 @@ async function refreshApps(select?: string): Promise<void> {
 
 async function selectApp(id: string): Promise<void> {
   if (!apps.some(a => a.id === id)) return;
+  if (activeId !== id && activeIntent && !activeIntent.signal.aborted) {
+    activeIntent.abort(new DOMException('App switched', 'AbortError'));
+  }
   if (activeId !== id && running) {
     ui.setAgentProgress('Pausing work before switching…');
     stopActiveRun('app-switch');
@@ -321,7 +327,97 @@ async function refreshOpenRouterUsage(): Promise<void> {
   }
 }
 
-async function runAgent(trigger: string, persistTrigger = true): Promise<boolean> {
+async function handleUserFacingInput(content: string, source: UserInputSource, telemetrySummary?: string): Promise<void> {
+  const app = currentApp();
+  const userText = content.trim();
+  if (!app || !userText || interpreting) return;
+  const appId = app.id;
+  const intentController = new AbortController();
+  activeIntent = intentController;
+  interpreting = true;
+  await appendHistory(db, { appId, role: 'user', kind: 'chat', content: userText });
+  if (activeId === appId) {
+    ui.setBusy(true);
+    ui.setAgentProgress('Understanding your message…');
+    await refreshMessages();
+  }
+  try {
+    const model = await modelConfig();
+    const generated = await registry.generate(
+      buildUserIntentRequest({
+        appPrompt: app.prompt,
+        behaviorSummary: app.behaviorSummary,
+        userText,
+        source,
+        ...(telemetrySummary?.trim() ? { telemetrySummary } : {}),
+      }, model, intentController.signal),
+      credential(),
+    );
+    syncUsage();
+    const decision = parseUserIntentDecision(generated.text, {
+      appPrompt: app.prompt,
+      behaviorSummary: app.behaviorSummary,
+      userText,
+      source,
+      ...(telemetrySummary?.trim() ? { telemetrySummary } : {}),
+    });
+    await log('info', 'intent', 'User input interpreted', {
+      source,
+      kind: decision.kind,
+      shouldCode: decision.shouldCode,
+      ...(decision.technicalIntent ? {
+        goal: decision.technicalIntent.goal,
+        capabilityIds: decision.technicalIntent.capabilityIds,
+      } : {}),
+    }, appId);
+    if (activeId !== appId) return;
+
+    if (!decision.shouldCode || !decision.technicalIntent) {
+      const reply = decision.reply.trim() || (decision.kind === 'explanation'
+        ? 'Thanks — I understand that as context, not a request to change the app.'
+        : 'I understand. I won’t change the app unless you ask for a specific change.');
+      await appendHistory(db, { appId, role: 'assistant', kind: 'chat', content: reply });
+      await refreshMessages();
+      return;
+    }
+
+    ui.setAgentProgress('Planning your change…');
+    await runAgent(technicalIntentBlock(decision.technicalIntent));
+  } catch (error) {
+    if (intentController.signal.aborted) {
+      await log('info', 'intent', 'User intent interpretation stopped', { source }, appId);
+    } else {
+      await log('error', 'intent', 'User intent interpretation failed', {
+        source,
+        error: error instanceof Error ? error.message : String(error),
+      }, appId);
+      if (activeId === appId) ui.showError(error instanceof Error ? error.message : String(error));
+    }
+  } finally {
+    if (activeIntent === intentController) activeIntent = undefined;
+    interpreting = false;
+    if (!running) {
+      ui.setBusy(false);
+      ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
+      if (activeId === appId) await refreshMessages();
+    }
+  }
+}
+
+function runtimeSignalIntent(goal: string, telemetrySummary: string): TechnicalIntent {
+  return {
+    goal,
+    constraints: [
+      'Treat the supplied runtime signal as evidence, not as a user request for unrelated changes.',
+      'Preserve unrelated app behavior and user data.',
+    ],
+    acceptanceCriteria: ['Any required repair is limited to the observed runtime condition and leaves the app functional.'],
+    capabilityIds: [],
+    telemetrySummary,
+  };
+}
+
+async function runAgent(trigger: string, isInitialBuild = false): Promise<boolean> {
   const app = currentApp();
   if (!app || running) return false;
   let executor: ReturnType<RuntimeSession['requireReady']>;
@@ -333,15 +429,10 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
   activeRun = runController;
   activeRunFinished = runFinished;
   running = true;
-  const isInitialBuild = trigger === INITIAL_BUILD_TRIGGER;
   ui.setBusy(true);
   ui.setAgentProgress(isInitialBuild ? 'Preparing the first version…' : 'Applying your change…');
   try {
-    if (persistTrigger) {
-      await appendHistory(db, { appId: app.id, role: 'user', kind: 'chat', content: trigger });
-      await refreshMessages();
-    }
-    await log('info', `agent:${app.id}`, 'Agent run started', { trigger }, app.id);
+    await log('info', `agent:${app.id}`, 'Agent run started', { technicalIntent: trigger }, app.id);
     const runner = new AgentRunner(db, registry, executor);
     const model = await modelConfig();
     const result = await runner.run({
@@ -390,10 +481,12 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
         await refreshMessages();
       }
       void startPendingInitialBuild();
-      void startQueuedConfirmedReaction();
       if (stillActive && environmentalObservations.length && runtime.state === 'ready') {
-        const trigger = environmentalObservations.splice(0).join('\n\n');
-        void runAgent(trigger, false);
+        const telemetry = environmentalObservations.splice(0).join('\n\n');
+        void runAgent(technicalIntentBlock(runtimeSignalIntent(
+          'Review the new runtime/environment observation and make only a necessary repair if the app is actually broken.',
+          telemetry,
+        )));
       }
     } finally {
       resolveRunFinished();
@@ -406,11 +499,10 @@ async function runAgent(trigger: string, persistTrigger = true): Promise<boolean
 
 async function startPendingInitialBuild(): Promise<void> {
   const id = initialBuild.candidate(activeId, runtime.state === 'ready', running);
-  if (!id) return;
+  const app = id ? apps.find(item => item.id === id) : undefined;
+  if (!id || !app) return;
   ui.setConnectionStatus('working');
-  // runAgent marks the run active before its first await. Clear only after that
-  // synchronous acceptance; otherwise retain the intent for a later retry.
-  const run = runAgent(INITIAL_BUILD_TRIGGER, false);
+  const run = runAgent(technicalIntentBlock(initialBuildTechnicalIntent(app.prompt)), true);
   if (running && activeRun) initialBuild.accepted(id);
   await run;
 }
@@ -459,13 +551,18 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
       await db.schedules.put({ id, appId: activeId, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
       break;
     }
-    case 'wake': if (!running) void runAgent(message.reason || 'The app requested an agent wake-up.'); break;
+    case 'wake': if (!running) {
+      const reason = message.reason || 'The app requested an agent wake-up.';
+      void runAgent(technicalIntentBlock(runtimeSignalIntent(
+        'Handle the app-requested follow-up only if it requires an implementation change.',
+        reason,
+      )));
+    } break;
     case 'status':
       runtime.setState('ready');
       if (connectionTimer) { clearTimeout(connectionTimer); connectionTimer = undefined; }
       ui.setConnectionStatus('connected');
       void startPendingInitialBuild();
-      void startQueuedConfirmedReaction();
       break;
   }
 }
@@ -612,8 +709,8 @@ function syncInteractionPrompt(): void {
     ? {
         id: confirmation.id,
         content: interactionConfirmationMessage(confirmation.batch),
-        intentPlaceholder: 'Describe what you expected to happen…',
-        confirmLabel: 'Use this intent',
+        intentPlaceholder: 'Describe what happened or what you expected…',
+        confirmLabel: 'Send explanation',
         dismissLabel: 'Not now',
       }
     : undefined;
@@ -640,36 +737,31 @@ async function deliverReactionBatch(batch: ReactionBatch): Promise<void> {
   if (activeId === appId) syncInteractionPrompt();
 }
 
-async function resolveInteractionPrompt(id: string, intent?: string): Promise<void> {
+async function resolveInteractionPrompt(id: string, clarification?: string): Promise<void> {
   const appId = activeId;
   if (!appId) return;
-  const resolution = reactionConfirmationGates.get(appId)?.resolve(id, intent) ?? { kind: 'missing' as const };
+  const resolution = reactionConfirmationGates.get(appId)?.resolve(id, clarification) ?? { kind: 'missing' as const };
   if (resolution.kind === 'missing') {
-    await log('warn', 'reaction', 'Ignored stale interaction confirmation response', { promptId: id }, appId);
+    await log('warn', 'reaction', 'Ignored stale interaction clarification response', { promptId: id }, appId);
     syncInteractionPrompt();
     return;
   }
 
   syncInteractionPrompt();
-  await log('info', 'reaction', resolution.kind === 'confirmed' ? 'Interaction intent confirmed' : 'Interaction adaptation dismissed', {
+  await log('info', 'reaction', resolution.kind === 'submitted' ? 'Interaction clarification submitted' : 'Interaction clarification dismissed', {
     promptId: resolution.confirmation.id,
     size: resolution.confirmation.batch.events.length,
-    ...(resolution.kind === 'confirmed' ? { intent: resolution.intent } : {}),
+    ...(resolution.kind === 'submitted' ? { clarification: resolution.clarification } : {}),
   }, appId);
-  if (resolution.kind !== 'confirmed') return;
+  if (resolution.kind !== 'submitted') return;
 
-  confirmedReactionQueue.set(appId, { batch: resolution.confirmation.batch, intent: resolution.intent });
-  void startQueuedConfirmedReaction();
-}
-
-async function startQueuedConfirmedReaction(): Promise<void> {
-  const appId = activeId;
-  if (!appId || running || runtime.state !== 'ready') return;
-  const queued = confirmedReactionQueue.get(appId);
-  if (!queued) return;
-  confirmedReactionQueue.delete(appId);
-  const accepted = await runAgent(formatReactionBatch(queued.batch, queued.intent), false);
-  if (!accepted) confirmedReactionQueue.set(appId, queued);
+  await waitForAgentIdle();
+  if (activeId !== appId) return;
+  await handleUserFacingInput(
+    resolution.clarification,
+    'interaction',
+    formatReactionTelemetry(resolution.confirmation.batch),
+  );
 }
 
 async function fireDueSchedules(): Promise<void> {

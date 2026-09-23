@@ -34,7 +34,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   const mandatory = [
     section("APP PROMPT", input.appPrompt),
     ...(input.behaviorSummary?.trim() ? [section("CURATED BEHAVIORAL HISTORY", input.behaviorSummary)] : []),
-    section("CURRENT TRIGGER", input.trigger),
+    section("CURRENT TECHNICAL INTENT", input.trigger),
   ].join("\n\n");
   const baseCost = count(SYSTEM_PROMPT) + count(mandatory);
   if (baseCost > budget) throw new Error(`Mandatory context (${baseCost} tokens estimated) exceeds input budget (${budget}); choose a larger-context model or shorten the app prompt/trigger`);
@@ -51,7 +51,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     const content = section("NEW ENVIRONMENT OBSERVATION", truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count));
     if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
   }
-  const candidates = historyCandidates(input.history, input.trigger, input.observation);
+  const candidates = historyCandidates(input.history, input.observation);
   const historyBudget = Math.min(
     Math.max(0, budget - used),
     Math.max(0, input.model.historyContextTokens),
@@ -81,7 +81,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   };
 }
 
-function historyCandidates(history: HistoryEntry[], trigger: string, observation?: string): HistoryEntry[] {
+function historyCandidates(history: HistoryEntry[], observation?: string): HistoryEntry[] {
   const excluded = new Set<number>();
   const newestMatching = (predicate: (entry: HistoryEntry) => boolean) => {
     for (let index = history.length - 1; index >= 0; index--) {
@@ -92,10 +92,14 @@ function historyCandidates(history: HistoryEntry[], trigger: string, observation
     }
   };
 
-  newestMatching(entry => entry.role === "user" && entry.kind === "chat" && entry.content === trigger);
   if (observation) newestMatching(entry => entry.role === "observation" && entry.content === observation);
 
-  return history.filter((_entry, index) => !excluded.has(index));
+  return history.filter((entry, index) => !excluded.has(index) && isTechnicalHistory(entry));
+}
+
+function isTechnicalHistory(entry: HistoryEntry): boolean {
+  if (entry.role === "observation" || entry.role === "agent") return true;
+  return entry.kind === "javascript" || entry.kind === "execution" || entry.kind === "error";
 }
 
 function truncateToTokens(value: string, limit: number, count: TokenCounter): string {

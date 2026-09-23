@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { installInteractionObserver } from "../src/runtime/interactions";
 import { serializeSemanticDocument } from "../src/runtime/semantic-document";
-import { ReactionBatcher, ReactionConfirmationGate, formatReactionBatch, reactionBatchFingerprint } from "../src/shell/core/reactions";
+import { ReactionBatcher, ReactionConfirmationGate, formatReactionTelemetry, reactionBatchFingerprint } from "../src/shell/core/reactions";
 import { MAX_SEMANTIC_DOCUMENT_CHARACTERS, type AppToShellPayload, type JevState } from "../src/shared";
 
 const response = (probability: number) => Promise.resolve({ type: "jev.response", probability, escalated: probability >= .7 });
@@ -253,14 +253,14 @@ describe("Jev decisions and reaction batching", () => {
     expect(deliver).toHaveBeenCalledOnce();
   });
 
-  it("includes local interaction patterns only in user-confirmed reaction context", async () => {
+  it("formats interaction telemetry as evidence without claiming code authorization", async () => {
     const patterned: JevState = {
       ...state(5),
       pattern: { kind: "repeated-action", actionCount: 5, coalescedCount: 3, durationMs: 320, averageIntervalMs: 80, documentChangeCount: 0, likelyBenign: false, frustrationSignal: true },
     };
-    const text = formatReactionBatch({ events: [patterned], createdAt: Date.now() }, "Make the control copy its value");
-    expect(text).toContain("USER CONFIRMED INTERACTION INTENT");
-    expect(text).toContain("Make the control copy its value");
+    const text = formatReactionTelemetry({ events: [patterned], createdAt: Date.now() });
+    expect(text).toContain("evidence only");
+    expect(text).not.toContain("USER CONFIRMED");
     expect(text).toContain('"frustrationSignal": true');
     expect(text).toContain('"actionCount": 5');
   });
@@ -279,7 +279,7 @@ describe("Jev decisions and reaction batching", () => {
     expect(gate.current()?.id).toBe("prompt-1");
   });
 
-  it("requires explicit confirmation before yielding a mutation-capable reaction batch", () => {
+  it("treats submitted clarification as text to interpret rather than mutation permission", () => {
     const gate = new ReactionConfirmationGate(5_000, () => 1_000, () => "prompt-1");
     const batch = { events: [state(8)], createdAt: 1_000 };
     const offer = gate.offer(batch);
@@ -290,11 +290,11 @@ describe("Jev decisions and reaction batching", () => {
 
     const secondGate = new ReactionConfirmationGate(5_000, () => 1_000, () => "prompt-2");
     secondGate.offer(batch);
-    const confirmed = secondGate.resolve("prompt-2", "Copy the displayed value");
-    expect(confirmed.kind).toBe("confirmed");
-    if (confirmed.kind === "confirmed") {
-      expect(confirmed.confirmation.batch).toBe(batch);
-      expect(confirmed.intent).toBe("Copy the displayed value");
+    const submitted = secondGate.resolve("prompt-2", "I thought the page was already loaded, but it was not.");
+    expect(submitted.kind).toBe("submitted");
+    if (submitted.kind === "submitted") {
+      expect(submitted.confirmation.batch).toBe(batch);
+      expect(submitted.clarification).toBe("I thought the page was already loaded, but it was not.");
     }
   });
 
@@ -323,8 +323,8 @@ describe("Jev decisions and reaction batching", () => {
     await vi.advanceTimersByTimeAsync(10);
     const batch = deliver.mock.calls[0]![0];
     expect(batch.events.map((event: JevState) => event.interaction.seq)).toEqual([3, 8]);
-    expect(formatReactionBatch(batch, "Keep the newest interaction")).toContain("newest");
-    expect(formatReactionBatch(batch, "Keep the newest interaction").endsWith("newest")).toBe(true);
+    expect(formatReactionTelemetry(batch)).toContain("newest");
+    expect(formatReactionTelemetry(batch).endsWith("newest")).toBe(true);
   });
 });
 

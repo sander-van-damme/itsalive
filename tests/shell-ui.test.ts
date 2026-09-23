@@ -285,13 +285,13 @@ describe('ShellUI workspace', () => {
     await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector('[data-app-menu]')));
   });
 
-  it('requires a concrete intent before confirming an interaction adaptation', () => {
+  it('requires clarification text before submitting interaction feedback', () => {
     const { ui, callbacks } = mounted();
     ui.setInteractionPrompt({
       id: 'reaction-1',
       content: 'What were you trying to make happen?',
       intentPlaceholder: 'Describe what you expected to happen…',
-      confirmLabel: 'Use this intent',
+      confirmLabel: 'Send explanation',
       dismissLabel: 'Not now',
     });
 
@@ -314,7 +314,7 @@ describe('ShellUI workspace', () => {
       id: 'reaction-2',
       content: 'What were you trying to make happen?',
       intentPlaceholder: 'Describe what you expected to happen…',
-      confirmLabel: 'Use this intent',
+      confirmLabel: 'Send explanation',
       dismissLabel: 'Not now',
     });
 
@@ -329,7 +329,7 @@ describe('ShellUI workspace', () => {
       id: 'reaction-busy',
       content: 'What were you trying to make happen?',
       intentPlaceholder: 'Describe what you expected to happen…',
-      confirmLabel: 'Use this intent',
+      confirmLabel: 'Send explanation',
       dismissLabel: 'Not now',
     });
     expect(document.querySelector('[data-interaction-prompt]')).not.toBeNull();
