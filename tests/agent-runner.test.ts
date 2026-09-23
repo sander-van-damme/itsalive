@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { AgentRunner, type ExecutionResult } from '../src/shell/core/agent-runner';
-import { AGENT_IDLE_TIMEOUT_REASON, AGENT_SAFETY_TIMEOUT_REASON } from '../src/shell/core/run-lifecycle';
+import { AGENT_IDLE_TIMEOUT_REASON, AGENT_TIME_BUDGET_REASON } from '../src/shell/core/run-lifecycle';
 import type { HistoryEntry } from '../src/shell/core/types';
 
 const appId = '550e8400-e29b-41d4-a716-446655440000';
@@ -9,7 +9,7 @@ const model = { provider: 'local', model: 'test-model', maxContextTokens: 10_000
 describe('AgentRunner lifecycle', () => {
   afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
-  it('traces each turn and reports a deterministic turn-limit result', async () => {
+  it('keeps turn count as telemetry and uses only the emergency ceiling as a runaway guard', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
       add: vi.fn(async (entry: HistoryEntry) => { entries.push({ ...entry, id: entries.length + 1 }); return entries.length; }),
@@ -24,14 +24,14 @@ describe('AgentRunner lifecycle', () => {
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain the app', trigger: 'Make a change',
-      model, maxTurns: 2,
+      model, budget: { emergencyTurnCeiling: 2 },
     });
 
-    expect(result).toEqual({ status: 'turn-limit', turns: 2 });
+    expect(result).toMatchObject({ status: 'emergency-ceiling', turns: 2 });
     expect(providers.generate).toHaveBeenCalledTimes(2);
     expect(executor.execute).toHaveBeenCalledTimes(2);
     expect(groups.mock.calls.map(call => call[0])).toEqual([
-      `[itsalive:agent] Run · ${appId}`, '[itsalive:agent] Turn 1/2', '[itsalive:agent] Turn 2/2',
+      `[itsalive:agent] Run · ${appId}`, '[itsalive:agent] Turn 1', '[itsalive:agent] Turn 2',
     ]);
     expect(groupEnds).toHaveBeenCalledTimes(3);
   });
@@ -57,7 +57,7 @@ describe('AgentRunner lifecycle', () => {
       appPrompt: 'Maintain it',
       trigger: 'Repair the timer',
       model,
-      maxTurns: 1,
+      budget: { emergencyTurnCeiling: 1 },
       trace: {
         runId: 'coding-run',
         agentId: 'coding-agent',
@@ -156,7 +156,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 1 },
       onProgress: update => {
         progress.push(update.phase);
         if (update.phase === 'executing' && update.step != null) executionSteps.push(update.step);
@@ -197,7 +197,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, budget: { emergencyTurnCeiling: 1 },
     });
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
@@ -218,8 +218,8 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 1,
-    })).resolves.toEqual({ status: 'turn-limit', turns: 1 });
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 1 },
+    })).resolves.toMatchObject({ status: 'emergency-ceiling', turns: 1 });
 
     expect(executor.execute).not.toHaveBeenCalled();
     expect(entries).toEqual(expect.arrayContaining([
@@ -242,8 +242,8 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
     await expect(new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 12,
-    })).rejects.toThrow(/invalid JavaScript 3 times in a row/);
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 12 },
+    })).resolves.toMatchObject({ status: 'generation-failure', turns: 3 });
 
     expect(providers.generate).toHaveBeenCalledTimes(3);
     expect(executor.execute).not.toHaveBeenCalled();
@@ -265,7 +265,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Fix audio', model, maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Fix audio', model, budget: { emergencyTurnCeiling: 1 },
     });
 
     expect(result).toEqual({ status: 'done', message: 'Done — it’s ready.', turns: 1 });
@@ -291,7 +291,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Add a zebra', model, maxTurns: 1,
+      appId, appPrompt: 'Maintain it', trigger: 'Add a zebra', model, budget: { emergencyTurnCeiling: 1 },
     });
 
     expect(result.message).toBe('There’s your zebra — it runs while the timer is going.');
@@ -321,7 +321,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, maxTurns: 3,
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 3 },
     });
 
     expect(result).toMatchObject({ status: 'done', turns: 2 });
@@ -354,7 +354,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Build progressively', model, maxTurns: 3,
+      appId, appPrompt: 'Maintain it', trigger: 'Build progressively', model, budget: { emergencyTurnCeiling: 3 },
     });
 
     expect(result).toMatchObject({ status: 'done', turns: 2 });
@@ -388,7 +388,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Make the button durable', model, maxTurns: 3,
+      appId, appPrompt: 'Maintain it', trigger: 'Make the button durable', model, budget: { emergencyTurnCeiling: 3 },
     });
 
     expect(result).toMatchObject({ status: 'done', turns: 2 });
@@ -415,14 +415,14 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
-      appId, appPrompt: 'Maintain it', trigger: 'Fix the quiz', model, maxTurns: 12,
+      appId, appPrompt: 'Maintain it', trigger: 'Fix the quiz', model, budget: { emergencyTurnCeiling: 12 },
     });
 
     expect(result).toMatchObject({ status: 'stalled', turns: 3 });
     expect(providers.generate).toHaveBeenCalledTimes(3);
     expect(entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('Do not repeat the same probe') }),
-      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('stopped early to avoid burning the remaining turn budget') }),
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('Repeated verification produced the same low-signal result') }),
     ]));
   });
 
@@ -462,14 +462,14 @@ describe('AgentRunner lifecycle', () => {
 
     const run = new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Make it complex', model,
-      idleTimeoutMs: 50, maxDurationMs: 1_000,
+      budget: { idleTimeoutMs: 50, maxDurationMs: 1_000 },
     });
     const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_IDLE_TIMEOUT_REASON });
     await vi.advanceTimersByTimeAsync(51);
     await assertion;
   });
 
-  it('treats provider activity without visible text as liveness until the safety ceiling', async () => {
+  it('treats provider activity without visible text as liveness until the time budget', async () => {
     vi.useFakeTimers();
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
     const providers = {
@@ -490,16 +490,16 @@ describe('AgentRunner lifecycle', () => {
 
     const run = new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Reason before coding', model,
-      idleTimeoutMs: 50, maxDurationMs: 125,
+      budget: { idleTimeoutMs: 50, maxDurationMs: 125 },
     });
-    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_SAFETY_TIMEOUT_REASON });
+    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_TIME_BUDGET_REASON });
     await vi.advanceTimersByTimeAsync(126);
     await assertion;
 
     expect(info.mock.calls.some(call => call[0] === 'Timing milestone' && (call[1] as { milestone?: string })?.milestone === 'first-provider-activity')).toBe(true);
   });
 
-  it('lets streamed progress outlive the idle watchdog until the safety ceiling', async () => {
+  it('lets streamed progress outlive the idle watchdog until the time budget', async () => {
     vi.useFakeTimers();
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
     const providers = {
@@ -520,9 +520,9 @@ describe('AgentRunner lifecycle', () => {
 
     const run = new AgentRunner(db as never, providers as never, executor).run({
       appId, appPrompt: 'Maintain it', trigger: 'Keep building', model,
-      idleTimeoutMs: 50, maxDurationMs: 125,
+      budget: { idleTimeoutMs: 50, maxDurationMs: 125 },
     });
-    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_SAFETY_TIMEOUT_REASON });
+    const assertion = expect(run).rejects.toMatchObject({ name: 'TimeoutError', message: AGENT_TIME_BUDGET_REASON });
     await vi.advanceTimersByTimeAsync(126);
     await assertion;
   });
@@ -607,4 +607,105 @@ describe('AgentRunner lifecycle', () => {
     expect(result).toMatchObject({ status: 'done', turns: 2 });
     expect(providers.generate.mock.calls[1]![0].messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('A final user action arrived.') })]));
   });
+
+  it('can make useful progress for more than twelve turns', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    let turn = 0;
+    const providers = { generate: vi.fn(async () => {
+      turn++;
+      return { text: turn < 16 ? 'return "progress";' : 'return itsalive.done("ready");', usage: { cost: 0.001 } };
+    }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
+      return code.includes('itsalive.done') ? { done: true, message: 'ready' } : { value: 'progress' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Do substantial work', model,
+      budget: { maxCostUsd: 1, emergencyTurnCeiling: 1_000 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 16 });
+    expect(providers.generate).toHaveBeenCalledTimes(16);
+  });
+
+  it('stops a cost-limited run when provider spend reaches the cap', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return "progress";', usage: { cost: 0.03 } })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ value: 'progress' })) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Work within budget', model,
+      budget: { maxCostUsd: 0.05 },
+    });
+
+    expect(result).toMatchObject({ status: 'cost-budget', turns: 2 });
+    expect(result.message).toContain('cost budget');
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops a dollar-limited run when provider cost is unknown', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return "progress";', usage: { inputTokens: 50 } })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ value: 'progress' })) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Work within budget', model,
+      budget: { maxCostUsd: 0.05 },
+    });
+
+    expect(result).toMatchObject({ status: 'cost-unknown', turns: 1 });
+    expect(executor.execute).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops after repeated runtime failures', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return "attempt";' })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ error: { message: 'runtime failed' } })) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Repair it', model,
+      budget: { maxConsecutiveFailures: 2 },
+    });
+
+    expect(result).toMatchObject({ status: 'runtime-failure', turns: 2 });
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+  });
+
+  it('stops after repeated completion verification failures', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done();' })) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '', rootCount: 1, outsideUiCount: 0 } };
+      return { done: true };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Finish it', model,
+      budget: { maxConsecutiveFailures: 2 },
+    });
+
+    expect(result).toMatchObject({ status: 'verification-failure', turns: 2 });
+  });
+
 });
