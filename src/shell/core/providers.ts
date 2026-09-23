@@ -109,6 +109,7 @@ export class ProviderRegistry {
       this.onUsage?.(result.usage);
       this.emitTrace({
         ...base,
+        endedAt: Date.now(),
         elapsedMs,
         status: "success",
         usage: normalizeLlmUsage(result.usage),
@@ -125,6 +126,7 @@ export class ProviderRegistry {
       console.error(`Request failed (${elapsedMs}ms)`, sanitizeDiagnostic(diagnostic));
       this.emitTrace({
         ...base,
+        endedAt: Date.now(),
         elapsedMs,
         status: "error",
         usage: normalizeLlmUsage(undefined),
@@ -200,26 +202,31 @@ interface HttpAdapterOptions {
 
 function generationUsage(usage: JsonUsage | undefined): GenerateResult["usage"] {
   if (!usage) return undefined;
+  const inputTokens = usage.prompt_tokens ?? usage.input_tokens;
+  const cachedInputTokens =
+    usage.prompt_tokens_details?.cached_tokens
+    ?? usage.input_tokens_details?.cached_tokens
+    ?? usage.cached_tokens;
+  const cacheWriteTokens =
+    usage.prompt_tokens_details?.cache_write_tokens
+    ?? usage.input_tokens_details?.cache_write_tokens
+    ?? usage.prompt_tokens_details?.cache_creation_input_tokens
+    ?? usage.input_tokens_details?.cache_creation_input_tokens
+    ?? usage.cache_write_tokens
+    ?? usage.prompt_cache_write_tokens
+    ?? usage.cache_creation_input_tokens;
+  const outputTokens = usage.completion_tokens ?? usage.output_tokens;
+  const reasoningTokens =
+    usage.completion_tokens_details?.reasoning_tokens
+    ?? usage.output_tokens_details?.reasoning_tokens
+    ?? usage.reasoning_tokens;
   return {
-    inputTokens: usage.prompt_tokens ?? usage.input_tokens,
-    cachedInputTokens:
-      usage.prompt_tokens_details?.cached_tokens
-      ?? usage.input_tokens_details?.cached_tokens
-      ?? usage.cached_tokens,
-    cacheWriteTokens:
-      usage.prompt_tokens_details?.cache_write_tokens
-      ?? usage.input_tokens_details?.cache_write_tokens
-      ?? usage.prompt_tokens_details?.cache_creation_input_tokens
-      ?? usage.input_tokens_details?.cache_creation_input_tokens
-      ?? usage.cache_write_tokens
-      ?? usage.prompt_cache_write_tokens
-      ?? usage.cache_creation_input_tokens,
-    outputTokens: usage.completion_tokens ?? usage.output_tokens,
-    reasoningTokens:
-      usage.completion_tokens_details?.reasoning_tokens
-      ?? usage.output_tokens_details?.reasoning_tokens
-      ?? usage.reasoning_tokens,
-    cost: usage.cost,
+    ...(inputTokens !== undefined ? { inputTokens } : {}),
+    ...(cachedInputTokens !== undefined ? { cachedInputTokens } : {}),
+    ...(cacheWriteTokens !== undefined ? { cacheWriteTokens } : {}),
+    ...(outputTokens !== undefined ? { outputTokens } : {}),
+    ...(reasoningTokens !== undefined ? { reasoningTokens } : {}),
+    ...(usage.cost !== undefined ? { cost: usage.cost } : {}),
   };
 }
 
