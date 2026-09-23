@@ -13,7 +13,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "preview": "vite preview --config vite.root.config.ts"
+    "preview": "vite preview --config vite.root.config.ts",
+    "benchmark:prompts": "vitest run tests/prompt-context-benchmark.test.ts --reporter=verbose"
   },
   "dependencies": {
     "lucide": "^0.468.0"
