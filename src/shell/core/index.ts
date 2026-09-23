@@ -1,4 +1,5 @@
 export * from "./agent-runner";
+export * from "./agent-context";
 export * from "./app-metadata";
 export * from "./app-creation";
 export * from "./app-deletion";
@@ -17,6 +18,7 @@ export * from "./jev";
 export * from "./model-capabilities";
 export * from "./openrouter-account";
 export * from "./providers";
+export * from "./prompt-benchmark";
 export * from "./reactions";
 export * from "./run-lifecycle";
 export * from "./session-usage";
