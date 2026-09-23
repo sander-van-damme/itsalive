@@ -1,7 +1,15 @@
 export const PLATFORM_CAPABILITIES = [
   {
+    id: "done",
+    signature: "return itsalive.done(message)",
+    purpose: "Signal that the current coding task is actually complete and optionally provide a short user-facing completion message.",
+    whenToUse: "Use only from the final coding command after the requested outcome works and verification is complete.",
+    whenNotToUse: "Do not use while staged UI is unfinished or while a repair/verification step remains.",
+    example: "return itsalive.done('Ready to use.');",
+  },
+  {
     id: "llm.ask",
-    signature: "await itsalive.llm.ask<T>(prompt)",
+    signature: "await itsalive.llm.ask(prompt)",
     purpose: "Ask the configured LLM for open-ended generated or transformed content at app runtime.",
     whenToUse: "Use when the app itself must generate, rewrite, summarize, translate, classify, or answer with content that should not be pre-baked locally.",
     whenNotToUse: "Do not use for deterministic calculations, fixed copy, or behavior the browser can implement directly.",
