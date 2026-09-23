@@ -1,5 +1,6 @@
 export * from "./agent-runner";
-export * from "./agent-context";\nexport * from "./agent-history";
+export * from "./agent-context";
+export * from "./agent-history";
 export * from "./agent-profiles";
 export * from "./app-metadata";
 export * from "./app-creation";
@@ -9,7 +10,8 @@ export * from "./capabilities";
 export * from "./bridge-executor";
 export * from "./runtime-logs";
 export * from "./runtime-session";
-export * from "./coding-orchestrator";\nexport * from "./context";
+export * from "./coding-orchestrator";
+export * from "./context";
 export * from "./database";
 export * from "./diagnostics";
 export * from "./diagnostic-log";
