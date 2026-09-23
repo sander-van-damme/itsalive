@@ -22,7 +22,7 @@ describe('SYSTEM_PROMPT code examples', () => {
   });
 
   it('documents shell-backed log lookup as asynchronous', () => {
-    expect(SYSTEM_PROMPT).toContain('await itsalive.logs.get(...)');
+    expect(SYSTEM_PROMPT).toContain("await itsalive.logs.get({ level: 'error', limit: 20 })");
   });
 
   it('defines the canonical generated-app root as an invariant', () => {
