@@ -149,7 +149,7 @@ describe("coding manager and scoped workers", () => {
           };
         }
 
-        if (code.includes('component.setAttribute("data-itsalive-building"')) {
+        if (code.includes('data-itsalive-build-owner')) {
           const match = code.match(/document\.getElementById\("([^"]+)"\)/);
           if (match) ensured.add(match[1]!);
           return { value: { ok: true } };
@@ -588,7 +588,7 @@ function parallelExecutor(ensured: Set<string>) {
           },
         };
       }
-      if (code.includes('component.setAttribute("data-itsalive-building"')) {
+      if (code.includes('data-itsalive-build-owner')) {
         const match = code.match(/document\.getElementById\("([^"]+)"\)/);
         if (match) ensured.add(match[1]!);
         return { value: { ok: true } };
