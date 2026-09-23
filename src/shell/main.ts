@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
@@ -452,19 +452,16 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       trace,
       profile: agentProfileDiagnostic(profile),
     }, app.id);
-    const runner = new AgentRunner(db, registry, executor);
-    const model = profile.modelConfig;
-    const result = await runner.run({
+    const orchestrator = new CodingOrchestrator(db, registry, executor);
+    const result = await orchestrator.run({
       appId: app.id,
       appPrompt: app.prompt,
-      behaviorSummary: app.behaviorSummary,
-      trigger,
-      persistTrigger: false,
-      model,
-      budget: profile.budgets,
-      ...(trace ? { trace } : {}),
-      credential: credential(),
+      technicalIntent: trigger,
+      managerProfile: profile,
+      resolveProfile: id => resolvedProfile(id),
+      ...(credential() ? { credential: credential() } : {}),
       signal: runController.signal,
+      managerTrace: trace,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
       onProgress: progress => ui.setAgentProgress(agentProgressLabel(progress.phase, isInitialBuild, progress.step)),
       onContext: context => {
@@ -473,11 +470,13 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       },
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
-      turns: result.turns,
+      workerTurns: result.workerTurns,
       message: result.message,
       trace,
+      plan: result.plan,
+      handoffs: result.handoffs,
     }, app.id);
-    if (result.status !== 'done' && result.message) {
+    if (result.message) {
       await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: result.message });
     }
   } catch (error) {
