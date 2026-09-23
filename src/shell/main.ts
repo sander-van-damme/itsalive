@@ -461,6 +461,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       trigger,
       persistTrigger: false,
       model,
+      budget: profile.budgets,
       ...(trace ? { trace } : {}),
       credential: credential(),
       signal: runController.signal,
@@ -471,9 +472,14 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
         syncUsage();
       },
     });
-    await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, { turns: result.turns, trace }, app.id);
-    if (result.status === 'turn-limit') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I reached the agent turn limit. Your changes so far were preserved; ask me to continue.' });
-    if (result.status === 'stalled') await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: 'I stopped a repeated verification loop because it was no longer changing the app. Your changes were preserved; ask me to continue if you want another repair attempt.' });
+    await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
+      turns: result.turns,
+      message: result.message,
+      trace,
+    }, app.id);
+    if (result.status !== 'done' && result.message) {
+      await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: result.message });
+    }
   } catch (error) {
     const failure = normalizeAgentRunFailure(error, runController.signal);
     await log(failure.kind === 'run-error' ? 'error' : 'info', `agent:${app.id}`, 'Agent run stopped', {
