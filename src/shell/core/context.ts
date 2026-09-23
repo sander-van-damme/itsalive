@@ -12,7 +12,18 @@ export interface ContextInput {
   observation?: string;
   environmentObservation?: string;
   history: HistoryEntry[];
+  /** Benchmark/profile override. Production callers default to SYSTEM_PROMPT. */
+  systemPrompt?: string;
   countTokens?: TokenCounter;
+}
+
+export interface ContextTokenBreakdown {
+  system: number;
+  mandatory: number;
+  observation: number;
+  environmentObservation: number;
+  history: number;
+  total: number;
 }
 
 export interface BuiltContext {
@@ -23,12 +34,14 @@ export interface BuiltContext {
   omittedHistoryCount: number;
   historyTokens: number;
   historyTokenBudget: number;
+  tokenBreakdown: ContextTokenBreakdown;
 }
 
 const section = (title: string, body: string) => `${title}\n${body.trim() || "(none)"}`;
 
 export function buildModelContext(input: ContextInput): BuiltContext {
   const count = input.countTokens ?? conservativeTokenEstimate;
+  const system = input.systemPrompt ?? SYSTEM_PROMPT;
   const headroom = input.model.observationHeadroomTokens ?? 1_024;
   const budget = input.model.maxContextTokens - input.model.outputHeadroomTokens - headroom;
   const mandatory = [
@@ -36,21 +49,41 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     ...(input.behaviorSummary?.trim() ? [section("CURATED BEHAVIORAL HISTORY", input.behaviorSummary)] : []),
     section("CURRENT TECHNICAL INTENT", input.trigger),
   ].join("\n\n");
-  const baseCost = count(SYSTEM_PROMPT) + count(mandatory);
+  const systemTokens = count(system);
+  const mandatoryTokens = count(mandatory);
+  const baseCost = systemTokens + mandatoryTokens;
   if (baseCost > budget) throw new Error(`Mandatory context (${baseCost} tokens estimated) exceeds input budget (${budget}); choose a larger-context model or shorten the app prompt/trigger`);
 
   const messages: ModelMessage[] = [{ role: "user", content: mandatory }];
   let used = baseCost;
+  let observationTokens = 0;
+  let environmentObservationTokens = 0;
+
   if (input.observation) {
     const maxObservation = Math.max(128, Math.min(headroom * 3, budget - used));
     const bounded = truncateToTokens(input.observation, maxObservation, count);
     const content = section("LAST EXECUTION OBSERVATION", bounded);
-    if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
+    const cost = count(content);
+    if (used + cost <= budget) {
+      messages.push({ role: "user", content });
+      observationTokens = cost;
+      used += cost;
+    }
   }
+
   if (input.environmentObservation) {
-    const content = section("NEW ENVIRONMENT OBSERVATION", truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count));
-    if (used + count(content) <= budget) { messages.push({ role: "user", content }); used += count(content); }
+    const content = section(
+      "NEW ENVIRONMENT OBSERVATION",
+      truncateToTokens(input.environmentObservation, Math.max(128, headroom * 3), count),
+    );
+    const cost = count(content);
+    if (used + cost <= budget) {
+      messages.push({ role: "user", content });
+      environmentObservationTokens = cost;
+      used += cost;
+    }
   }
+
   const candidates = historyCandidates(input.history, input.observation);
   const historyBudget = Math.min(
     Math.max(0, budget - used),
@@ -65,19 +98,29 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     historyUsed += cost;
     used += cost;
   }
+
   selected.reverse();
   messages.splice(0, 0, ...selected.map((entry): ModelMessage => ({
     role: entry.role === "assistant" || entry.role === "agent" ? "assistant" : "user",
     content: entry.content,
   })));
+
   return {
-    system: SYSTEM_PROMPT,
+    system,
     messages,
     estimatedInputTokens: used,
     includedHistoryIds: selected.flatMap(x => x.id == null ? [] : [x.id]),
     omittedHistoryCount: input.history.length - selected.length,
     historyTokens: historyUsed,
     historyTokenBudget: historyBudget,
+    tokenBreakdown: {
+      system: systemTokens,
+      mandatory: mandatoryTokens,
+      observation: observationTokens,
+      environmentObservation: environmentObservationTokens,
+      history: historyUsed,
+      total: used,
+    },
   };
 }
 
