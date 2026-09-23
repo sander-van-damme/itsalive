@@ -63,18 +63,17 @@ describe("bootstrap protocol", () => {
   it("uses a separate strict one-shot bootstrap envelope", () => {
     expect(BOOTSTRAP_VERSION).toBe(1);
     const ready = createBootstrapReady(APP_ID);
-    const init = createBootstrapInit(APP_ID, "runtime();", "<!doctype html><main>saved</main>");
+    const init = createBootstrapInit(APP_ID, "runtime();");
     const failure = createBootstrapError(APP_ID, serializeError(new Error("boom")));
 
     expect(isBootstrapReadyMessage(ready)).toBe(true);
     expect(isBootstrapInitMessage(init)).toBe(true);
-    expect(init.documentHtml).toContain("saved");
     expect(isBootstrapErrorMessage(failure)).toBe(true);
 
     expect(isBootstrapReadyMessage({ ...ready, extra: true })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, runtimeSource: "" })).toBe(false);
     expect(isBootstrapInitMessage({ ...init, appId: APP_ID.toUpperCase() })).toBe(false);
-    expect(isBootstrapInitMessage({ ...init, documentHtml: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) })).toBe(false);
+    expect(isBootstrapInitMessage({ ...init, documentHtml: "<main>saved</main>" })).toBe(false);
     expect(isBootstrapErrorMessage({ ...failure, version: 2 })).toBe(false);
   });
 });
