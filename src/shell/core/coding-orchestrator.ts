@@ -178,6 +178,7 @@ export class CodingOrchestrator {
           systemPrompt: WORKER_SYSTEM,
           history: isolatedHistory,
           scopeSelector: task.scope,
+          includeRawCompletionMessage: true,
           budgetController: rootBudget.fork(profile.budgets),
           trace: workerTrace,
           credential: options.credential,
