@@ -45,7 +45,24 @@ export interface ManagerVerification {
   unresolved: string[];
 }
 
-export type CodingOrchestratorStatus = "done" | "manager-verification-failed" | RunBudgetStopKind;
+export type CodingOrchestratorStatus =
+  | "done"
+  | "manager-verification-failed"
+  | "worker-error"
+  | RunBudgetStopKind;
+
+export interface WorkerTimelineEntry {
+  taskId: string;
+  runId: string;
+  agentId: string;
+  scope: string;
+  profile: AgentProfileId;
+  model: string;
+  startedAt: number;
+  endedAt: number;
+  elapsedMs: number;
+  status: string;
+}
 
 export interface CodingOrchestratorResult {
   status: CodingOrchestratorStatus;
@@ -53,6 +70,7 @@ export interface CodingOrchestratorResult {
   plan?: CodingManagerPlan;
   handoffs: WorkerHandoff[];
   workerTurns: number;
+  timeline: WorkerTimelineEntry[];
 }
 
 export interface CodingOrchestratorOptions {
@@ -64,6 +82,8 @@ export interface CodingOrchestratorOptions {
   credential?: Credential;
   signal?: AbortSignal;
   managerTrace: LlmTraceIdentity;
+  /** Bounded worker concurrency. Defaults to 3. */
+  maxParallelWorkers?: number;
   consumeEnvironmentObservations?: () => string[];
   onProgress?: (progress: AgentProgress & { workerId?: string; scope?: string }) => void;
   onContext?: (context: AgentContextDiagnostic) => void;
@@ -74,7 +94,7 @@ const MANAGER_PLAN_SYSTEM = [
   "Plan implementation; do not write DOM mutation code.",
   "",
   "Return JSON only:",
-  "{\"shared\":{\"design\":[\"...\"],\"state\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\"}]}",
+  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
   "",
   "Rules:",
   "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
@@ -132,11 +152,20 @@ const SIMPLE_SCOPE = /^#[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const TASK_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 
 export class CodingOrchestrator {
+  private readonly activeWorkers = new Map<string, AbortController>();
+
   constructor(
     private readonly db: ShellDatabase,
     private readonly providers: ProviderRegistry,
     private readonly executor: AppExecutor,
   ) {}
+
+  cancelWorker(taskId: string, reason: unknown = new DOMException("Worker interrupted", "AbortError")): boolean {
+    const controller = this.activeWorkers.get(taskId);
+    if (!controller || controller.signal.aborted) return false;
+    controller.abort(reason);
+    return true;
+  }
 
   async run(options: CodingOrchestratorOptions): Promise<CodingOrchestratorResult> {
     const controller = new AbortController();
@@ -165,56 +194,82 @@ export class CodingOrchestrator {
       if (planningStop) return stopResult(planningStop, handoffs, workerTurns);
       const plan = parseCodingManagerPlan(planned.text);
 
-      for (const task of plan.tasks) {
+      const maxParallelWorkers = normalizeParallelism(options.maxParallelWorkers);
+      const uniqueScopes = [...new Set(plan.tasks.map(task => task.scope))];
+      for (const scope of uniqueScopes) {
         if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
-        await ensureWorkerScope(this.executor, options.appId, task.scope, controller.signal);
+        await ensureWorkerScope(this.executor, options.appId, scope, controller.signal);
+      }
+      const scopeConflicts = await inspectScopeConflicts(this.executor, options.appId, uniqueScopes, controller.signal);
+      const taskById = new Map(plan.tasks.map(task => [task.id, task]));
+      const handoffByTask = new Map<string, WorkerHandoff>();
+      const pending = new Set(plan.tasks.map(task => task.id));
+      const timeline: WorkerTimelineEntry[] = [];
 
-        const profile = await options.resolveProfile(task.profile);
-        const workerTrace = createLlmTraceIdentity(profile.role, profile.id, {
+      while (pending.size) {
+        if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+
+        propagateBlockedDependencies(plan, pending, handoffByTask);
+
+        const ready = plan.tasks.filter(task =>
+          pending.has(task.id)
+          && task.dependencies.every(dependency => handoffByTask.get(dependency)?.status === "done")
+        );
+        if (!ready.length) {
+          // Any remaining task is blocked by a failed/unresolved dependency.
+          for (const task of plan.tasks) {
+            if (!pending.has(task.id)) continue;
+            const blockers = task.dependencies.filter(id => handoffByTask.get(id)?.status !== "done");
+            handoffByTask.set(task.id, {
+              status: "blocked",
+              scope: task.scope,
+              changed: [],
+              verified: [],
+              unresolved: ["Blocked by dependency: " + (blockers.join(", ") || "unknown dependency")],
+            });
+            pending.delete(task.id);
+          }
+          break;
+        }
+
+        const wave = chooseWorkerWave(ready, scopeConflicts, maxParallelWorkers);
+        console.info("Worker wave started", {
           parentRunId: options.managerTrace.runId,
-          parentAgentId: options.managerTrace.agentId,
-          scope: task.scope,
+          tasks: wave.map(task => ({ id: task.id, scope: task.scope, profile: task.profile })),
         });
-        const relevantHandoffs = task.dependencies
-          .map(id => {
-            const dependencyTask = plan.tasks.find(candidate => candidate.id === id);
-            return dependencyTask ? handoffs.find(handoff => handoff.scope === dependencyTask.scope) : undefined;
-          })
-          .filter((handoff): handoff is WorkerHandoff => Boolean(handoff));
-        const isolatedHistory = new IsolatedAgentHistory();
-        const runner = new AgentRunner(this.db, this.providers, this.executor);
-        const result = await runner.run({
-          appId: options.appId,
-          appPrompt: options.appPrompt,
-          trigger: workerTaskInput(plan, task, relevantHandoffs),
-          persistTrigger: false,
-          model: profile.modelConfig,
-          systemPrompt: WORKER_SYSTEM,
-          history: isolatedHistory,
-          scopeSelector: task.scope,
-          includeRawCompletionMessage: true,
-          budgetController: rootBudget.fork(profile.budgets),
-          trace: workerTrace,
-          credential: options.credential,
-          signal: controller.signal,
-          consumeEnvironmentObservations: options.consumeEnvironmentObservations,
-          onProgress: progress => options.onProgress?.({ ...progress, workerId: task.id, scope: task.scope }),
-          onContext: options.onContext,
-        });
-        workerTurns += result.turns;
-
-        const handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
-        handoffs.push(handoff);
-        if (result.status !== "done") {
-          return {
-            status: result.status,
-            message: result.message,
+        const outcomes = await Promise.all(wave.map(task =>
+          this.runWorkerTask(
+            options,
             plan,
-            handoffs,
-            workerTurns,
+            task,
+            task.dependencies.map(id => handoffByTask.get(id)).filter((value): value is WorkerHandoff => Boolean(value)),
+            rootBudget,
+            controller.signal,
+          )
+        ));
+        if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
+
+        outcomes.sort((left, right) =>
+          plan.tasks.findIndex(task => task.id === left.task.id) - plan.tasks.findIndex(task => task.id === right.task.id)
+        );
+        for (const outcome of outcomes) {
+          pending.delete(outcome.task.id);
+          handoffByTask.set(outcome.task.id, outcome.handoff);
+          workerTurns += outcome.turns;
+          timeline.push(outcome.timeline);
+        }
+
+        const rootStop = rootBudget.currentStopReason();
+        if (rootStop) {
+          const ordered = orderedHandoffs(plan, handoffByTask);
+          return {
+            ...stopResult(rootStop, ordered, workerTurns, timeline),
+            plan,
           };
         }
       }
+
+      handoffs.push(...orderedHandoffs(plan, handoffByTask));
 
       const finalOutline = await inspectAppOutline(this.executor, options.appId, controller.signal);
       const verified = await this.providers.generate({
@@ -230,22 +285,25 @@ export class CodingOrchestrator {
       }, options.credential);
       const finalCostStop = rootBudget.recordUsage(verified.usage?.cost);
       const verification = parseManagerVerification(verified.text);
-      if (verification.ok) {
+      const hasBlockedWorker = handoffs.some(handoff => handoff.status !== "done");
+      if (verification.ok && !hasBlockedWorker) {
         return {
           status: "done",
           message: verification.summary || "Done — it’s ready.",
           plan,
           handoffs,
           workerTurns,
+          timeline,
         };
       }
-      if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns), plan };
+      if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns, timeline), plan };
       return {
         status: "manager-verification-failed",
         message: verification.summary || "Final integration verification found unfinished work.",
         plan,
         handoffs,
         workerTurns,
+        timeline,
       };
     } finally {
       clearTimeout(deadline);
@@ -508,11 +566,13 @@ function stopResult(
   status: RunBudgetStopKind,
   handoffs: WorkerHandoff[],
   workerTurns: number,
+  timeline: WorkerTimelineEntry[] = [],
 ): CodingOrchestratorResult {
   return {
     status,
     message: runBudgetMessage(status),
     handoffs,
     workerTurns,
+    timeline,
   };
 }
