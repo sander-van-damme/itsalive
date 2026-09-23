@@ -22,14 +22,14 @@ describe("OpenRouter Jev adapter", () => {
       route: { type: "choice", instructions: "Which bounded route best fits?", criteria: { local: "Deterministic local handling", agent: "Reasoning-agent handling" } },
       severity: { type: "score", instructions: "How severe is the observed failure?", criteria: ["No functional impact", "Degraded with workaround", "Blocking"] },
     } satisfies JevQuestions;
-    const fetcher = vi.fn(async () => jsonResponse({
+    const fetcher = vi.fn(async (url: string | URL | Request, init?: RequestInit) => { void url; void init; return jsonResponse({
       id: "gen-dec-mixed", provider: "TypeSafe", model: "typesafe/jev-1.13-20260917",
       answers: {
         needs_repair: { type: "noul", noul: .91 },
         route: { type: "choice", choice: "agent", probabilities: { local: .08, agent: .92 }, confidence: .84 },
         severity: { type: "score", score: 1.2, legend: { "0": "No functional impact", "1": "Degraded with workaround", "2": "Blocking" }, probabilities: { "0": .05, "1": .7, "2": .25 }, confidence: .73 },
       },
-    }));
+    }); });
     const result = await new OpenRouterJevAdapter(fetcher as typeof fetch).evaluate({ state, questions }, credential);
     expect(result.answers).toEqual({
       needs_repair: { type: "noul", noul: .91 },
