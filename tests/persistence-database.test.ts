@@ -139,7 +139,7 @@ describe("shell persistence", () => {
     const databaseName = `shell-${crypto.randomUUID()}`;
     const firstShell = new ShellDatabase(databaseName);
     await firstShell.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
-    await firstShell.documents.put({ appId: APP_ID, html: "<main>saved</main>", updatedAt: 2 });
+    await firstShell.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], updatedAt: 2 });
     await firstShell.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "build something" });
 
     const diagnostics = new DiagnosticLog(firstShell, () => APP_ID);
@@ -165,7 +165,7 @@ describe("app deletion cleanup", () => {
   it("forgets shell state before attempting best-effort origin cleanup", async () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
     await db.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
-    await db.documents.put({ appId: APP_ID, html: "<main>saved</main>", updatedAt: 2 });
+    await db.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], updatedAt: 2 });
 
     const cleanup = vi.fn(async () => {
       expect(await db.apps.get(APP_ID)).toBeUndefined();
