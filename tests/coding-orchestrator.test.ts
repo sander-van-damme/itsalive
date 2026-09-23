@@ -276,6 +276,7 @@ describe("coding manager and scoped workers", () => {
     const requests: GenerateRequest[] = [];
     const started: string[] = [];
     const finished: string[] = [];
+    const lifecycles: Array<Record<string, number | string>> = [];
     let releaseA!: () => void;
     let releaseB!: () => void;
     const gateA = new Promise<void>(resolve => { releaseA = resolve; });
@@ -347,12 +348,18 @@ describe("coding manager and scoped workers", () => {
       resolveProfile: async id => profile(id),
       managerTrace: managerTrace(),
       maxParallelWorkers: 3,
+      onLifecycle: summary => lifecycles.push(structuredClone(summary) as unknown as Record<string, number | string>),
     });
 
     await bothStartedPromise;
     expect(started.sort()).toEqual(["a", "b"]);
     expect(started).not.toContain("c");
     releaseA();
+    await vi.waitFor(() => {
+      expect(lifecycles).toEqual(expect.arrayContaining([
+        expect.objectContaining({ phase: "working", total: 3, ready: 1, building: 1, queued: 1 }),
+      ]));
+    });
     releaseB();
 
     const result = await run;
@@ -425,6 +432,7 @@ describe("coding manager and scoped workers", () => {
   });
 
   it("preserves a successful sibling when another parallel worker fails", async () => {
+    const lifecycles: Array<Record<string, number | string>> = [];
     const plan = {
       shared: { ref: "shared-v1", design: [], state: [] },
       tasks: [
@@ -458,12 +466,16 @@ describe("coding manager and scoped workers", () => {
       managerProfile: profile("coding-manager"),
       resolveProfile: async id => profile(id),
       managerTrace: managerTrace(),
+      onLifecycle: summary => lifecycles.push(structuredClone(summary) as unknown as Record<string, number | string>),
     });
 
     expect(result).toMatchObject({ status: "manager-verification-failed", message: "One component failed." });
     expect(result.handoffs).toEqual(expect.arrayContaining([
       expect.objectContaining({ status: "done", scope: "#good", changed: ["good survived"] }),
       expect.objectContaining({ status: "failed", scope: "#bad", unresolved: ["worker B exploded"] }),
+    ]));
+    expect(lifecycles).toEqual(expect.arrayContaining([
+      expect.objectContaining({ total: 2, ready: 1, failed: 1 }),
     ]));
   });
 
