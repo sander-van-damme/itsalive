@@ -2,7 +2,7 @@ import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
 import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, createAgentAbort, createDefaultRegistry, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionBatch, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState } from './core';
 import { loadRuntimeSource } from './runtime-source';
-import { MAX_SAVED_DOCUMENT_CHARACTERS, ROOT_DOMAIN, appIdFromShellUrl, appOrigin, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
+import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
 const root = document.querySelector<HTMLElement>('#app');
 if (!root) throw new Error('Shell mount point is missing');
@@ -228,12 +228,9 @@ async function selectApp(id: string): Promise<void> {
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
-  const [runtimeSource, savedDocument] = await Promise.all([
-    loadRuntimeSource(),
-    db.documents.get(id),
-  ]);
+  const runtimeSource = await loadRuntimeSource();
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
-  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource, savedDocument?.html);
+  const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
   frame.addEventListener('error', () => { if (runtime.frame !== frame) return; clearTimeout(connectionTimer); ui.setBusy(false); runtime.setState('error'); ui.setConnectionStatus('error'); });
   frame.addEventListener('load', () => { if (runtime.frame === frame) ui.setConnectionStatus('working'); });
   await refreshMessages();
@@ -244,7 +241,6 @@ async function reloadActiveApp(): Promise<void> {
   if (!id || runtime.appId !== id || runtime.state === 'disposed') return;
   await flushActiveDocument();
   behaviorTracker.clear(id);
-  const savedDocument = await db.documents.get(id);
   ui.setConnectionStatus('working');
   if (connectionTimer) clearTimeout(connectionTimer);
   connectionTimer = window.setTimeout(() => {
@@ -252,17 +248,16 @@ async function reloadActiveApp(): Promise<void> {
     ui.setBusy(false);
     ui.setConnectionStatus('error');
   }, 10_000);
-  runtime.reload(savedDocument?.html);
+  runtime.reload();
 }
 
 async function flushActiveDocument(): Promise<void> {
   const id = activeId;
   if (!id || runtime.appId !== id || runtime.state !== 'ready') return;
   try {
-    const snapshot = await runtime.request<{ html?: unknown }>({ type: 'document.snapshot' }, 5_000);
-    if (!snapshot || typeof snapshot.html !== 'string') throw new Error('Runtime returned an invalid document snapshot');
-    if (snapshot.html.length > MAX_SAVED_DOCUMENT_CHARACTERS) throw new Error('Runtime document snapshot is too large');
-    await db.documents.put({ appId: id, html: snapshot.html, updatedAt: Date.now() });
+    const snapshot = await runtime.request<{ document?: unknown }>({ type: 'document.snapshot' }, 5_000);
+    if (!snapshot || !isAppDocumentSnapshot(snapshot.document)) throw new Error('Runtime returned an invalid document snapshot');
+    await db.documents.put({ appId: id, ...snapshot.document, updatedAt: Date.now() });
   } catch (error) {
     console.warn(`[itsalive] Could not flush document snapshot for ${id}`, error);
   }
@@ -423,8 +418,20 @@ async function startPendingInitialBuild(): Promise<void> {
 async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): Promise<void> {
   if (!activeId || message.appId !== activeId) return;
   switch (message.type) {
+    case 'document.request': {
+      const saved = await db.documents.get(activeId);
+      const valid = saved && isAppDocumentSnapshot({ html: saved.html, scripts: (saved as { scripts?: unknown }).scripts })
+        ? { html: saved.html, scripts: saved.scripts }
+        : undefined;
+      if (saved && !valid) {
+        await db.documents.delete(activeId);
+        await log('warn', 'persistence', 'Discarded incompatible beta document snapshot', undefined, activeId);
+      }
+      respond(message, { type: 'document.response', ...(valid ? { document: valid } : {}) });
+      break;
+    }
     case 'document.save':
-      await db.documents.put({ appId: activeId, html: message.html, updatedAt: Date.now() });
+      await db.documents.put({ appId: activeId, ...message.document, updatedAt: Date.now() });
       break;
     case 'log':
       runtimeLogWrites = runtimeLogWrites.then(
