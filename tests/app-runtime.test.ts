@@ -4,8 +4,8 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   posts: [] as Array<{ payload: Record<string, unknown>; requestId?: string }>,
   restoredWithApi: false,
-  restoredHtml: undefined as string | undefined,
-  persistDocument: undefined as ((html: string) => void) | undefined,
+  restoredDocument: undefined as { html: string; scripts: unknown[] } | undefined,
+  persistDocument: undefined as ((document: { html: string; scripts: unknown[] }) => void) | undefined,
   requests: [] as Record<string, unknown>[],
   screenshotError: undefined as Error | undefined,
   listener: undefined as ((event: MessageEvent<unknown>) => void) | undefined,
@@ -24,6 +24,10 @@ vi.mock("../src/runtime/bridge", () => ({
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
       if (payload.type === "history.request") return { type: "history.response", results: ["match"] };
       if (payload.type === "logs.request") return { type: "logs.response", results: [{ timestamp: 1, level: "error", source: "app", message: "boom" }] };
+      if (payload.type === "document.request") return {
+        type: "document.response",
+        document: { html: "<!doctype html><html><body><main>shell saved</main></body></html>", scripts: [] },
+      };
       throw new Error(`Unexpected request: ${String(payload.type)}`);
     }
   },
@@ -37,12 +41,12 @@ vi.mock("../src/runtime/logs", () => ({
 }));
 
 vi.mock("../src/runtime/persistence", () => ({
-  serializeAppDocument: () => "<!doctype html><html><body><main>snapshot</main></body></html>",
-  restoreAppDocument: async (html: string) => {
+  serializeAppDocument: () => ({ html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [] }),
+  restoreAppDocument: async (document: { html: string; scripts: unknown[] }) => {
     state.restoredWithApi = window.itsalive?.apiVersion === 2;
-    state.restoredHtml = html;
+    state.restoredDocument = document;
   },
-  installAutosave: (persist: (html: string) => void) => {
+  installAutosave: (persist: (document: { html: string; scripts: unknown[] }) => void) => {
     state.persistDocument = persist;
     return { save: vi.fn(), suspend: vi.fn(), resume: vi.fn(), disconnect: vi.fn() };
   },
@@ -65,7 +69,6 @@ describe("injected app runtime namespace", () => {
       rootOrigin: "https://itsalive.test",
       appId: "550e8400-e29b-41d4-a716-446655440000",
       port: {} as MessagePort,
-      documentHtml: "<!doctype html><html><body><main>shell saved</main></body></html>",
       screenshot: async element => {
         if (state.screenshotError) throw state.screenshotError;
         return element.tagName;
@@ -90,7 +93,8 @@ describe("injected app runtime namespace", () => {
     expect(window.itsalive.components).toHaveProperty("modal/example-01");
     expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(state.restoredWithApi).toBe(true);
-    expect(state.restoredHtml).toContain("shell saved");
+    expect(state.requests[0]).toEqual({ type: "document.request" });
+    expect(state.restoredDocument?.html).toContain("shell saved");
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
 
@@ -191,16 +195,16 @@ describe("injected app runtime namespace", () => {
     emit({ type: "document.snapshot", requestId: "snapshot" });
     await nextTask();
     expect(state.posts).toContainEqual({
-      payload: { type: "result", result: { html: "<!doctype html><html><body><main>snapshot</main></body></html>" } },
+      payload: { type: "result", result: { document: { html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [] } } },
       requestId: "snapshot",
     });
   });
 
   it("sends autosave snapshots to the shell instead of writing runtime storage", () => {
     expect(state.persistDocument).toBeTypeOf("function");
-    state.persistDocument!("<!doctype html><html><body><main>latest</main></body></html>");
+    state.persistDocument!({ html: "<!doctype html><html><body><main>latest</main></body></html>", scripts: [] });
     expect(state.posts).toContainEqual({
-      payload: { type: "document.save", html: "<!doctype html><html><body><main>latest</main></body></html>" },
+      payload: { type: "document.save", document: { html: "<!doctype html><html><body><main>latest</main></body></html>", scripts: [] } },
       requestId: undefined,
     });
   });
