@@ -14,7 +14,7 @@ const jevControllers = new Set<AbortController>();
 const diagnostics = new DiagnosticLog(db, () => activeId);
 diagnostics.installConsoleCapture();
 
-const SESSION_USAGE_STORAGE_KEY = 'itsalive.session-usage-v1';
+const SESSION_USAGE_STORAGE_KEY = 'itsalive.session-usage-v2';
 function loadSessionUsageState(): Partial<SessionUsageState> | undefined {
   try {
     const stored = sessionStorage.getItem(SESSION_USAGE_STORAGE_KEY);
@@ -31,7 +31,7 @@ function persistSessionUsage(): void {
   try { sessionStorage.setItem(SESSION_USAGE_STORAGE_KEY, JSON.stringify(sessionUsage.state())); }
   catch (error) { console.warn('[itsalive] Could not persist session usage', error); }
 }
-const registry = createDefaultRegistry(usage => { sessionUsage.recordGeneration(usage); persistSessionUsage(); });
+const registry = createDefaultRegistry(usage => { sessionUsage.recordLlmGeneration(usage); persistSessionUsage(); });
 let apps: AppRecord[] = [];
 let running = false;
 let activeRun: AbortController | undefined;
@@ -73,7 +73,7 @@ const behaviorRewriteInFlight = new Set<string>();
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
 const confirmedReactionQueue = new Map<string, { batch: ReactionBatch; intent: string }>();
 const pausedRuns = new PausedRunStore();
-let jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 };
+let jevSessionStats = { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, escalations: 0, coalescedEvents: 0 };
 
 const ui = new ShellUI(root, {
   createApp: async goal => {
@@ -150,6 +150,8 @@ const ui = new ShellUI(root, {
   },
   exportLogs: async () => {
     await diagnostics.write('info', 'logging', 'Diagnostic export requested');
+    const usage = sessionUsage.snapshot();
+    await diagnostics.write('info', 'usage', 'Session usage snapshot', { llm: usage.llm, jev: usage.jev });
     await diagnostics.flush();
     const [logs, history] = await Promise.all([db.logs.all(), db.history.all()]);
     if (!logs.length) throw new Error('Diagnostic storage returned no log entries');
@@ -279,7 +281,7 @@ function stopActiveRun(kind: ExternalAgentAbortKind): boolean {
   activeRun.abort(createAgentAbort(kind));
   return true;
 }
-function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(createAgentAbort('runtime-disposed')); jevControllers.clear(); stopActiveRun('runtime-disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); jevSessionStats = { requests: 0, inputTokens: 0, escalations: 0, coalescedEvents: 0 }; if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
+function disposeFrame(): void { runtimeEpoch++; for (const controller of jevControllers) controller.abort(createAgentAbort('runtime-disposed')); jevControllers.clear(); stopActiveRun('runtime-disposed'); reactionBatcher.destroy(); environmentalObservations.splice(0); jevSessionStats = { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, escalations: 0, coalescedEvents: 0 }; if (connectionTimer) clearTimeout(connectionTimer); connectionTimer = undefined; runtime.dispose(); }
 function currentApp(): AppRecord | undefined { return apps.find(a => a.id === activeId); }
 function currentOrigin(): string { if (!activeId) throw new Error('No active app'); return appOrigin(activeId, ROOT_DOMAIN, 'https:'); }
 
@@ -480,8 +482,15 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const decisionModel: DecisionModel = new OpenRouterJevAdapter();
     const result = await decisionModel.evaluate({ state, signal: controller.signal }, key);
     if (!current()) return;
-    jevSessionStats.inputTokens += result.usage?.inputTokens ?? 0;
-    sessionUsage.recordUnpricedUsage({ inputTokens: result.usage?.inputTokens });
+    const usage = result.usage;
+    jevSessionStats.inputTokens += usage?.inputTokens ?? 0;
+    jevSessionStats.outputTokens += usage?.outputTokens ?? 0;
+    if (typeof usage?.cost === 'number' && Number.isFinite(usage.cost) && usage.cost >= 0) {
+      jevSessionStats.knownCost += usage.cost;
+      jevSessionStats.pricedRequests++;
+    }
+    sessionUsage.recordJevDecision(usage);
+    syncUsage();
     const decision = decideJevEscalation(result.probability, state);
     if (decision.escalated) jevSessionStats.escalations++;
     await log('info', 'jev', 'Interaction decision', {
@@ -492,7 +501,9 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
       pattern: state.pattern,
       durationMs: Math.round(performance.now() - startedAt),
       snapshotCharacters: state.document.length,
-      inputTokens: result.usage?.inputTokens,
+      inputTokens: usage?.inputTokens,
+      outputTokens: usage?.outputTokens,
+      cost: usage?.cost,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
