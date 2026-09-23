@@ -416,16 +416,28 @@ export class AgentRunner {
           if (result.error) {
             if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
             const failureStop = budget.recordFailure("runtime");
+            if (failureStop) return budgetStopResult(failureStop, turn, budget);
+            const failureRoute = await assessFailureRoute(
+              options,
+              "runtime",
+              observation ?? JSON.stringify(result.error),
+              turn,
+              budget,
+              controller.signal,
+            );
+            const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+            if (routeStop) return routeStop;
+            if (failureRoute && observation) observation = appendFailureRoute(observation, failureRoute);
             reportProgress(options, "repairing", turn);
             repeatedLowSignalObservation = undefined;
             repeatedLowSignalState = undefined;
             budget.clearStall();
             console.info('Turn outcome', {
-              kind: 'runtime-repair',
+              kind: 'runtime-' + (failureRoute?.action ?? 'repair'),
+              failureClass: failureRoute?.failureClass,
               consecutiveFailures: budget.snapshot().consecutiveFailures.runtime,
             });
-            if (failureStop) return budgetStopResult(failureStop, turn, budget);
-            console.info('A command failed; continuing to next turn for repair');
+            console.info('A command failed; continuing according to failure route');
             continue;
           }
           budget.recordSuccess("runtime");
