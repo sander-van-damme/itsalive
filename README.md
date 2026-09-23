@@ -36,7 +36,7 @@ The `window.itsalive` namespace follows the same rule. Its contract, source, pro
 - Per-app origin isolation with no storage namespaces or shared app database.
 - IndexedDB shell repositories for app metadata, persistent app HTML, full history, schedules, and logs.
 - Shell-injected runtime initialization over the cross-origin bridge, including persistent HTML restoration/saving, form-control normalization, script re-execution, observation, screenshots, logging, and runtime API installation.
-- JavaScript agent loop with `itsalive.done()`, bounded observations, turn/time limits, errors, repair turns, and streamed multi-command responses whose completed commands execute immediately while generation continues.
+- JavaScript agent loop with `itsalive.done()`, bounded observations, time/cost/progress budgets, explicit failure/stall stop reasons, and streamed multi-command responses whose completed commands execute immediately while generation continues.
 - A user-facing intent layer that separates explanation/question/preference handling from explicit change requests and translates authorized changes into compact technical intents.
 - Coding-context budgeting that always retains the immutable system prompt, app prompt, and current technical intent while excluding raw user/assistant chat from automatic worker history.
 - OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
