@@ -17,6 +17,7 @@ function event(overrides: Partial<LlmTraceEvent> = {}): LlmTraceEvent {
     model: "openrouter/auto",
     streaming: true,
     startedAt: 1,
+    endedAt: 26,
     elapsedMs: 25,
     status: "success",
     turn: 1,
