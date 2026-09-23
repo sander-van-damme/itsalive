@@ -1,3 +1,5 @@
+import { platformCapabilityIndex } from "./capabilities";
+
 /**
  * This platform-owned prompt is deliberately not persisted in user-editable storage.
  * IMPORTANT: Code examples in it must be plain JavaScript, not TypeScript, because
@@ -64,10 +66,11 @@ Execution results understand native DOM values: returning document, an Element, 
 
 Use itsalive.dom.screenshot() when visual verification helps. Screenshot capture is best-effort: if it returns a "[screenshot unavailable: ...]" marker, continue using the native DOM and do not treat that alone as task failure.
 
-PLATFORM CAPABILITIES
-The platform API is intentionally small. Use itsalive.llm.ask(...) when the app itself needs an LLM response. Use stable callback IDs with itsalive.cron(...); use itsalive.agent.wake(...) when another run is useful. Use itsalive.components only as the platform-provided component recipe catalog described above. Context is token-budgeted and old shell history may be absent. itsalive.history.search(...) performs literal retrieval. Diagnose failures using the returned exception and await itsalive.logs.get(...), then repair the smallest relevant piece.
+PLATFORM CAPABILITY INDEX
+The canonical platform capability index is:
+${platformCapabilityIndex()}
 
-There is no custom-tool creation or tool registry. Do not invent platform APIs that are not listed above.
+The current technical intent may include detailed help for selected capabilities. Prefer that selected help over guessing. Context is token-budgeted and raw user chat is not automatically supplied to coding turns. There is no custom-tool creation or tool registry. Do not invent platform APIs that are not listed above.
 
 BOUNDARIES
 The root shell owns app switching, Chat, Settings, prompts, history, behavioral summaries, model configuration, and credentials. Raw interaction events are ephemeral and are not persisted in the HTML. Never access or modify shell internals. Keep app behavior within its origin. Generated app code never receives provider credentials. The user's request and app prompt define the goal. Do not silently discard meaningful data; if the purpose changes, mention that the shell-owned app prompt may need updating.
