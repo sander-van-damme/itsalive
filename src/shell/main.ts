@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -458,6 +458,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
         sessionUsage.setContext(context.estimatedInputTokens, context.maxContextTokens);
         syncUsage();
       },
+      completionAssessor: (state, signal) => assessCompletionWithJev(app.id, state, signal),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
       workerTurns: result.workerTurns,
@@ -522,6 +523,48 @@ async function startPendingInitialBuild(): Promise<void> {
   const run = runAgent(technicalIntentBlock(initialBuildTechnicalIntent(app.prompt)), true);
   if (running && activeRun) initialBuild.accepted(id);
   await run;
+}
+
+async function assessCompletionWithJev(
+  appId: string,
+  state: import('./core').CompletionAssessmentState,
+  signal: AbortSignal,
+): Promise<import('./core').CompletionAssessmentDecision> {
+  const key = credential();
+  if (!key) throw new Error('OpenRouter is not configured');
+  const result = await new OpenRouterJevAdapter().evaluate({
+    state,
+    questions: JEV_COMPLETION_QUESTIONS,
+    signal,
+  }, key);
+  sessionUsage.recordJevDecision(result.usage);
+  syncUsage();
+  const decision = decideJevCompletion(result);
+  await log('info', 'jev', 'Completion decision', {
+    ...compactJevDecisionTelemetry({
+      decisionKind: 'agent-completion',
+      questionSetVersion: JEV_COMPLETION_QUESTION_SET_VERSION,
+      result,
+      policy: {
+        outcome: DEFAULT_JEV_COMPLETION_POLICY.outcome,
+        failure: DEFAULT_JEV_COMPLETION_POLICY.failure,
+      },
+      action: decision.action,
+    }),
+    reason: decision.reason,
+    bands: decision.bands,
+    evidence: {
+      inspectionAvailable: state.evidence.inspectionAvailable,
+      scopeSelector: state.evidence.scopeSelector,
+      htmlCharacters: state.evidence.htmlCharacters,
+      interactiveCount: state.evidence.interactiveCount,
+      visualCount: state.evidence.visualCount,
+      structureCount: state.evidence.structureCount,
+      buildingCount: state.evidence.buildingCount,
+      runtimeOnlyEventListenerCount: state.evidence.runtimeOnlyEventListenerCount,
+    },
+  }, appId);
+  return { action: decision.action, reason: decision.reason };
 }
 
 async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): Promise<void> {
