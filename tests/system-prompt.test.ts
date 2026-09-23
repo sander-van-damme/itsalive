@@ -34,17 +34,20 @@ describe('SYSTEM_PROMPT code examples', () => {
   it('defines a safe staged-construction contract', () => {
     expect(SYSTEM_PROMPT).toContain('data-itsalive-building');
     expect(SYSTEM_PROMPT).toContain('inert');
-    expect(SYSTEM_PROMPT).toContain('aria-busy="true"');
+    expect(SYSTEM_PROMPT).toContain('data-itsalive-build-owner="shell"');
+    expect(SYSTEM_PROMPT).toContain('aria-busy');
     expect(SYSTEM_PROMPT).toContain('visible inert scaffold → primary behavior');
     expect(SYSTEM_PROMPT).toContain('min-height: 100dvh');
   });
 
-  it('ships a platform-owned frosted treatment for unfinished generated UI', () => {
+  it('ships a quiet platform-owned region treatment for unfinished generated UI', () => {
     const runtimeAssets = readFileSync(new URL('../src/runtime/assets.ts', import.meta.url), 'utf8');
     const appShell = readFileSync(new URL('../sites/app/index.html', import.meta.url), 'utf8');
     expect(runtimeAssets).toContain('#itsalive-root [data-itsalive-building]');
-    expect(runtimeAssets).toContain('content: "Building…"');
-    expect(runtimeAssets).toContain('backdrop-filter: blur(4px)');
+    expect(runtimeAssets).toContain('data-itsalive-build-state="queued"');
+    expect(runtimeAssets).not.toContain('content: "Building…"');
+    expect(runtimeAssets).not.toContain('backdrop-filter');
+    expect(runtimeAssets).not.toContain('@keyframes');
     expect(appShell).toContain('min-height:100dvh');
   });
 });
