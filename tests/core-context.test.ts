@@ -42,7 +42,7 @@ describe("shell context builder", () => {
     expect(joined).toContain("prefers concise feedback");
   });
 
-  it("always includes immutable app context and the current trigger", () => {
+  it("always includes immutable app context and the current technical intent", () => {
     const result = buildModelContext({ model, appPrompt: "A violin coach", trigger: "Help me", history: [] });
     expect(result.system).toBe(SYSTEM_PROMPT);
     expect(result.messages.at(-1)?.content).toContain("A violin coach");
@@ -66,9 +66,9 @@ describe("shell context builder", () => {
     expect(result.includedHistoryIds).not.toContain(3);
   });
 
-  it("keeps newest fitting history rather than a fixed message count", () => {
+  it("keeps newest fitting technical history rather than a fixed message count", () => {
     const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, outputHeadroomTokens: 100, observationHeadroomTokens: 100 };
-    const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "user" as const, content: `message-${index} ${"x".repeat(80)}` }));
+    const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "agent" as const, kind: "javascript" as const, content: `command-${index} ${"x".repeat(80)}` }));
     const result = buildModelContext({ model: tinyModel, appPrompt: "coach", trigger: "go", history });
     expect(result.omittedHistoryCount).toBeGreaterThan(0);
     expect(result.includedHistoryIds).toContain(19);
@@ -80,9 +80,9 @@ describe("shell context builder", () => {
       id: index + 1,
       appId: "app",
       timestamp: index,
-      role: "user" as const,
-      kind: "chat" as const,
-      content: `message-${index} ${"x".repeat(80)}`,
+      role: "agent" as const,
+      kind: "javascript" as const,
+      content: `command-${index} ${"x".repeat(80)}`,
     }));
     const small = buildModelContext({
       model: { ...model, maxContextTokens: 128_000, historyContextTokens: 220 },
@@ -104,6 +104,24 @@ describe("shell context builder", () => {
     expect(large.includedHistoryIds.length).toBeGreaterThan(small.includedHistoryIds.length);
     expect(small.includedHistoryIds).toContain(20);
     expect(large.includedHistoryIds).toContain(20);
+  });
+
+
+  it("never includes raw user or assistant chat in coding history", () => {
+    const history = [
+      { id: 1, appId: "app", timestamp: 1, role: "user" as const, kind: "chat" as const, content: "I thought the page was loaded already." },
+      { id: 2, appId: "app", timestamp: 2, role: "assistant" as const, kind: "chat" as const, content: "Thanks for explaining." },
+      { id: 3, appId: "app", timestamp: 3, role: "agent" as const, kind: "javascript" as const, content: "return document.body;" },
+      { id: 4, appId: "app", timestamp: 4, role: "observation" as const, kind: "error" as const, content: "ReferenceError: missing state" },
+    ];
+    const result = buildModelContext({ model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger: "TECHNICAL INTENT\nFix the missing state", history });
+    const joined = result.messages.map(message => message.content).join("\n");
+    expect(joined).not.toContain("I thought the page was loaded already.");
+    expect(joined).not.toContain("Thanks for explaining.");
+    expect(joined).toContain("return document.body;");
+    expect(joined).toContain("ReferenceError: missing state");
+    expect(result.includedHistoryIds).toEqual(expect.arrayContaining([3, 4]));
+    expect(result.includedHistoryIds).not.toEqual(expect.arrayContaining([1, 2]));
   });
 
   it("rejects mandatory context that cannot fit rather than truncating system prompt", () => {
