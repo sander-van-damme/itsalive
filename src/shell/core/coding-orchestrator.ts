@@ -5,7 +5,7 @@ import type { ShellDatabase } from "./database";
 import { platformCapabilityHelp, isPlatformCapabilityId, type PlatformCapabilityId } from "./capabilities";
 import type { AgentProfileId, ResolvedAgentProfile } from "./agent-profiles";
 import type { ProviderRegistry } from "./providers";
-import { RunBudgetController, runBudgetMessage, type RunBudgetStopKind } from "./run-budget";
+import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
 import { createAgentTimeout } from "./run-lifecycle";
 import { createLlmTraceIdentity } from "./llm-trace";
 import type { Credential, LlmTraceIdentity } from "./types";
@@ -87,6 +87,13 @@ export interface CodingOrchestratorOptions {
   consumeEnvironmentObservations?: () => string[];
   onProgress?: (progress: AgentProgress & { workerId?: string; scope?: string }) => void;
   onContext?: (context: AgentContextDiagnostic) => void;
+}
+
+interface WorkerRunOutcome {
+  task: CodingWorkerTask;
+  handoff: WorkerHandoff;
+  turns: number;
+  timeline: WorkerTimelineEntry;
 }
 
 const MANAGER_PLAN_SYSTEM = [
@@ -201,7 +208,6 @@ export class CodingOrchestrator {
         await ensureWorkerScope(this.executor, options.appId, scope, controller.signal);
       }
       const scopeConflicts = await inspectScopeConflicts(this.executor, options.appId, uniqueScopes, controller.signal);
-      const taskById = new Map(plan.tasks.map(task => [task.id, task]));
       const handoffByTask = new Map<string, WorkerHandoff>();
       const pending = new Set(plan.tasks.map(task => task.id));
       const timeline: WorkerTimelineEntry[] = [];
@@ -310,6 +316,193 @@ export class CodingOrchestrator {
       options.signal?.removeEventListener("abort", relayAbort);
     }
   }
+
+  private async runWorkerTask(
+    options: CodingOrchestratorOptions,
+    plan: CodingManagerPlan,
+    task: CodingWorkerTask,
+    dependencyHandoffs: WorkerHandoff[],
+    rootBudget: RunBudgetController,
+    parentSignal: AbortSignal,
+  ): Promise<WorkerRunOutcome> {
+    const profile = await options.resolveProfile(task.profile);
+    const workerTrace = createLlmTraceIdentity(profile.role, profile.id, {
+      parentRunId: options.managerTrace.runId,
+      parentAgentId: options.managerTrace.agentId,
+      scope: task.scope,
+    });
+    const child = new AbortController();
+    const relayParent = () => child.abort(parentSignal.reason);
+    if (parentSignal.aborted) relayParent();
+    else parentSignal.addEventListener("abort", relayParent, { once: true });
+    this.activeWorkers.set(task.id, child);
+
+    const startedAt = Date.now();
+    let turns = 0;
+    let status = "worker-error";
+    let handoff: WorkerHandoff;
+
+    try {
+      const isolatedHistory = new IsolatedAgentHistory();
+      const runner = new AgentRunner(this.db, this.providers, this.executor);
+      const result = await runner.run({
+        appId: options.appId,
+        appPrompt: options.appPrompt,
+        trigger: workerTaskInput(plan, task, dependencyHandoffs),
+        persistTrigger: false,
+        model: profile.modelConfig,
+        systemPrompt: WORKER_SYSTEM,
+        history: isolatedHistory,
+        scopeSelector: task.scope,
+        includeRawCompletionMessage: true,
+        budgetController: rootBudget.fork(tightenWorkerBudget(profile.budgets, task.budget)),
+        trace: workerTrace,
+        credential: options.credential,
+        signal: child.signal,
+        consumeEnvironmentObservations: options.consumeEnvironmentObservations,
+        onProgress: progress => options.onProgress?.({ ...progress, workerId: task.id, scope: task.scope }),
+        onContext: options.onContext,
+      });
+      turns = result.turns;
+      handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
+      status = handoff.status === "done" ? result.status : "blocked";
+    } catch (error) {
+      status = child.signal.aborted ? "worker-cancelled" : "worker-error";
+      handoff = {
+        status: "failed",
+        scope: task.scope,
+        changed: [],
+        verified: [],
+        unresolved: [error instanceof Error ? error.message : String(error)],
+      };
+    } finally {
+      parentSignal.removeEventListener("abort", relayParent);
+      if (this.activeWorkers.get(task.id) === child) this.activeWorkers.delete(task.id);
+    }
+
+    const endedAt = Date.now();
+    const timeline: WorkerTimelineEntry = {
+      taskId: task.id,
+      runId: workerTrace.runId,
+      agentId: workerTrace.agentId,
+      scope: task.scope,
+      profile: profile.id,
+      model: profile.modelConfig.model,
+      startedAt,
+      endedAt,
+      elapsedMs: Math.max(0, endedAt - startedAt),
+      status,
+    };
+    console.info("Worker lifecycle", timeline);
+    return { task, handoff, turns, timeline };
+  }
+}
+
+function normalizeParallelism(value: number | undefined): number {
+  if (value == null) return 3;
+  if (!Number.isFinite(value)) return 3;
+  return Math.max(1, Math.min(6, Math.floor(value)));
+}
+
+function tightenWorkerBudget(base: RunBudgetLimits, override: WorkerBudgetOverride | undefined): RunBudgetLimits {
+  if (!override) return { ...base };
+  const maxDurationMs = override.maxDurationMs == null
+    ? base.maxDurationMs
+    : Math.min(base.maxDurationMs, Math.max(1, Math.floor(override.maxDurationMs)));
+  let maxCostUsd = base.maxCostUsd;
+  if (typeof override.maxCostUsd === "number" && override.maxCostUsd > 0) {
+    maxCostUsd = base.maxCostUsd == null ? override.maxCostUsd : Math.min(base.maxCostUsd, override.maxCostUsd);
+  }
+  return { ...base, maxDurationMs, maxCostUsd };
+}
+
+function scopeConflictKey(left: string, right: string): string {
+  return left < right ? left + "\u001f" + right : right + "\u001f" + left;
+}
+
+function scopesConflict(left: string, right: string, conflicts: ReadonlySet<string>): boolean {
+  return left === right || conflicts.has(scopeConflictKey(left, right));
+}
+
+function chooseWorkerWave(
+  ready: readonly CodingWorkerTask[],
+  conflicts: ReadonlySet<string>,
+  maxParallelWorkers: number,
+): CodingWorkerTask[] {
+  const first = ready[0];
+  if (!first) return [];
+  const wave = [first];
+  if (!first.parallel || maxParallelWorkers === 1) return wave;
+
+  for (const candidate of ready.slice(1)) {
+    if (!candidate.parallel) break;
+    if (wave.length >= maxParallelWorkers) break;
+    if (wave.some(active => scopesConflict(active.scope, candidate.scope, conflicts))) continue;
+    wave.push(candidate);
+  }
+  return wave;
+}
+
+function propagateBlockedDependencies(
+  plan: CodingManagerPlan,
+  pending: Set<string>,
+  handoffs: ReadonlyMap<string, WorkerHandoff>,
+): void {
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const task of plan.tasks) {
+      if (!pending.has(task.id)) continue;
+      const blockers = task.dependencies.filter(id => {
+        const handoff = handoffs.get(id);
+        return handoff != null && handoff.status !== "done";
+      });
+      if (!blockers.length) continue;
+      (handoffs as Map<string, WorkerHandoff>).set(task.id, {
+        status: "blocked",
+        scope: task.scope,
+        changed: [],
+        verified: [],
+        unresolved: ["Blocked by dependency: " + blockers.join(", ")],
+      });
+      pending.delete(task.id);
+      changed = true;
+    }
+  }
+}
+
+function orderedHandoffs(plan: CodingManagerPlan, handoffs: ReadonlyMap<string, WorkerHandoff>): WorkerHandoff[] {
+  return plan.tasks.map(task => handoffs.get(task.id)).filter((value): value is WorkerHandoff => Boolean(value));
+}
+
+async function inspectScopeConflicts(
+  executor: AppExecutor,
+  appId: string,
+  scopes: readonly string[],
+  signal: AbortSignal,
+): Promise<Set<string>> {
+  if (scopes.length < 2) return new Set();
+  const code = [
+    "const selectors = " + JSON.stringify(scopes) + ";",
+    "const nodes = selectors.map(selector => ({ selector, element: document.querySelector(selector) }));",
+    "const overlaps = [];",
+    "for (let i = 0; i < nodes.length; i++) {",
+    "  for (let j = i + 1; j < nodes.length; j++) {",
+    "    const left = nodes[i]; const right = nodes[j];",
+    "    if (left.element && right.element && (left.element.contains(right.element) || right.element.contains(left.element))) overlaps.push([left.selector, right.selector]);",
+    "  }",
+    "}",
+    "return overlaps;",
+  ].join("\n");
+  const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
+  if (result.error) throw new Error("Could not inspect worker scope conflicts: " + result.error.message);
+  const pairs = Array.isArray(result.value) ? result.value : [];
+  const conflicts = new Set<string>();
+  for (const pair of pairs) {
+    if (!Array.isArray(pair) || pair.length !== 2 || typeof pair[0] !== "string" || typeof pair[1] !== "string") continue;
+    conflicts.add(scopeConflictKey(pair[0], pair[1]));
+  }
+  return conflicts;
 }
 
 function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown): string {
