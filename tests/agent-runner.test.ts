@@ -813,7 +813,7 @@ describe('AgentRunner lifecycle', () => {
       }
       return { done: true, message: 'ready' };
     }) };
-    const completionAssessor = vi.fn(async (_state: import('../src/shell/core/agent-runner').CompletionAssessmentState, _signal: AbortSignal) => ({ action: 'finish' as const, reason: 'supported' }));
+    const completionAssessor = vi.fn(async (...args: [import('../src/shell/core/agent-runner').CompletionAssessmentState, AbortSignal]) => { void args; return { action: 'finish' as const, reason: 'supported' }; });
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
