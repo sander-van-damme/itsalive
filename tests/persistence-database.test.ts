@@ -35,7 +35,7 @@ describe("runtime document persistence client", () => {
     target.Alpine = {
       stopObservingMutations: () => order.push("paused"),
       startObservingMutations: () => order.push("resumed"),
-      initTree: () => order.push(`hydrated:${String(target.__restoredSetup)}`),
+      initTree: () => order.push(`hydrated:${String(Boolean(document.querySelector("script[data-app-setup]")))}`),
     };
 
     await restoreAppDocument(snapshot);
@@ -45,6 +45,7 @@ describe("runtime document persistence client", () => {
     expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("current text");
     expect(order).toEqual(["paused", "hydrated:true", "resumed"]);
     expect(document.querySelector("script[data-app-setup]")).not.toBeNull();
+    document.querySelector("script[data-app-setup]")?.remove();
     delete target.Alpine;
     delete target.__restoredSetup;
   });
