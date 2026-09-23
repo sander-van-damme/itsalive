@@ -50,18 +50,106 @@ export interface Credential {
 
 export interface ModelMessage { role: "user" | "assistant"; content: string }
 
+export interface GenerateUsage {
+  inputTokens?: number;
+  cachedInputTokens?: number;
+  cacheWriteTokens?: number;
+  outputTokens?: number;
+  reasoningTokens?: number;
+  cost?: number;
+}
+
+export interface LlmTraceIdentity {
+  runId: string;
+  agentId: string;
+  role: string;
+  profile: string;
+  parentRunId?: string;
+  parentAgentId?: string;
+  scope?: string;
+}
+
+export interface LlmContextTrace {
+  turn?: number;
+  configuredHistoryTokens?: number;
+  effectiveHistoryBudget?: number;
+  selectedHistoryTokens?: number;
+  estimatedInputTokens?: number;
+  includedHistoryCount?: number;
+  omittedHistoryCount?: number;
+  modelContextTokens?: number;
+  sources?: {
+    system: number;
+    mandatory: number;
+    observation: number;
+    environmentObservation: number;
+    history: number;
+    total: number;
+  };
+}
+
+export interface LlmRequestTrace extends LlmTraceIdentity {
+  turn?: number;
+  context?: LlmContextTrace;
+}
+
+export interface NormalizedLlmUsage {
+  inputTokens: number | null;
+  cachedInputTokens: number | null;
+  cacheWriteTokens: number | null;
+  outputTokens: number | null;
+  reasoningTokens: number | null;
+  cost: number | null;
+}
+
+export interface LlmTraceEvent extends LlmTraceIdentity {
+  requestId: string;
+  purpose: string;
+  provider: string;
+  model: string;
+  modelOptions?: Record<string, unknown>;
+  streaming: boolean;
+  startedAt: number;
+  elapsedMs: number;
+  status: "success" | "error";
+  turn?: number;
+  context?: LlmContextTrace;
+  usage: NormalizedLlmUsage;
+  error?: { name?: string; message: string };
+}
+
+export interface LlmTraceMetricRollup {
+  value: number;
+  complete: boolean;
+}
+
+export interface LlmTraceRollup extends LlmTraceIdentity {
+  requests: number;
+  successes: number;
+  errors: number;
+  elapsedMs: number;
+  turns: number;
+  inputTokens: LlmTraceMetricRollup;
+  cachedInputTokens: LlmTraceMetricRollup;
+  cacheWriteTokens: LlmTraceMetricRollup;
+  outputTokens: LlmTraceMetricRollup;
+  reasoningTokens: LlmTraceMetricRollup;
+  cost: LlmTraceMetricRollup;
+}
+
 export interface GenerateRequest {
   /** Console diagnostic label; never sent to the provider. */
   purpose?: string;
   model: ProviderModel;
   system: string;
   messages: ModelMessage[];
+  trace?: LlmRequestTrace;
   signal?: AbortSignal;
 }
 
 export interface GenerateResult {
   text: string;
-  usage?: { inputTokens?: number; outputTokens?: number; cost?: number };
+  usage?: GenerateUsage;
   raw?: unknown;
 }
 
