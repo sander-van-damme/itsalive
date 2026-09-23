@@ -69,7 +69,7 @@ export interface LlmAdapter {
 }
 
 export interface DecisionRequest { state: unknown; signal?: AbortSignal; }
-export interface DecisionResult { probability: number; usage?: { inputTokens?: number }; }
+export interface DecisionResult { probability: number; usage?: { inputTokens?: number; outputTokens?: number; cost?: number }; }
 export interface DecisionModel { evaluate(request: DecisionRequest, credential?: Credential): Promise<DecisionResult>; }
 
 export interface LogEntry {
