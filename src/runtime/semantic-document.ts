@@ -3,7 +3,7 @@ import { isSensitiveElement, redactAttribute } from "./redaction";
 
 const OMIT = new Set(["SCRIPT", "STYLE", "NOSCRIPT", "TEMPLATE"]);
 const SEMANTIC_NATIVE = new Set(["A", "BUTTON", "DETAILS", "FORM", "INPUT", "LABEL", "OPTION", "SELECT", "SUMMARY", "TEXTAREA"]);
-const SAFE_ATTRIBUTES = new Set(["id", "name", "type", "role", "aria-label", "title", "href", "action", "method", "open", "checked", "selected", "disabled", "required", "placeholder", "inert", "data-itsalive-building"]);
+const SAFE_ATTRIBUTES = new Set(["id", "name", "type", "role", "aria-label", "title", "href", "action", "method", "open", "checked", "selected", "disabled", "required", "placeholder", "inert", "data-itsalive-building", "data-itsalive-build-state", "data-itsalive-build-owner"]);
 const MAX_NODES = 2_000;
 const MAX_TEXT = 2_000;
 const MAX_DEPTH = 30;
