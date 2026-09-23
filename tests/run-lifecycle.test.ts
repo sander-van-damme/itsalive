@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  AGENT_TIME_BUDGET_REASON,
   PausedRunStore,
   createAgentAbort,
+  createAgentTimeout,
   normalizeAgentRunFailure,
 } from "../src/shell/core/run-lifecycle";
 
@@ -45,4 +47,18 @@ describe("agent run lifecycle semantics", () => {
     store.clear("app-a");
     expect(store.current("app-a")).toBeUndefined();
   });
+  it("maps the working-time budget to explicit product language", () => {
+    const controller = new AbortController();
+    controller.abort(createAgentTimeout("time-budget"));
+    const result = normalizeAgentRunFailure(new Error("stream aborted"), controller.signal);
+
+    expect(result).toMatchObject({
+      kind: "time-budget",
+      resumable: false,
+      userMessage: "This run reached its working-time budget, so I stopped it. Changes already applied were kept.",
+    });
+    expect(controller.signal.reason).toMatchObject({ name: "TimeoutError", message: AGENT_TIME_BUDGET_REASON });
+  });
+
+
 });
