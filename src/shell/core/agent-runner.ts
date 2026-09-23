@@ -38,6 +38,8 @@ export interface RunOptions {
   history?: AgentHistoryStore;
   /** Simple CSS selector for a worker-owned component scope. */
   scopeSelector?: string;
+  /** Preserve the raw done() payload for structured worker handoffs. */
+  includeRawCompletionMessage?: boolean;
   /** Hierarchical identity used to attribute every provider request in this run. */
   trace?: LlmTraceIdentity;
   credential?: Credential;
@@ -393,7 +395,12 @@ export class AgentRunner {
             reportProgress(options, "finishing", turn);
             console.info('Turn outcome', { kind: 'done' });
             console.info('Run done', sanitizeDiagnostic({ turn, message: completionMessage }));
-            return { status: "done", message: completionMessage, ...(result.message ? { rawMessage: result.message } : {}), turns: turn };
+            return {
+              status: "done",
+              message: completionMessage,
+              ...(options.includeRawCompletionMessage && result.message ? { rawMessage: result.message } : {}),
+              turns: turn,
+            };
           }
 
           if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
