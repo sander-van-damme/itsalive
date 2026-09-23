@@ -6,7 +6,7 @@ export const BOOTSTRAP_PROTOCOL = "itsalive-bootstrap" as const;
 export const BOOTSTRAP_VERSION = 1 as const;
 export const RUNTIME_BOOTSTRAP_KEY = "__itsaliveShellRuntimeInitV1" as const;
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 4 as const;
+export const BRIDGE_VERSION = 5 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
 export const MAX_SAVED_DOCUMENT_CHARACTERS = 5_000_000;
