@@ -791,4 +791,115 @@ describe('AgentRunner lifecycle', () => {
     ]));
   });
 
+
+  it('passes bounded observable evidence to the completion assessor without coding history', async () => {
+    const entries: HistoryEntry[] = [{
+      id: 1, appId, timestamp: 1, role: 'observation', kind: 'execution', content: 'Very old technical history that should not be forwarded to the completion assessor.',
+    }];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done("ready");' })) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: {
+          rootHtml: '<main><button>Generate poem</button><p>A quiet river</p></main>',
+          rootCount: 1,
+          outsideUiCount: 0,
+          buildingCount: 0,
+          runtimeOnlyEventListenerCount: 0,
+        } };
+      }
+      return { done: true, message: 'ready' };
+    }) };
+    const completionAssessor = vi.fn(async (...args: [import('../src/shell/core/agent-runner').CompletionAssessmentState, AbortSignal]) => { void args; return { action: 'finish' as const, reason: 'supported' }; });
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId,
+      appPrompt: 'A poem generator',
+      trigger: 'Make the button generate and show a poem.',
+      model,
+      completionAssessor,
+      budget: { emergencyTurnCeiling: 1 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
+    expect(completionAssessor).toHaveBeenCalledTimes(1);
+    const state = completionAssessor.mock.calls[0]![0];
+    expect(state).toMatchObject({
+      requestedOutcome: 'Make the button generate and show a poem.',
+      evidence: {
+        inspectionAvailable: true,
+        textPreview: expect.stringContaining('Generate poem'),
+        interactiveCount: 1,
+        buildingCount: 0,
+      },
+    });
+    expect(JSON.stringify(state)).not.toContain('Very old technical history');
+    expect(JSON.stringify(state)).not.toContain('<main>');
+  });
+
+  it('allows exactly one completion-assessment repair turn before succeeding', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn()
+      .mockResolvedValueOnce({ text: 'return itsalive.done("candidate");' })
+      .mockResolvedValueOnce({ text: 'return itsalive.done("ready");' }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      return { done: true, message: code.includes('ready') ? 'ready' : 'candidate' };
+    }) };
+    const completionAssessor = vi.fn()
+      .mockResolvedValueOnce({ action: 'uncertain' as const, reason: 'evidence-uncertain' })
+      .mockResolvedValueOnce({ action: 'finish' as const, reason: 'supported' });
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Finish the requested behavior', model,
+      completionAssessor,
+      budget: { emergencyTurnCeiling: 2 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 2 });
+    expect(completionAssessor).toHaveBeenCalledTimes(2);
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('completionAssessment') }),
+    ]));
+  });
+
+  it('does not loop when completion remains uncertain after the bounded repair', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return itsalive.done("candidate");' })) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main><button>Candidate</button></main>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      return { done: true, message: 'candidate' };
+    }) };
+    const completionAssessor = vi.fn(async () => ({ action: 'uncertain' as const, reason: 'evidence-uncertain' }));
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Finish the requested behavior', model,
+      completionAssessor,
+      maxCompletionAssessmentRepairs: 1,
+      budget: { emergencyTurnCeiling: 10 },
+    });
+
+    expect(result).toMatchObject({ status: 'verification-failure', turns: 2 });
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+    expect(completionAssessor).toHaveBeenCalledTimes(2);
+  });
+
 });

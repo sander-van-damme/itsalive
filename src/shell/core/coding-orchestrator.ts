@@ -1,4 +1,4 @@
-import { AgentRunner, type AgentContextDiagnostic, type AgentProgress, type AppExecutor } from "./agent-runner";
+import { AgentRunner, type AgentContextDiagnostic, type AgentProgress, type AppExecutor, type CompletionAssessor } from "./agent-runner";
 import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
@@ -110,6 +110,8 @@ export interface CodingOrchestratorOptions {
   /** Aggregate component lifecycle, used by shell progress UI. */
   onLifecycle?: (summary: CodingLifecycleSummary) => void;
   onContext?: (context: AgentContextDiagnostic) => void;
+  /** Shell-owned bounded completion assessment reused by every scoped worker. */
+  completionAssessor?: CompletionAssessor;
 }
 
 interface WorkerRunOutcome {
@@ -449,6 +451,7 @@ export class CodingOrchestrator {
           if (state) queueState(state);
         },
         onContext: options.onContext,
+        completionAssessor: options.completionAssessor,
       });
       turns = result.turns;
       await stateWrites;

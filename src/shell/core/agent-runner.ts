@@ -26,6 +26,34 @@ export interface AgentContextDiagnostic extends LlmContextTrace {
   maxContextTokens: number;
 }
 
+export interface CompletionEvidence {
+  inspectionAvailable: boolean;
+  scopeSelector?: string;
+  textPreview: string;
+  htmlCharacters: number;
+  interactiveCount: number;
+  visualCount: number;
+  structureCount: number;
+  buildingCount: number;
+  runtimeOnlyEventListenerCount: number;
+}
+
+export interface CompletionAssessmentState {
+  requestedOutcome: string;
+  latestObservation?: string;
+  evidence: CompletionEvidence;
+}
+
+export interface CompletionAssessmentDecision {
+  action: "finish" | "continue" | "uncertain";
+  reason: string;
+}
+
+export type CompletionAssessor = (
+  state: CompletionAssessmentState,
+  signal: AbortSignal,
+) => Promise<CompletionAssessmentDecision>;
+
 export interface RunOptions {
   appId: string;
   appPrompt: string;
@@ -58,6 +86,10 @@ export interface RunOptions {
   onProgress?: (progress: AgentProgress) => void;
   /** Latest input composition for user-facing and exported context diagnostics. */
   onContext?: (context: AgentContextDiagnostic) => void;
+  /** Optional bounded fuzzy second opinion after deterministic completion checks pass. */
+  completionAssessor?: CompletionAssessor;
+  /** JEV-style completion rejection gets at most this many extra repair turns. Defaults to one. */
+  maxCompletionAssessmentRepairs?: number;
 }
 
 export interface RunResult {
@@ -145,6 +177,7 @@ export class AgentRunner {
     let environmentObservation: string | undefined;
     let repeatedLowSignalObservation: string | undefined;
     let repeatedLowSignalState: string | undefined;
+    let completionAssessmentRepairs = 0;
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
     console.info('Run start', {
       trigger: sanitizeDiagnostic(options.trigger),
@@ -389,6 +422,56 @@ export class AgentRunner {
               console.info('Continuing to next turn after incomplete done()');
               continue;
             }
+
+            if (options.completionAssessor) {
+              let assessment: CompletionAssessmentDecision;
+              try {
+                assessment = await options.completionAssessor({
+                  requestedOutcome: boundCompletionText(options.trigger, 4_000),
+                  ...(observation ? { latestObservation: boundCompletionText(observation, 2_000) } : {}),
+                  evidence: completion.evidence,
+                }, controller.signal);
+              } catch (error) {
+                console.warn('Completion assessor unavailable; using deterministic completion result', diagnosticError(error));
+                assessment = { action: "finish", reason: "assessor-unavailable-deterministic-fallback" };
+              }
+              console.info('Completion assessment', sanitizeDiagnostic(assessment));
+              if (assessment.action !== "finish") {
+                const maxRepairs = Math.max(0, Math.floor(options.maxCompletionAssessmentRepairs ?? 1));
+                const assessmentObservation = JSON.stringify({
+                  completionAssessment: {
+                    action: assessment.action,
+                    reason: assessment.reason,
+                    repairAttempt: completionAssessmentRepairs + 1,
+                    maxRepairs,
+                  },
+                });
+                if (completionAssessmentRepairs >= maxRepairs) {
+                  await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: assessmentObservation });
+                  console.warn('Completion assessment remained unresolved after bounded repair', sanitizeDiagnostic(assessment));
+                  return budgetStopResult(
+                    "verification-failure",
+                    turn,
+                    budget,
+                    "I stopped because the final observable result still did not support completion after a bounded repair attempt. Changes already applied were kept.",
+                  );
+                }
+                completionAssessmentRepairs++;
+                observation = assessmentObservation;
+                repeatedLowSignalObservation = undefined;
+                repeatedLowSignalState = undefined;
+                reportProgress(options, "repairing", turn);
+                await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
+                budget.recordFailure("verification");
+                console.info('Turn outcome', {
+                  kind: 'completion-assessment-repair',
+                  action: assessment.action,
+                  reason: assessment.reason,
+                  repairAttempt: completionAssessmentRepairs,
+                });
+                continue;
+              }
+            }
             budget.recordSuccess("verification");
             const completionMessage = userFacingCompletionMessage(result.message);
             if (completionMessage) await historyStore.append({ appId: options.appId, role: "assistant", kind: "chat", content: completionMessage });
@@ -620,14 +703,14 @@ async function inspectRuntimeProgress(executor: AppExecutor, options: RunOptions
   }
 }
 
-async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true } | { ok: false; reason: string }> {
+async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true; evidence: CompletionEvidence } | { ok: false; reason: string }> {
   try {
     if (options.scopeSelector) return verifyScopedCompletion(executor, options, signal);
     const inspection = await executor.execute(options.appId, COMPLETION_INSPECTION, {
       signal,
       timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
     });
-    if (inspection.error) return { ok: true };
+    if (inspection.error) return { ok: true, evidence: completionEvidence("", { inspectionAvailable: false }) };
     if (isCompletionSnapshot(inspection.value)) {
       if (inspection.value.rootCount !== 1 || inspection.value.rootHtml === null) {
         return { ok: false, reason: "the app must preserve exactly one canonical #itsalive-root" };
@@ -642,13 +725,23 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
         const count = inspection.value.runtimeOnlyEventListenerCount ?? 0;
         return { ok: false, reason: `the app still depends on ${count} runtime-only event listener${count === 1 ? "" : "s"} installed by an agent command; move that behavior into Alpine directives or persisted <script> setup that runs again after restore` };
       }
-      return assessCompletionTree(inspection.value.rootHtml);
+      const tree = assessCompletionTree(inspection.value.rootHtml);
+      if (!tree.ok) return tree;
+      return { ok: true, evidence: completionEvidence(inspection.value.rootHtml, {
+        inspectionAvailable: true,
+        buildingCount: inspection.value.buildingCount ?? 0,
+        runtimeOnlyEventListenerCount: inspection.value.runtimeOnlyEventListenerCount ?? 0,
+      }) };
     }
-    if (typeof inspection.value === "string") return assessCompletionTree(inspection.value);
-    return { ok: true };
+    if (typeof inspection.value === "string") {
+      const tree = assessCompletionTree(inspection.value);
+      if (!tree.ok) return tree;
+      return { ok: true, evidence: completionEvidence(inspection.value, { inspectionAvailable: true }) };
+    }
+    return { ok: true, evidence: completionEvidence("", { inspectionAvailable: false }) };
   } catch (error) {
-    console.warn('Completion inspection failed; accepting done()', diagnosticError(error));
-    return { ok: true };
+    console.warn('Completion inspection failed; accepting deterministic completion with unavailable evidence', diagnosticError(error));
+    return { ok: true, evidence: completionEvidence("", { inspectionAvailable: false }) };
   }
 }
 
@@ -657,7 +750,7 @@ async function verifyScopedCompletion(
   executor: AppExecutor,
   options: RunOptions,
   signal: AbortSignal,
-): Promise<{ ok: true } | { ok: false; reason: string }> {
+): Promise<{ ok: true; evidence: CompletionEvidence } | { ok: false; reason: string }> {
   const selector = options.scopeSelector!;
   const inspection = await executor.execute(options.appId, `
 const component = document.querySelector(${JSON.stringify(selector)});
@@ -684,7 +777,49 @@ return component ? {
   if (!shellOwned && ((value.buildingCount as number | undefined ?? 0) > 0 || value.inert === true || value.ariaBusy === "true")) {
     return { ok: false, reason: `assigned component ${selector} is still marked as building/busy` };
   }
-  return assessCompletionTree(typeof value.html === "string" ? value.html : "");
+  const html = typeof value.html === "string" ? value.html : "";
+  const tree = assessCompletionTree(html);
+  if (!tree.ok) return tree;
+  return {
+    ok: true,
+    evidence: completionEvidence(html, {
+      inspectionAvailable: true,
+      scopeSelector: selector,
+      buildingCount: typeof value.buildingCount === "number" ? value.buildingCount : 0,
+    }),
+  };
+}
+
+function completionEvidence(
+  html: string,
+  extra: Partial<Pick<CompletionEvidence, "inspectionAvailable" | "scopeSelector" | "buildingCount" | "runtimeOnlyEventListenerCount">> = {},
+): CompletionEvidence {
+  const withoutImplementation = html
+    .replace(/<script\b[^>]*>[\s\S]*?<\/script>/gi, " ")
+    .replace(/<style\b[^>]*>[\s\S]*?<\/style>/gi, " ");
+  const textPreview = withoutImplementation
+    .replace(/<[^>]+>/g, " ")
+    .replace(/&nbsp;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 1_000);
+  const count = (pattern: RegExp) => [...withoutImplementation.matchAll(pattern)].length;
+  return {
+    inspectionAvailable: extra.inspectionAvailable ?? true,
+    ...(extra.scopeSelector ? { scopeSelector: extra.scopeSelector } : {}),
+    textPreview,
+    htmlCharacters: html.length,
+    interactiveCount: count(/<(?:button|input|textarea|select|a)\b/gi),
+    visualCount: count(/<(?:canvas|svg|img|video|audio)\b/gi),
+    structureCount: count(/<(?:main|section|article|header|nav|form|div|ul|ol|table)\b/gi),
+    buildingCount: extra.buildingCount ?? 0,
+    runtimeOnlyEventListenerCount: extra.runtimeOnlyEventListenerCount ?? 0,
+  };
+}
+
+function boundCompletionText(value: string, max: number): string {
+  const normalized = value.replace(/\s+/g, " ").trim();
+  return normalized.length <= max ? normalized : normalized.slice(0, Math.max(0, max - 16)) + " …[truncated]";
 }
 
 function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number; buildingCount?: number; runtimeOnlyEventListenerCount?: number } {
