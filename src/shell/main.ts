@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, searchHistory, technicalIntentBlock, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ModelConfig, type ReactionBatch, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { AgentRunner, BehaviorTracker, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_ESCALATION_THRESHOLD, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AgentProgressPhase, type AppRecord, type Credential, type DecisionModel, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
 
@@ -46,12 +46,10 @@ let connectionTimer: number | undefined;
 let runtimeLogWrites: Promise<void> = Promise.resolve();
 const initialBuild = new InitialBuildIntent();
 
-const OPENROUTER_PROVIDER = 'openrouter';
-const OPENROUTER_MODEL = 'openrouter/auto';
-const MODEL_OUTPUT_HEADROOM_TOKENS = 8_192;
+const PRIMARY_PROFILE_ID: AgentProfileId = 'coding-manager';
 
 const defaultSettings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
-let modelContextTokens: number | undefined;
+const modelContextTokens = new Map<string, number>();
 const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
 if (stored) {
@@ -135,7 +133,7 @@ const ui = new ShellUI(root, {
     settings = candidate;
     localStorage.setItem('itsalive.settings', JSON.stringify(candidate));
     ui.setSettings(candidate);
-    ui.setModelContextCapacity(modelContextTokens);
+    ui.setModelContextCapacity(primaryModelContextCapacity());
     syncUsage();
   },
   refreshUsage: async () => { await refreshOpenRouterUsage(); },
@@ -186,8 +184,9 @@ ui.setSettings(settings);
 syncUsage();
 if (settings.apiKey) {
   const startupKey = { value: settings.apiKey };
+  const primaryModel = agentProfile(PRIMARY_PROFILE_ID).model;
   void Promise.all([
-    loadModelContextCapacity(startupKey),
+    loadModelContextCapacity(primaryModel, startupKey),
     fetchOpenRouterKeyInfo(startupKey),
   ]).then(([capacity, keyInfo]) => {
     ui.setModelContextCapacity(capacity);
@@ -300,23 +299,27 @@ async function refreshMessages(): Promise<void> {
   ui.setMessages(entries.sort((a,b) => a.timestamp-b.timestamp).map(e => ({ role: e.role as ChatLine['role'], content: e.content })));
 }
 
-async function modelConfig(): Promise<ModelConfig> {
+async function resolvedProfile(id: AgentProfileId): Promise<ResolvedAgentProfile> {
   const key = credential();
   if (!key) throw new Error('OpenRouter is not configured');
-  return {
-    provider: OPENROUTER_PROVIDER,
-    model: OPENROUTER_MODEL,
-    maxContextTokens: await loadModelContextCapacity(key),
-    outputHeadroomTokens: MODEL_OUTPUT_HEADROOM_TOKENS,
-    historyContextTokens: settings.historyContextTokens,
-  };
+  const definition = agentProfile(id);
+  return resolveAgentProfile(id, {
+    contextCapacity: await loadModelContextCapacity(definition.model, key),
+    configuredHistoryTokens: settings.historyContextTokens,
+  });
 }
 function credential(): Credential | undefined { return settings.apiKey ? { value: settings.apiKey } : undefined; }
 
-async function loadModelContextCapacity(key: Credential): Promise<number> {
-  if (modelContextTokens != null) return modelContextTokens;
-  modelContextTokens = await fetchOpenRouterContextCapacity(OPENROUTER_MODEL, key);
-  return modelContextTokens;
+function primaryModelContextCapacity(): number | undefined {
+  return modelContextTokens.get(agentProfile(PRIMARY_PROFILE_ID).model);
+}
+
+async function loadModelContextCapacity(model: string, key: Credential): Promise<number> {
+  const cached = modelContextTokens.get(model);
+  if (cached != null) return cached;
+  const capacity = await fetchOpenRouterContextCapacity(model, key);
+  modelContextTokens.set(model, capacity);
+  return capacity;
 }
 
 function syncUsage(): void {
@@ -350,7 +353,8 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
     await refreshMessages();
   }
   try {
-    const model = await modelConfig();
+    const profile = await resolvedProfile('user-intent');
+    const model = profile.modelConfig;
     const intentRequest = buildUserIntentRequest({
       appPrompt: app.prompt,
       behaviorSummary: app.behaviorSummary,
@@ -358,7 +362,7 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
       source,
       ...(telemetrySummary?.trim() ? { telemetrySummary } : {}),
     }, model, intentController.signal);
-    intentRequest.trace = createLlmTraceIdentity('user-intent', 'user-intent-default', { scope: appId });
+    intentRequest.trace = createLlmTraceIdentity(profile.role, profile.id, { scope: appId });
     const generated = await registry.generate(intentRequest, credential());
     syncUsage();
     const decision = parseUserIntentDecision(generated.text, {
@@ -370,6 +374,7 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
     });
     await log('info', 'intent', 'User input interpreted', {
       source,
+      profile: agentProfileDiagnostic(profile),
       kind: decision.kind,
       shouldCode: decision.shouldCode,
       ...(decision.technicalIntent ? {
@@ -438,11 +443,17 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
   running = true;
   ui.setBusy(true);
   ui.setAgentProgress(isInitialBuild ? 'Preparing the first version…' : 'Applying your change…');
-  const trace: LlmTraceIdentity = createLlmTraceIdentity('coding-agent', 'coding-default', { scope: app.id });
+  let trace: LlmTraceIdentity | undefined;
   try {
-    await log('info', `agent:${app.id}`, 'Agent run started', { technicalIntent: trigger, trace }, app.id);
+    const profile = await resolvedProfile('coding-manager');
+    trace = createLlmTraceIdentity(profile.role, profile.id, { scope: app.id });
+    await log('info', `agent:${app.id}`, 'Agent run started', {
+      technicalIntent: trigger,
+      trace,
+      profile: agentProfileDiagnostic(profile),
+    }, app.id);
     const runner = new AgentRunner(db, registry, executor);
-    const model = await modelConfig();
+    const model = profile.modelConfig;
     const result = await runner.run({
       appId: app.id,
       appPrompt: app.prompt,
@@ -450,7 +461,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       trigger,
       persistTrigger: false,
       model,
-      trace,
+      ...(trace ? { trace } : {}),
       credential: credential(),
       signal: runController.signal,
       consumeEnvironmentObservations: () => environmentalObservations.splice(0),
@@ -641,12 +652,13 @@ async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
 
   behaviorRewriteInFlight.add(appId);
   try {
+    const profile = await resolvedProfile('behavior-summary');
     const result = await registry.generate({
       purpose: 'behavior history rewrite',
-      model: await modelConfig(),
+      model: profile.modelConfig,
       system: 'Curate a compact behavioral summary for future application reasoning. Return only the summary.',
       messages: [{ role: 'user', content: behaviorRewritePrompt(app.behaviorSummary, batch) }],
-      trace: createLlmTraceIdentity('behavior-summary', 'behavior-summary-default', { scope: appId }),
+      trace: createLlmTraceIdentity(profile.role, profile.id, { scope: appId }),
     }, key);
     syncUsage();
     const summary = result.text.trim().slice(0, MAX_BEHAVIOR_SUMMARY_CHARACTERS);
@@ -787,12 +799,13 @@ async function fireDueSchedules(): Promise<void> {
 
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
   try {
+    const profile = await resolvedProfile('runtime-llm');
     const result = await registry.generate({
       purpose: 'app itsalive.llm.ask',
-      model: await modelConfig(),
+      model: profile.modelConfig,
       system: 'Respond helpfully to this request from the active app.',
       messages: [{ role: 'user', content: message.prompt }],
-      trace: createLlmTraceIdentity('runtime-llm', 'runtime-llm-default', { scope: message.appId }),
+      trace: createLlmTraceIdentity(profile.role, profile.id, { scope: message.appId }),
     }, credential());
     syncUsage();
     respond(message, { type: 'llm.response', result: result.text });
@@ -813,15 +826,17 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   if (!apiKey) throw new Error('OpenRouter API key is required');
   if (!Number.isFinite(historyContextTokens)) throw new Error('History context budget must be a number');
   const key = { value: apiKey };
+  const primaryModel = agentProfile(PRIMARY_PROFILE_ID).model;
   const [capacity, keyInfo] = await Promise.all([
-    fetchOpenRouterContextCapacity(OPENROUTER_MODEL, key),
+    fetchOpenRouterContextCapacity(primaryModel, key),
     fetchOpenRouterKeyInfo(key),
   ]);
   if (apiKey !== settings.apiKey) {
     sessionUsage.reset();
     llmTraceTracker.reset();
+    modelContextTokens.clear();
   }
-  modelContextTokens = capacity;
+  modelContextTokens.set(primaryModel, capacity);
   sessionUsage.setKeyInfo(keyInfo);
   return { apiKey, historyContextTokens };
 }
