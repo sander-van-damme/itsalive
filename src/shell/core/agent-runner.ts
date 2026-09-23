@@ -710,7 +710,7 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
       signal,
       timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
     });
-    if (inspection.error) return { ok: true };
+    if (inspection.error) return { ok: true, evidence: completionEvidence("", { inspectionAvailable: false }) };
     if (isCompletionSnapshot(inspection.value)) {
       if (inspection.value.rootCount !== 1 || inspection.value.rootHtml === null) {
         return { ok: false, reason: "the app must preserve exactly one canonical #itsalive-root" };
