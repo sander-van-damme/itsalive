@@ -81,8 +81,8 @@ export class RunBudgetController {
   }
 
   startTurn(turn: number): RunBudgetStopKind | undefined {
-    this.turns = Math.max(this.turns, turn);
     if (turn > this.limits.emergencyTurnCeiling) return "emergency-ceiling";
+    this.turns = Math.max(this.turns, turn);
     return this.costStopReason();
   }
 
