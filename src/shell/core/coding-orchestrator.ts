@@ -239,6 +239,19 @@ export class CodingOrchestrator {
         }
 
         const wave = chooseWorkerWave(ready, scopeConflicts, maxParallelWorkers);
+        const waveIds = new Set(wave.map(task => task.id));
+        const conflictDeferred = ready.filter(task =>
+          !waveIds.has(task.id)
+          && task.parallel
+          && wave.some(active => scopesConflict(active.scope, task.scope, scopeConflicts))
+        );
+        if (conflictDeferred.length) {
+          console.info("Worker scope conflict serialized", {
+            parentRunId: options.managerTrace.runId,
+            deferred: conflictDeferred.map(task => ({ id: task.id, scope: task.scope })),
+            active: wave.map(task => ({ id: task.id, scope: task.scope })),
+          });
+        }
         console.info("Worker wave started", {
           parentRunId: options.managerTrace.runId,
           tasks: wave.map(task => ({ id: task.id, scope: task.scope, profile: task.profile })),
@@ -446,7 +459,7 @@ function chooseWorkerWave(
 function propagateBlockedDependencies(
   plan: CodingManagerPlan,
   pending: Set<string>,
-  handoffs: ReadonlyMap<string, WorkerHandoff>,
+  handoffs: Map<string, WorkerHandoff>,
 ): void {
   let changed = true;
   while (changed) {
@@ -458,7 +471,7 @@ function propagateBlockedDependencies(
         return handoff != null && handoff.status !== "done";
       });
       if (!blockers.length) continue;
-      (handoffs as Map<string, WorkerHandoff>).set(task.id, {
+      handoffs.set(task.id, {
         status: "blocked",
         scope: task.scope,
         changed: [],
