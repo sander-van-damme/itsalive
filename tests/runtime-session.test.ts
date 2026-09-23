@@ -12,7 +12,6 @@ import { RuntimeSession } from "../src/shell/core/runtime-session";
 const APP_ID = "550e8400-e29b-41d4-a716-446655440004";
 const ORIGIN = `https://${APP_ID}.itsalive.org`;
 const RUNTIME_SOURCE = "globalThis.__runtimeInjected = true;";
-const SAVED_DOCUMENT = "<!doctype html><html><body><main>saved</main></body></html>";
 
 function bootstrap(session: RuntimeSession) {
   const frame = session.frame;
@@ -26,7 +25,8 @@ function bootstrap(session: RuntimeSession) {
   expect(post).toHaveBeenCalledOnce();
   const [message, targetOrigin, transfer] = post.mock.calls[0]! as unknown as [unknown, string, Transferable[]];
   expect(isBootstrapInitMessage(message)).toBe(true);
-  expect(message).toMatchObject({ appId: APP_ID, runtimeSource: RUNTIME_SOURCE, documentHtml: SAVED_DOCUMENT });
+  expect(message).toEqual(expect.objectContaining({ appId: APP_ID, runtimeSource: RUNTIME_SOURCE }));
+  expect(message).not.toHaveProperty("documentHtml");
   expect(targetOrigin).toBe(ORIGIN);
   const port = (transfer as Transferable[])[0] as MessagePort;
   expect(port).toBeTruthy();
@@ -48,7 +48,7 @@ describe("RuntimeSession", () => {
 
   it("accepts exactly one bootstrap from the expected app window and origin", () => {
     const { session } = createSession();
-    const frame = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE, SAVED_DOCUMENT);
+    const frame = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE);
     const post = vi.spyOn(frame.contentWindow!, "postMessage").mockImplementation(() => undefined);
 
     window.dispatchEvent(new MessageEvent("message", {
@@ -84,7 +84,7 @@ describe("RuntimeSession", () => {
   it("uses the transferred MessagePort for runtime messages and execution", async () => {
     const onMessage = vi.fn();
     const { session } = createSession(onMessage);
-    session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE, SAVED_DOCUMENT);
+    session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE);
     const { port } = bootstrap(session);
 
     expect(() => session.requireReady()).toThrow("App runtime is not ready yet");
@@ -107,14 +107,13 @@ describe("RuntimeSession", () => {
     })));
   });
 
-  it("reloads by creating a fresh bootstrap that receives the latest saved document", () => {
+  it("reloads by creating a fresh bootstrap without carrying saved document data", () => {
     const { session } = createSession();
-    session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE, SAVED_DOCUMENT);
+    session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE);
     const firstBootstrap = bootstrap(session);
     session.setState("ready");
 
-    const latest = "<!doctype html><html><body><main>latest</main></body></html>";
-    session.reload(latest);
+    session.reload();
 
     expect(session.state).toBe("loading");
     expect(session.executor).toBeUndefined();
@@ -131,16 +130,13 @@ describe("RuntimeSession", () => {
     }));
 
     expect(post).toHaveBeenCalledOnce();
-    expect(post.mock.calls[0]![0]).toMatchObject({
-      type: "init",
-      appId: APP_ID,
-      documentHtml: latest,
-    });
+    expect(post.mock.calls[0]![0]).toMatchObject({ type: "init", appId: APP_ID });
+    expect(post.mock.calls[0]![0]).not.toHaveProperty("documentHtml");
   });
 
   it("surfaces authenticated bootstrap startup errors", () => {
     const { session, onError } = createSession();
-    const frame = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE, SAVED_DOCUMENT);
+    const frame = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE);
     window.dispatchEvent(new MessageEvent("message", {
       data: createBootstrapError(APP_ID, serializeError(new Error("runtime exploded"))),
       origin: ORIGIN,
@@ -153,7 +149,7 @@ describe("RuntimeSession", () => {
 
   it("intentionally disposes the old iframe and channel when switching apps", () => {
     const { session } = createSession();
-    const first = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE, SAVED_DOCUMENT);
+    const first = session.switchTo(APP_ID, ORIGIN, RUNTIME_SOURCE);
     bootstrap(session);
     const firstExecutor = session.executor;
 
