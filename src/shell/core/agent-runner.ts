@@ -1,7 +1,7 @@
 import { buildModelContext, type TokenCounter } from "./context";
 import { appendHistory } from "./history";
 import type { ShellDatabase } from "./database";
-import type { Credential, ModelConfig } from "./types";
+import type { Credential, LlmContextTrace, LlmTraceIdentity, ModelConfig } from "./types";
 import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
 import { createAgentTimeout } from "./run-lifecycle";
@@ -20,12 +20,19 @@ export interface AppExecutor {
 export type AgentProgressPhase = "generating" | "executing" | "repairing" | "verifying" | "finishing";
 export interface AgentProgress { phase: AgentProgressPhase; turn: number; step?: number; }
 
+export interface AgentContextDiagnostic extends LlmContextTrace {
+  estimatedInputTokens: number;
+  maxContextTokens: number;
+}
+
 export interface RunOptions {
   appId: string;
   appPrompt: string;
   behaviorSummary?: string;
   trigger: string;
   model: ModelConfig;
+  /** Hierarchical identity used to attribute every provider request in this run. */
+  trace?: LlmTraceIdentity;
   credential?: Credential;
   maxTurns?: number;
   maxDurationMs?: number;
@@ -39,8 +46,8 @@ export interface RunOptions {
   consumeEnvironmentObservations?: () => string[];
   /** Safe lifecycle signal for shell UI. Never contains model reasoning or generated text. */
   onProgress?: (progress: AgentProgress) => void;
-  /** Latest estimated input size for user-facing context diagnostics. */
-  onContext?: (context: { estimatedInputTokens: number; maxContextTokens: number }) => void;
+  /** Latest input composition for user-facing and exported context diagnostics. */
+  onContext?: (context: AgentContextDiagnostic) => void;
 }
 
 export interface RunResult { status: "done" | "turn-limit" | "stalled"; message?: string; turns: number }
@@ -113,7 +120,13 @@ export class AgentRunner {
     let repeatedLowSignalObservation: string | undefined;
     let repeatedLowSignalState: string | undefined;
     console.groupCollapsed(`[itsalive:agent] Run · ${options.appId}`);
-    console.info('Run start', { trigger: sanitizeDiagnostic(options.trigger), provider: options.model.provider, model: options.model.model, maxTurns });
+    console.info('Run start', {
+      trigger: sanitizeDiagnostic(options.trigger),
+      provider: options.model.provider,
+      model: options.model.model,
+      maxTurns,
+      trace: options.trace,
+    });
     recordMilestone('request-started');
     try {
       if (options.persistTrigger !== false) await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
@@ -128,7 +141,19 @@ export class AgentRunner {
           const history = await this.db.history.forApp(options.appId);
           const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, behaviorSummary: options.behaviorSummary, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
           environmentObservation = undefined;
-          options.onContext?.({ estimatedInputTokens: context.estimatedInputTokens, maxContextTokens: options.model.maxContextTokens });
+          const traceContext: AgentContextDiagnostic = {
+            turn,
+            configuredHistoryTokens: options.model.historyContextTokens,
+            effectiveHistoryBudget: context.historyTokenBudget,
+            selectedHistoryTokens: context.historyTokens,
+            estimatedInputTokens: context.estimatedInputTokens,
+            includedHistoryCount: context.includedHistoryIds.length,
+            omittedHistoryCount: context.omittedHistoryCount,
+            modelContextTokens: options.model.maxContextTokens,
+            sources: context.tokenBreakdown,
+            maxContextTokens: options.model.maxContextTokens,
+          };
+          options.onContext?.(traceContext);
           console.info('Context', {
             provider: options.model.provider,
             model: options.model.model,
@@ -181,7 +206,14 @@ export class AgentRunner {
           try {
             generated = await generateWithStreaming(
               this.providers,
-              { purpose: `agent turn ${turn}`, model: options.model, system: context.system, messages: context.messages, signal: controller.signal },
+              {
+                purpose: `agent turn ${turn}`,
+                model: options.model,
+                system: context.system,
+                messages: context.messages,
+                ...(options.trace ? { trace: { ...options.trace, turn, context: traceContext } } : {}),
+                signal: controller.signal,
+              },
               options.credential,
               delta => {
                 if (delta) {
@@ -355,6 +387,7 @@ export class AgentRunner {
       options.signal?.removeEventListener("abort", abort);
       const totalMs = elapsedMs();
       console.info('Timing summary', {
+        trace: options.trace,
         totalMs,
         firstProviderActivityMs,
         firstStreamTextMs,

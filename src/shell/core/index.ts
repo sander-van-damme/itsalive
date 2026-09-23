@@ -15,6 +15,7 @@ export * from "./diagnostic-log";
 export * from "./history";
 export * from "./initial-build";
 export * from "./jev";
+export * from "./llm-trace";
 export * from "./model-capabilities";
 export * from "./openrouter-account";
 export * from "./providers";

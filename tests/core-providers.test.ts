@@ -165,4 +165,130 @@ describe("ProviderRegistry", () => {
     expect(onUsage).toHaveBeenCalledWith(undefined);
   });
 
+
+  it("emits hierarchical request traces with explicit unknown usage", async () => {
+    vi.spyOn(console, "groupCollapsed").mockImplementation(() => undefined);
+    vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    const onTrace = vi.fn();
+    const registry = new ProviderRegistry(undefined, onTrace).register({
+      id: "local",
+      generate: async () => ({ text: "ok" }),
+    });
+
+    await registry.generate({
+      purpose: "worker repair",
+      model: { provider: "local", model: "worker-model", options: { reasoning: { effort: "low" } } },
+      system: "system",
+      messages: [],
+      trace: {
+        runId: "worker-run",
+        agentId: "worker-a",
+        parentRunId: "manager-run",
+        parentAgentId: "manager",
+        role: "repair-worker",
+        profile: "repair-low",
+        scope: "#timer",
+        turn: 3,
+        context: {
+          turn: 3,
+          estimatedInputTokens: 250,
+          selectedHistoryTokens: 40,
+          omittedHistoryCount: 2,
+        },
+      },
+    });
+
+    expect(onTrace).toHaveBeenCalledOnce();
+    expect(onTrace.mock.calls[0]?.[0]).toMatchObject({
+      runId: "worker-run",
+      agentId: "worker-a",
+      parentRunId: "manager-run",
+      parentAgentId: "manager",
+      role: "repair-worker",
+      profile: "repair-low",
+      scope: "#timer",
+      purpose: "worker repair",
+      provider: "local",
+      model: "worker-model",
+      turn: 3,
+      context: {
+        estimatedInputTokens: 250,
+        selectedHistoryTokens: 40,
+        omittedHistoryCount: 2,
+      },
+      status: "success",
+      usage: {
+        inputTokens: null,
+        cachedInputTokens: null,
+        cacheWriteTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+        cost: null,
+      },
+    });
+  });
+
+  it("normalizes cached, cache-write, reasoning, and cost usage from OpenRouter-style responses", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ message: { content: "done" } }],
+      usage: {
+        prompt_tokens: 120,
+        completion_tokens: 30,
+        cost: 0.012,
+        prompt_tokens_details: {
+          cached_tokens: 80,
+          cache_creation_input_tokens: 20,
+        },
+        completion_tokens_details: {
+          reasoning_tokens: 7,
+        },
+      },
+    }), { status: 200, headers: { "content-type": "application/json" } })));
+
+    const result = await createHttpAdapter({ id: "custom", endpoint: "https://example.test/generate" })
+      .generate({ model: { provider: "custom", model: "x" }, system: "system", messages: [] });
+
+    expect(result.usage).toEqual({
+      inputTokens: 120,
+      cachedInputTokens: 80,
+      cacheWriteTokens: 20,
+      outputTokens: 30,
+      reasoningTokens: 7,
+      cost: 0.012,
+    });
+  });
+
+  it("records failed requests as trace errors without inventing token or cost usage", async () => {
+    vi.spyOn(console, "groupCollapsed").mockImplementation(() => undefined);
+    vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const onTrace = vi.fn();
+    const registry = new ProviderRegistry(undefined, onTrace).register({
+      id: "local",
+      generate: async () => { throw new Error("generation failed"); },
+    });
+
+    await expect(registry.generate({
+      model: { provider: "local", model: "x" },
+      system: "system",
+      messages: [],
+      trace: { runId: "r", agentId: "a", role: "coding-agent", profile: "coding-default" },
+    })).rejects.toThrow("generation failed");
+
+    expect(onTrace.mock.calls[0]?.[0]).toMatchObject({
+      status: "error",
+      error: { name: "Error", message: "generation failed" },
+      usage: {
+        inputTokens: null,
+        cachedInputTokens: null,
+        cacheWriteTokens: null,
+        outputTokens: null,
+        reasoningTokens: null,
+        cost: null,
+      },
+    });
+  });
+
 });

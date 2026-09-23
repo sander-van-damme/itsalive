@@ -36,6 +36,81 @@ describe('AgentRunner lifecycle', () => {
     expect(groupEnds).toHaveBeenCalledTimes(3);
   });
 
+  it('attaches run identity and full context composition to each coding provider request', async () => {
+    const entries: HistoryEntry[] = [{
+      id: 1, appId, timestamp: 1, role: 'observation', kind: 'execution', content: 'Previous technical observation',
+    }];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return 1;' })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ value: 1 })) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const contexts: unknown[] = [];
+
+    await new AgentRunner(db as never, providers as never, executor).run({
+      appId,
+      appPrompt: 'Maintain it',
+      trigger: 'Repair the timer',
+      model,
+      maxTurns: 1,
+      trace: {
+        runId: 'coding-run',
+        agentId: 'coding-agent',
+        role: 'coding-agent',
+        profile: 'coding-default',
+        scope: appId,
+      },
+      onContext: context => contexts.push(context),
+    });
+
+    const request = (providers.generate.mock.calls as unknown[][])[0]?.[0] as {
+      trace?: {
+        runId: string;
+        agentId: string;
+        role: string;
+        profile: string;
+        turn?: number;
+        context?: Record<string, unknown>;
+      };
+    };
+    expect(request.trace).toMatchObject({
+      runId: 'coding-run',
+      agentId: 'coding-agent',
+      role: 'coding-agent',
+      profile: 'coding-default',
+      turn: 1,
+      context: {
+        turn: 1,
+        configuredHistoryTokens: model.historyContextTokens,
+        modelContextTokens: model.maxContextTokens,
+        selectedHistoryTokens: expect.any(Number),
+        estimatedInputTokens: expect.any(Number),
+        includedHistoryCount: 1,
+        // The persisted user trigger is intentionally filtered out of coding history.
+        omittedHistoryCount: 1,
+        sources: {
+          system: expect.any(Number),
+          mandatory: expect.any(Number),
+          observation: expect.any(Number),
+          environmentObservation: expect.any(Number),
+          history: expect.any(Number),
+          total: expect.any(Number),
+        },
+      },
+    });
+    expect(contexts[0]).toMatchObject({
+      maxContextTokens: model.maxContextTokens,
+      configuredHistoryTokens: model.historyContextTokens,
+      includedHistoryCount: 1,
+      omittedHistoryCount: 1,
+    });
+  });
+
   it('executes complete commands while the same model response is still streaming', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
