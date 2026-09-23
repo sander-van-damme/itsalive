@@ -510,6 +510,40 @@ describe("coding manager and scoped workers", () => {
     expect(aborted.sort()).toEqual(["#a", "#b"]);
   });
 
+
+  it("accounts concurrent worker spend against the shared parent cost budget", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [] },
+      tasks: ["a", "b"].map(id => ({
+        id, goal: id, scope: "#" + id, acceptanceCriteria: [], dependencies: [], capabilityIds: [],
+        profile: "component-worker", sharedContractRef: "shared-v1", parallel: true,
+      })),
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          throw new Error("verification should not run after shared budget exhaustion");
+        }
+        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0.003 } };
+      }),
+    };
+    const manager = profile("coding-manager");
+    manager.budgets = { ...manager.budgets, maxCostUsd: 0.005 };
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set())).run({
+      appId,
+      appPrompt: "Budgeted parallel build",
+      technicalIntent: "Build two components.",
+      managerProfile: manager,
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+    });
+
+    expect(result).toMatchObject({ status: "cost-budget", workerTurns: 2 });
+    expect(result.handoffs).toHaveLength(2);
+  });
+
 function managerTrace() {
   return {
     runId: "manager-run",
