@@ -8,7 +8,7 @@ export type ReactionOfferResult =
   | { kind: "pending"; confirmation: ReactionConfirmation }
   | { kind: "cooldown"; key: string; until: number };
 export type ReactionResolution =
-  | { kind: "confirmed"; confirmation: ReactionConfirmation; intent: string }
+  | { kind: "submitted"; confirmation: ReactionConfirmation; clarification: string }
   | { kind: "dismissed"; confirmation: ReactionConfirmation }
   | { kind: "missing" };
 
@@ -79,30 +79,27 @@ export class ReactionConfirmationGate {
     return { kind: "prompt", confirmation };
   }
 
-  resolve(id: string, intent?: string): ReactionResolution {
+  resolve(id: string, clarification?: string): ReactionResolution {
     const confirmation = this.pending;
     if (!confirmation || confirmation.id !== id) return { kind: "missing" };
     this.pending = undefined;
     this.cooldownUntil.set(confirmation.key, this.now() + this.cooldownMs);
-    const normalizedIntent = intent?.trim();
-    return normalizedIntent
-      ? { kind: "confirmed", confirmation, intent: normalizedIntent }
+    const normalizedClarification = clarification?.trim();
+    return normalizedClarification
+      ? { kind: "submitted", confirmation, clarification: normalizedClarification }
       : { kind: "dismissed", confirmation };
   }
 
   clear(): void { this.pending = undefined; }
 }
 
-export function formatReactionBatch(batch: ReactionBatch, intent: string): string {
+export function formatReactionTelemetry(batch: ReactionBatch): string {
   const events = [...batch.events].sort((a, b) => a.interaction.seq - b.interaction.seq);
   const recent = new Map<number, JevState["interaction"]>();
   for (const state of events) for (const interaction of state.recentInteractions) recent.set(interaction.seq, interaction);
-  return `USER CONFIRMED INTERACTION INTENT
+  return `ESCALATED INTERACTION TELEMETRY
 
-The user explicitly described the outcome they wanted from the observed interaction. Treat this intent as authoritative and use the telemetry only as supporting evidence. Make the smallest useful, reversible change that satisfies the stated intent; do not infer additional goals.
-
-USER INTENT
-${intent.trim()}
+This telemetry describes what happened around an escalated interaction. It is evidence only and does not authorize an app change.
 
 ESCALATED EVENTS
 ${JSON.stringify(events.map(event => ({ interaction: event.interaction, ...(event.pattern ? { pattern: event.pattern } : {}) })), null, 2)}
