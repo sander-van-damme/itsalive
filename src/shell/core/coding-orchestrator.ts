@@ -1,4 +1,4 @@
-import { AgentRunner, type AgentContextDiagnostic, type AgentProgress, type AppExecutor, type CompletionAssessor } from "./agent-runner";
+import { AgentRunner, type AgentContextDiagnostic, type AgentProgress, type AppExecutor, type CompletionAssessor, type FailureAssessor, type RunResult } from "./agent-runner";
 import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
@@ -47,6 +47,8 @@ export interface ManagerVerification {
 
 export type CodingOrchestratorStatus =
   | "done"
+  | "clarification-needed"
+  | "failure-stop"
   | "manager-verification-failed"
   | "worker-error"
   | RunBudgetStopKind;
@@ -112,6 +114,8 @@ export interface CodingOrchestratorOptions {
   onContext?: (context: AgentContextDiagnostic) => void;
   /** Shell-owned bounded completion assessment reused by every scoped worker. */
   completionAssessor?: CompletionAssessor;
+  /** Shell-owned semantic failure routing reused by every scoped worker. */
+  failureAssessor?: FailureAssessor;
 }
 
 interface WorkerRunOutcome {
@@ -119,6 +123,8 @@ interface WorkerRunOutcome {
   handoff: WorkerHandoff;
   turns: number;
   timeline: WorkerTimelineEntry;
+  runStatus?: RunResult["status"];
+  message?: string;
 }
 
 const MANAGER_PLAN_SYSTEM = [
@@ -322,6 +328,33 @@ export class CodingOrchestrator {
           timeline.push(outcome.timeline);
         }
 
+        const terminalFailure = outcomes.find(outcome =>
+          outcome.runStatus === "clarification-needed" || outcome.runStatus === "failure-stop"
+        );
+        if (terminalFailure?.runStatus) {
+          for (const task of plan.tasks) {
+            if (!pending.has(task.id)) continue;
+            handoffByTask.set(task.id, {
+              status: "blocked",
+              scope: task.scope,
+              changed: [],
+              verified: [],
+              unresolved: ["Run stopped before this component could finish: " + terminalFailure.runStatus],
+            });
+            pending.delete(task.id);
+            await setWorkerScopeState(this.executor, options.appId, task.scope, "blocked", controller.signal);
+            reportScopeState(task.scope, "blocked");
+          }
+          return {
+            status: terminalFailure.runStatus,
+            message: terminalFailure.message,
+            plan,
+            handoffs: orderedHandoffs(plan, handoffByTask),
+            workerTurns,
+            timeline,
+          };
+        }
+
         const rootStop = rootBudget.currentStopReason();
         if (rootStop) {
           for (const task of plan.tasks) {
@@ -413,6 +446,8 @@ export class CodingOrchestrator {
     const startedAt = Date.now();
     let turns = 0;
     let status = "worker-error";
+    let runStatus: RunResult["status"] | undefined;
+    let message: string | undefined;
     let handoff: WorkerHandoff;
     let stateWrites = Promise.resolve();
     let queuedState: ComponentBuildState = "building";
@@ -452,8 +487,11 @@ export class CodingOrchestrator {
         },
         onContext: options.onContext,
         completionAssessor: options.completionAssessor,
+        failureAssessor: options.failureAssessor,
       });
       turns = result.turns;
+      runStatus = result.status;
+      message = result.message;
       await stateWrites;
       handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
       status = handoff.status === "done" ? result.status : "blocked";
@@ -495,7 +533,7 @@ export class CodingOrchestrator {
       status,
     };
     console.info("Worker lifecycle", timeline);
-    return { task, handoff, turns, timeline };
+    return { task, handoff, turns, timeline, ...(runStatus ? { runStatus } : {}), ...(message ? { message } : {}) };
   }
 }
 
@@ -793,7 +831,7 @@ export function parseManagerVerification(raw: string): ManagerVerification {
 
 function workerHandoff(
   task: CodingWorkerTask,
-  status: "done" | RunBudgetStopKind,
+  status: RunResult["status"],
   rawMessage: string | undefined,
   fallbackMessage: string | undefined,
 ): WorkerHandoff {
