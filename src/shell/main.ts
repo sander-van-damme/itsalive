@@ -381,10 +381,10 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
     if (activeId === appId) ui.showError(error instanceof Error ? error.message : String(error));
   } finally {
     interpreting = false;
-    if (activeId === appId && !running) {
+    if (!running) {
       ui.setBusy(false);
       ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
-      await refreshMessages();
+      if (activeId === appId) await refreshMessages();
     }
   }
 }
@@ -694,7 +694,7 @@ function syncInteractionPrompt(): void {
     ? {
         id: confirmation.id,
         content: interactionConfirmationMessage(confirmation.batch),
-        intentPlaceholder: 'Describe what you expected to happen…',
+        intentPlaceholder: 'Describe what happened or what you expected…',
         confirmLabel: 'Send explanation',
         dismissLabel: 'Not now',
       }
