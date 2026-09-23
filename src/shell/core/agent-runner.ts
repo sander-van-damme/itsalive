@@ -215,6 +215,7 @@ export class AgentRunner {
           };
 
           let generated;
+          let pendingCostStop: RunBudgetStopKind | undefined;
           try {
             generated = await generateWithStreaming(
               this.providers,
@@ -243,8 +244,7 @@ export class AgentRunner {
             );
             await executionQueue;
             touchProgress();
-            const costStop = budget.recordUsage(generated.usage?.cost);
-            if (costStop) return budgetStopResult(costStop, turn, budget);
+            pendingCostStop = budget.recordUsage(generated.usage?.cost);
           } catch (error) {
             console.error('Model request failed', diagnosticError(error));
             if (controller.signal.aborted) throw controller.signal.reason ?? error;
@@ -272,6 +272,7 @@ export class AgentRunner {
                 consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
               }));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
@@ -300,6 +301,7 @@ export class AgentRunner {
                 consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
               }));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
@@ -319,6 +321,7 @@ export class AgentRunner {
           }
 
           if (result.error) {
+            if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
             const failureStop = budget.recordFailure("runtime");
             reportProgress(options, "repairing", turn);
             repeatedLowSignalObservation = undefined;
@@ -350,6 +353,7 @@ export class AgentRunner {
               reportProgress(options, "repairing", turn);
               console.warn('Completion check rejected', sanitizeDiagnostic(completion));
               await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               const failureStop = budget.recordFailure("verification");
               console.info('Turn outcome', {
                 kind: 'verification-repair',
@@ -367,6 +371,8 @@ export class AgentRunner {
             console.info('Run done', sanitizeDiagnostic({ turn, message: completionMessage }));
             return { status: "done", message: completionMessage, turns: turn };
           }
+
+          if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
 
           const rawObservation = observation;
           if (rawObservation && isLowSignalObservation(rawObservation)) {
