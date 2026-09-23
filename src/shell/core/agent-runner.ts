@@ -1,5 +1,5 @@
 import { buildModelContext, type TokenCounter } from "./context";
-import { appendHistory } from "./history";
+import { databaseAgentHistory, type AgentHistoryStore } from "./agent-history";
 import type { ShellDatabase } from "./database";
 import type { Credential, LlmContextTrace, LlmTraceIdentity, ModelConfig } from "./types";
 import type { ProviderRegistry } from "./providers";
@@ -32,6 +32,12 @@ export interface RunOptions {
   behaviorSummary?: string;
   trigger: string;
   model: ModelConfig;
+  /** Optional role-specific stable prompt. Defaults to the production coding system prompt. */
+  systemPrompt?: string;
+  /** Optional isolated history store. Defaults to durable shell history. */
+  history?: AgentHistoryStore;
+  /** Simple CSS selector for a worker-owned component scope. */
+  scopeSelector?: string;
   /** Hierarchical identity used to attribute every provider request in this run. */
   trace?: LlmTraceIdentity;
   credential?: Credential;
@@ -55,6 +61,8 @@ export interface RunOptions {
 export interface RunResult {
   status: "done" | RunBudgetStopKind;
   message?: string;
+  /** Unsanitized done() payload for structured worker handoff parsing. */
+  rawMessage?: string;
   turns: number;
 }
 
@@ -67,6 +75,11 @@ export const DEFAULT_AGENT_RUN_BUDGET: RunBudgetLimits = Object.freeze({
   emergencyTurnCeiling: 1_000,
 });
 const PROGRESS_INSPECTION = 'return document.getElementById("itsalive-root")?.outerHTML ?? document.body.innerHTML;';
+
+function progressInspection(options: RunOptions): string {
+  if (!options.scopeSelector) return PROGRESS_INSPECTION;
+  return `return document.querySelector(${JSON.stringify(options.scopeSelector)})?.outerHTML ?? null;`;
+}
 const COMPLETION_INSPECTION = `
 const root = document.getElementById("itsalive-root");
 const durabilityAudit = window["__itsaliveRuntimeDurabilityAuditV1"];
@@ -97,6 +110,7 @@ export class AgentRunner {
   constructor(private readonly db: ShellDatabase, private readonly providers: ProviderRegistry, private readonly executor: AppExecutor) {}
 
   async run(options: RunOptions): Promise<RunResult> {
+    const historyStore = options.history ?? databaseAgentHistory(this.db);
     const controller = new AbortController();
     const abort = () => controller.abort(options.signal?.reason);
     if (options.signal?.aborted) abort();
@@ -139,7 +153,7 @@ export class AgentRunner {
     });
     recordMilestone('request-started');
     try {
-      if (options.persistTrigger !== false) await appendHistory(this.db, { appId: options.appId, role: "user", kind: "chat", content: options.trigger });
+      if (options.persistTrigger !== false) await historyStore.append({ appId: options.appId, role: "user", kind: "chat", content: options.trigger });
       for (let turn = 1; ; turn++) {
         const turnStop = budget.startTurn(turn);
         if (turnStop) return budgetStopResult(turnStop, turn - 1, budget);
@@ -150,8 +164,18 @@ export class AgentRunner {
           reportProgress(options, "generating", turn);
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
-          const history = await this.db.history.forApp(options.appId);
-          const context = buildModelContext({ model: options.model, appPrompt: options.appPrompt, behaviorSummary: options.behaviorSummary, trigger: options.trigger, observation, environmentObservation, history, countTokens: options.countTokens });
+          const history = await historyStore.list(options.appId);
+          const context = buildModelContext({
+            model: options.model,
+            appPrompt: options.appPrompt,
+            behaviorSummary: options.behaviorSummary,
+            trigger: options.trigger,
+            observation,
+            environmentObservation,
+            history,
+            ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+            countTokens: options.countTokens,
+          });
           environmentObservation = undefined;
           const traceContext: AgentContextDiagnostic = {
             turn,
@@ -204,7 +228,7 @@ export class AgentRunner {
                 touchProgress();
                 if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
                 reportProgress(options, "executing", turn, commandNumber);
-                const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+                const executed = await executeGeneratedCommand(historyStore, this.executor, options, controller.signal, code);
                 touchProgress();
                 streamedResult = executed.result;
                 streamedObservation = executed.observation;
@@ -271,7 +295,7 @@ export class AgentRunner {
                 message: generatedError.message,
                 consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
               }));
-              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
               repeatedLowSignalObservation = undefined;
@@ -300,7 +324,7 @@ export class AgentRunner {
                 message: generatedError.message,
                 consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
               }));
-              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
               repeatedLowSignalObservation = undefined;
@@ -314,7 +338,7 @@ export class AgentRunner {
             if (firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
             if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
             reportProgress(options, "executing", turn, 1);
-            const executed = await executeGeneratedCommand(this.db, this.executor, options, controller.signal, code);
+            const executed = await executeGeneratedCommand(historyStore, this.executor, options, controller.signal, code);
             touchProgress();
             result = executed.result;
             observation = executed.observation;
@@ -352,7 +376,7 @@ export class AgentRunner {
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
               console.warn('Completion check rejected', sanitizeDiagnostic(completion));
-              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               const failureStop = budget.recordFailure("verification");
               console.info('Turn outcome', {
@@ -365,11 +389,11 @@ export class AgentRunner {
             }
             budget.recordSuccess("verification");
             const completionMessage = userFacingCompletionMessage(result.message);
-            if (completionMessage) await appendHistory(this.db, { appId: options.appId, role: "assistant", kind: "chat", content: completionMessage });
+            if (completionMessage) await historyStore.append({ appId: options.appId, role: "assistant", kind: "chat", content: completionMessage });
             reportProgress(options, "finishing", turn);
             console.info('Turn outcome', { kind: 'done' });
             console.info('Run done', sanitizeDiagnostic({ turn, message: completionMessage }));
-            return { status: "done", message: completionMessage, turns: turn };
+            return { status: "done", message: completionMessage, ...(result.message ? { rawMessage: result.message } : {}), turns: turn };
           }
 
           if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
@@ -383,7 +407,7 @@ export class AgentRunner {
                 if (stop) {
                   const message = 'Repeated verification produced the same low-signal result without changing #itsalive-root.';
                   observation = `${rawObservation}\n\nPlatform diagnostic: ${message}`;
-                  await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+                  await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
                   console.warn('Verification stalled', { turn, kind: 'verification-stall', budget: budget.snapshot() });
                   return budgetStopResult(stop, turn, budget, message);
                 }
@@ -394,7 +418,7 @@ export class AgentRunner {
               repeatedLowSignalState = runtimeState;
               const diagnostic = 'Platform diagnostic: this verification returned the same low-signal result again. Do not repeat the same probe. Inspect #itsalive-root or use a different selector/diagnostic before continuing.';
               observation = `${rawObservation}\n\n${diagnostic}`;
-              await appendHistory(this.db, { appId: options.appId, role: "observation", kind: "error", content: observation });
+              await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               console.warn('Repeated low-signal verification', { turn, kind: 'verification-repair' });
             } else {
               repeatedLowSignalObservation = rawObservation;
@@ -510,18 +534,19 @@ async function generateWithStreaming(
 }
 
 async function executeGeneratedCommand(
-  db: ShellDatabase,
+  history: AgentHistoryStore,
   executor: AppExecutor,
   options: RunOptions,
   signal: AbortSignal,
   code: string,
 ): Promise<{ result: ExecutionResult; observation: string }> {
   console.info('Executable JavaScript', sanitizeDiagnostic(code));
-  await appendHistory(db, { appId: options.appId, role: "agent", kind: "javascript", content: code });
+  await history.append({ appId: options.appId, role: "agent", kind: "javascript", content: code });
+  const executable = options.scopeSelector ? scopeCommand(code, options.scopeSelector) : code;
   const executionStartedAt = performance.now();
   let result: ExecutionResult;
   try {
-    result = await executor.execute(options.appId, code, { signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
+    result = await executor.execute(options.appId, executable, { signal, timeoutMs: options.executionTimeoutMs ?? 30_000 });
   } catch (error) {
     console.error(`Runtime execution failed (${Math.round(performance.now() - executionStartedAt)}ms)`, diagnosticError(error));
     throw error;
@@ -530,8 +555,19 @@ async function executeGeneratedCommand(
   if (result.error) console.error('Runtime execution error', sanitizeDiagnostic(result.error));
   const observation = boundObservation(result, options.maxObservationCharacters ?? 16_000);
   console.info('Observation', sanitizeDiagnostic(observation));
-  await appendHistory(db, { appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
+  await history.append({ appId: options.appId, role: "observation", kind: result.error ? "error" : "execution", content: observation });
   return { result, observation };
+}
+
+function scopeCommand(code: string, selector: string): string {
+  const encoded = JSON.stringify(selector);
+  return `
+const component = document.querySelector(${encoded});
+if (!(component instanceof Element)) throw new Error("Assigned component scope not found: " + ${encoded});
+return await (async (component) => {
+${code}
+})(component);
+`;
 }
 
 function extractExecutableJavaScript(text: string): string {
@@ -566,7 +602,7 @@ function generatedCodeObservation(error: GeneratedCodeError): string {
 
 async function inspectRuntimeProgress(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<string | undefined> {
   try {
-    const inspection = await executor.execute(options.appId, PROGRESS_INSPECTION, {
+    const inspection = await executor.execute(options.appId, progressInspection(options), {
       signal,
       timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
     });
@@ -579,6 +615,7 @@ async function inspectRuntimeProgress(executor: AppExecutor, options: RunOptions
 
 async function verifyCompletion(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<{ ok: true } | { ok: false; reason: string }> {
   try {
+    if (options.scopeSelector) return verifyScopedCompletion(executor, options, signal);
     const inspection = await executor.execute(options.appId, COMPLETION_INSPECTION, {
       signal,
       timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
@@ -606,6 +643,34 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
     console.warn('Completion inspection failed; accepting done()', diagnosticError(error));
     return { ok: true };
   }
+}
+
+
+async function verifyScopedCompletion(
+  executor: AppExecutor,
+  options: RunOptions,
+  signal: AbortSignal,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  const selector = options.scopeSelector!;
+  const inspection = await executor.execute(options.appId, `
+const component = document.querySelector(${JSON.stringify(selector)});
+return component ? {
+  html: component.innerHTML,
+  buildingCount: component.querySelectorAll('[data-itsalive-building]').length + (component.matches('[data-itsalive-building]') ? 1 : 0),
+  inert: component.hasAttribute('inert'),
+  ariaBusy: component.getAttribute('aria-busy'),
+} : null;
+`, {
+    signal,
+    timeoutMs: Math.min(options.executionTimeoutMs ?? 30_000, 5_000),
+  });
+  if (inspection.error) return { ok: false, reason: `could not inspect assigned component ${selector}` };
+  if (!inspection.value || typeof inspection.value !== "object") return { ok: false, reason: `assigned component ${selector} no longer exists` };
+  const value = inspection.value as Record<string, unknown>;
+  if ((value.buildingCount as number | undefined ?? 0) > 0 || value.inert === true || value.ariaBusy === "true") {
+    return { ok: false, reason: `assigned component ${selector} is still marked as building/busy` };
+  }
+  return assessCompletionTree(typeof value.html === "string" ? value.html : "");
 }
 
 function isCompletionSnapshot(value: unknown): value is { rootHtml: string | null; rootCount: number; outsideUiCount: number; buildingCount?: number; runtimeOnlyEventListenerCount?: number } {
