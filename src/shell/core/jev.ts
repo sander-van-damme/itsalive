@@ -5,6 +5,7 @@ export const JEV_MODEL = "~typesafe/jev-latest";
 export const OPENROUTER_DECISIONS_URL = "https://openrouter.ai/api/alpha/decisions";
 export const JEV_ESCALATION_THRESHOLD = 0.7;
 export const JEV_PATTERN_SIGNAL_FLOOR = 0.12;
+export const JEV_INTERACTION_QUESTION_SET_VERSION = "interaction-wake-v1";
 
 export interface JevNoulQuestion {
   type: "noul";
