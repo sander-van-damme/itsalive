@@ -475,6 +475,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       trace,
       plan: result.plan,
       handoffs: result.handoffs,
+      timeline: result.timeline,
     }, app.id);
     if (result.message) {
       await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: result.message });
