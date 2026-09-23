@@ -41,6 +41,9 @@ interface SharedCostLedger {
 const finiteNonNegative = (value: unknown): value is number =>
   typeof value === "number" && Number.isFinite(value) && value >= 0;
 
+const reachesMoneyLimit = (value: number, limit: number): boolean =>
+  value >= limit || Math.abs(value - limit) <= Math.max(1e-12, Math.abs(limit) * 1e-12);
+
 function assertLimits(limits: RunBudgetLimits): void {
   if (!Number.isFinite(limits.maxDurationMs) || limits.maxDurationMs <= 0) throw new Error("maxDurationMs must be positive");
   if (!Number.isFinite(limits.idleTimeoutMs) || limits.idleTimeoutMs <= 0) throw new Error("idleTimeoutMs must be positive");
@@ -139,8 +142,8 @@ export class RunBudgetController {
     if ((localLimited && this.localUnknownCostRequests > 0) || (rootLimited && this.rootLedger.unknownCostRequests > 0)) {
       return "cost-unknown";
     }
-    if (this.limits.maxCostUsd !== null && this.localKnownCostUsd >= this.limits.maxCostUsd) return "cost-budget";
-    if (this.rootLedger.maxCostUsd !== null && this.rootLedger.knownCostUsd >= this.rootLedger.maxCostUsd) return "cost-budget";
+    if (this.limits.maxCostUsd !== null && reachesMoneyLimit(this.localKnownCostUsd, this.limits.maxCostUsd)) return "cost-budget";
+    if (this.rootLedger.maxCostUsd !== null && reachesMoneyLimit(this.rootLedger.knownCostUsd, this.rootLedger.maxCostUsd)) return "cost-budget";
     return undefined;
   }
 }
