@@ -98,8 +98,8 @@ describe("user-facing intent boundary", () => {
   it("uses one canonical capability definition for both compact index and selected help", () => {
     const index = platformCapabilityIndex();
     const selected = platformCapabilityHelp(["llm.ask"]);
-    expect(index).toContain("await itsalive.llm.ask<T>(prompt)");
-    expect(selected).toContain("await itsalive.llm.ask<T>(prompt)");
+    expect(index).toContain("await itsalive.llm.ask(prompt)");
+    expect(selected).toContain("await itsalive.llm.ask(prompt)");
     expect(selected).toContain("open-ended generated or transformed content");
   });
 });
