@@ -126,6 +126,8 @@ export interface CodingOrchestratorOptions {
   /** Bounded JEV routing hint. The manager still owns decomposition and final worker choice. */
   preferredWorkerProfile?: "component-worker" | "repair-worker";
   triggerRoute?: string;
+  /** User-controlled compact cross-app preferences. Never raw behavior/history. */
+  portablePreferences?: Array<{ id: string; label: string; context: string }>;
   /** Called only after successful integration verification. */
   onAlivePolicyProposal?: (proposal: AlivePolicyProposal) => Promise<void>;
 }
@@ -159,6 +161,7 @@ const MANAGER_PLAN_SYSTEM = [
   "- Worker budget overrides may only tighten maxDurationMs/maxCostUsd; profile defaults remain the ceiling.",
   "- component-worker is the default. Use repair-worker only when the task is primarily diagnosis/repair.",
   "- A ROUTING HINT is advisory bounded classification, not technical intent. If preferredWorkerProfile=repair-worker and the task is genuinely diagnosis/repair, prefer repair-worker; never distort the task merely to match the hint.",
+  "- PORTABLE SHELL PREFERENCES are user-controlled cross-app hints. Apply them only when compatible with the explicit technical intent, app purpose, accessibility, and existing app behavior. Never infer additional user traits.",
   "- capabilityIds may contain only platform capability ids relevant to that worker.",
   "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
   "- The manager owns decomposition, shared contracts, ordering and final integration verification.",
@@ -710,6 +713,12 @@ function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown):
           route: options.triggerRoute ?? null,
           preferredWorkerProfile: options.preferredWorkerProfile ?? null,
         })
+      : "",
+    options.portablePreferences?.length
+      ? "PORTABLE SHELL PREFERENCES\n" + options.portablePreferences
+          .slice(0, 5)
+          .map(item => "- " + item.label + ": " + item.context)
+          .join("\n")
       : "",
     "APP OUTLINE\n" + JSON.stringify(outline),
   ].filter(Boolean).join("\n\n");
