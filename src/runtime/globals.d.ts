@@ -1,8 +1,13 @@
 import type { LogRecord } from "../shared";
 import type { captureScreenshot } from "./screenshot";
+import type { ApplicationStore } from "./application-store";
 
 export interface LlmApi {
   ask<T = unknown>(prompt: unknown): Promise<T>;
+}
+
+export interface ApplicationRuntimeApi {
+  readonly store: ApplicationStore;
 }
 
 export interface ItsaliveRuntimeApi {
@@ -22,9 +27,11 @@ export interface ItsaliveRuntimeApi {
 }
 
 declare global {
+  const application: ApplicationRuntimeApi;
   const itsalive: ItsaliveRuntimeApi;
 
   interface Window {
+    readonly application: ApplicationRuntimeApi;
     readonly itsalive: ItsaliveRuntimeApi;
   }
 }
