@@ -46,7 +46,7 @@ export interface JevDecisionResult extends DecisionResult {
 export const GENERIC_JEV_QUESTION: JevQuestions = {
   requires_llm_attention: {
     type: "noul",
-    instructions: "Given this user interaction, recent interactions, optional locally-derived interaction pattern, and current semantic application document, should the application invoke its reasoning agent because an intelligent or adaptive response may be useful?",
+    instructions: "Given this user interaction, recent interactions, optional locally-derived interaction pattern, selected app-specific alive policy context, and current semantic application document, should the application invoke its reasoning agent because an intelligent or adaptive response may be useful?",
     criteria: {
       true: "Meaningful adaptation, assistance, or deeper contextual reasoning may be useful, including repeated unchanged attempts suggesting an unmet need.",
       false: "This is an ordinary expected interaction and existing application behavior is sufficient. A pattern marked likelyBenign usually represents intentional repeatable use rather than frustration.",
