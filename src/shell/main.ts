@@ -1099,6 +1099,46 @@ async function resumePausedRun(id: string): Promise<void> {
   }
 }
 
+async function resolveAdaptationPrompt(id: string, action: 'keep' | 'undo'): Promise<void> {
+  const app = currentApp();
+  const active = app?.activeAdaptation;
+  if (!app || !active || active.id !== id) {
+    syncAdaptationPrompt();
+    return;
+  }
+
+  await waitForAgentIdle();
+  if (activeId !== app.id) return;
+
+  if (action === 'keep') {
+    await completeAdaptationForApp(app.id, active.id, 'successful', 'explicit-user-keep');
+    await appendHistory(db, {
+      appId: app.id,
+      role: 'assistant',
+      kind: 'chat',
+      content: 'Kept that adaptation.',
+    });
+    await refreshMessages();
+    return;
+  }
+
+  const before = structuredClone(active.beforeDocument);
+  await completeAdaptationForApp(app.id, active.id, 'reverted', 'explicit-user-undo');
+  await db.documents.put({ appId: app.id, ...before, updatedAt: Date.now() });
+  await log('info', 'adaptation', 'Adaptation reverted to pre-change snapshot', {
+    adaptationId: active.id,
+    fingerprint: active.fingerprint,
+  }, app.id);
+  await appendHistory(db, {
+    appId: app.id,
+    role: 'assistant',
+    kind: 'chat',
+    content: 'Undone — I restored the version from before that adaptation.',
+  });
+  await reloadSavedDocumentWithoutFlush(app.id);
+  await refreshMessages();
+}
+
 function syncInteractionPrompt(): void {
   const appId = activeId;
   const confirmation = appId ? reactionConfirmationGates.get(appId)?.current() : undefined;
@@ -1158,6 +1198,10 @@ async function resolveInteractionPrompt(id: string, clarification?: string): Pro
     resolution.clarification,
     'interaction',
     formatReactionTelemetry(resolution.confirmation.batch),
+    {
+      interactionKey: resolution.confirmation.key,
+      hypothesis: resolution.clarification,
+    },
   );
 }
 
