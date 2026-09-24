@@ -1,4 +1,5 @@
 import { buildModelContext, type TokenCounter } from "./context";
+import { buildContextEvidenceCandidates, deterministicContextFallback, selectedContextEvidence, type ContextRelevanceAssessor } from "./context-relevance";
 import { databaseAgentHistory, type AgentHistoryStore } from "./agent-history";
 import type { ShellDatabase } from "./database";
 import type { Credential, LlmContextTrace, LlmTraceIdentity, ModelConfig } from "./types";
@@ -117,6 +118,8 @@ export interface RunOptions {
   maxCompletionAssessmentRepairs?: number;
   /** Optional bounded semantic routing after a generation/runtime failure and before another model turn. */
   failureAssessor?: FailureAssessor;
+  /** Optional bounded relevance filter over deterministic technical/behavior evidence candidates. */
+  contextRelevanceAssessor?: ContextRelevanceAssessor;
 }
 
 export interface RunResult {
@@ -227,14 +230,40 @@ export class AgentRunner {
           const pushed = options.consumeEnvironmentObservations?.() ?? [];
           if (pushed.length) environmentObservation = [environmentObservation, ...pushed].filter(Boolean).join("\n\n");
           const history = await historyStore.list(options.appId);
+          const behaviorEpisodes = await listBehaviorEpisodes(this.db, options.appId);
+          const candidateSet = buildContextEvidenceCandidates({
+            history,
+            behaviorEpisodes,
+            observation,
+          });
+          let relevance = deterministicContextFallback(candidateSet.candidates);
+          let contextRelevanceFallback = !options.contextRelevanceAssessor;
+          if (options.contextRelevanceAssessor && candidateSet.candidates.length) {
+            try {
+              touchProgress();
+              relevance = await options.contextRelevanceAssessor({
+                task: boundCompletionText(options.trigger, 4_000),
+                candidates: candidateSet.candidates,
+              }, controller.signal);
+              touchProgress();
+              contextRelevanceFallback = false;
+            } catch (error) {
+              contextRelevanceFallback = true;
+              relevance = deterministicContextFallback(candidateSet.candidates);
+              console.warn('Context relevance assessor unavailable; using deterministic candidate fallback', diagnosticError(error));
+            }
+          }
+          const selectedEvidence = selectedContextEvidence(candidateSet, relevance);
           const context = buildModelContext({
             model: options.model,
             appPrompt: options.appPrompt,
-            behaviorSummary: options.behaviorSummary,
             trigger: options.trigger,
             observation,
             environmentObservation,
-            history,
+            history: selectedEvidence.history,
+            behaviorEvidence: selectedEvidence.behaviorEvidence,
+            availableHistoryCount: candidateSet.availableTechnicalHistoryCount,
+            availableBehaviorEvidenceCount: candidateSet.availableBehaviorEpisodeCount,
             ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
             countTokens: options.countTokens,
           });
@@ -247,6 +276,11 @@ export class AgentRunner {
             estimatedInputTokens: context.estimatedInputTokens,
             includedHistoryCount: context.includedHistoryIds.length,
             omittedHistoryCount: context.omittedHistoryCount,
+            contextCandidateCount: candidateSet.candidates.length,
+            selectedContextEvidenceCount: relevance.selectedIds.length,
+            omittedContextEvidenceCount: relevance.omittedIds.length,
+            selectedBehaviorEvidenceCount: selectedEvidence.behaviorEvidence.length,
+            contextRelevanceFallback,
             modelContextTokens: options.model.maxContextTokens,
             sources: context.tokenBreakdown,
             maxContextTokens: options.model.maxContextTokens,
@@ -263,6 +297,11 @@ export class AgentRunner {
             messageCount: context.messages.length,
             includedHistoryCount: context.includedHistoryIds.length,
             omittedHistoryCount: context.omittedHistoryCount,
+            contextCandidateCount: candidateSet.candidates.length,
+            selectedContextEvidenceCount: relevance.selectedIds.length,
+            omittedContextEvidenceCount: relevance.omittedIds.length,
+            selectedBehaviorEvidenceCount: selectedEvidence.behaviorEvidence.length,
+            contextRelevanceFallback,
             hasObservation: Boolean(observation),
           });
           const commandParser = new StreamedCommandParser();
@@ -595,6 +634,21 @@ export class AgentRunner {
       console.info(`Run finished (${totalMs}ms)`, { aborted: controller.signal.aborted, budget: budget.snapshot() });
       console.groupEnd();
     }
+  }
+}
+
+async function listBehaviorEpisodes(
+  db: ShellDatabase,
+  appId: string,
+): Promise<import('./behavior-episodes').BehaviorEpisodeRecord[]> {
+  const store = (db as ShellDatabase & {
+    behaviorEpisodes?: { forApp?: (id: string) => Promise<import('./behavior-episodes').BehaviorEpisodeRecord[]> };
+  }).behaviorEpisodes;
+  if (!store?.forApp) return [];
+  try { return await store.forApp(appId); }
+  catch (error) {
+    console.warn('Behavior evidence unavailable; continuing without durable behavioral context', diagnosticError(error));
+    return [];
   }
 }
 
