@@ -745,6 +745,115 @@ async function recordAdaptationOutcomeForApp(
   if (activeId === appId) syncAdaptationPrompt();
 }
 
+function syncAccessibilityPrompt(): void {
+  const appId = activeId;
+  const suggestion = appId ? accessibilitySuggestions.get(appId) : undefined;
+  const blockedByAdaptation = Boolean(currentApp()?.activeAdaptation);
+  const prompt: AccessibilityPrompt | undefined = suggestion && !blockedByAdaptation
+    ? {
+        id: suggestion.id,
+        content: suggestion.content,
+        applyLabel: suggestion.applyLabel,
+        dismissLabel: 'Not now',
+      }
+    : undefined;
+  ui.setAccessibilityPrompt(prompt);
+}
+
+async function maybeOfferAccessibilitySuggestion(
+  appId: string,
+  candidate: AccessibilitySuggestionCandidate,
+): Promise<boolean> {
+  const current = await db.apps.get(appId);
+  if (!current || current.activeAdaptation) return false;
+  const pending = accessibilitySuggestions.get(appId);
+  if (pending) return true;
+  if (shouldSuppressAccessibilitySuggestion(current.accessibilityDismissals, candidate.key)) {
+    await log('info', 'accessibility', 'Accessibility suggestion suppressed by dismissal cooldown', {
+      key: candidate.key,
+      kind: candidate.kind,
+      source: candidate.source,
+    }, appId);
+    return false;
+  }
+  const suggestion: PendingAccessibilitySuggestion = { ...candidate, id: crypto.randomUUID() };
+  accessibilitySuggestions.set(appId, suggestion);
+  await log('info', 'accessibility', 'Accessibility suggestion offered', {
+    suggestionId: suggestion.id,
+    key: suggestion.key,
+    kind: suggestion.kind,
+    source: suggestion.source,
+    evidence: suggestion.evidence,
+  }, appId);
+  if (activeId === appId) syncAccessibilityPrompt();
+  return true;
+}
+
+async function resolveAccessibilityPrompt(
+  id: string,
+  action: 'apply' | 'dismiss',
+): Promise<void> {
+  const app = currentApp();
+  if (!app) return;
+  const suggestion = accessibilitySuggestions.get(app.id);
+  if (!suggestion || suggestion.id !== id) {
+    syncAccessibilityPrompt();
+    return;
+  }
+  accessibilitySuggestions.delete(app.id);
+  syncAccessibilityPrompt();
+
+  if (action === 'dismiss') {
+    const current = await db.apps.get(app.id);
+    if (current) {
+      const updated: AppRecord = {
+        ...current,
+        accessibilityDismissals: recordAccessibilityDismissal(current.accessibilityDismissals, suggestion.key),
+        updatedAt: Date.now(),
+      };
+      await db.apps.put(updated);
+      apps = apps.map(item => item.id === app.id ? updated : item);
+    }
+    await log('info', 'accessibility', 'Accessibility suggestion dismissed', {
+      suggestionId: suggestion.id,
+      key: suggestion.key,
+      kind: suggestion.kind,
+    }, app.id);
+    return;
+  }
+
+  await waitForAgentIdle();
+  if (activeId !== app.id || currentApp()?.activeAdaptation) {
+    await log('info', 'accessibility', 'Accessibility suggestion apply skipped because app state changed', {
+      suggestionId: suggestion.id,
+      key: suggestion.key,
+    }, app.id);
+    return;
+  }
+  await log('info', 'accessibility', 'Accessibility suggestion accepted', {
+    suggestionId: suggestion.id,
+    key: suggestion.key,
+    kind: suggestion.kind,
+    source: suggestion.source,
+  }, app.id);
+  await handleUserFacingInput(
+    suggestion.requestText,
+    'interaction',
+    JSON.stringify({
+      accessibilitySuggestion: {
+        suggestionId: suggestion.id,
+        kind: suggestion.kind,
+        source: suggestion.source,
+        evidence: suggestion.evidence,
+      },
+    }),
+    {
+      interactionKey: suggestion.key,
+      hypothesis: suggestion.hypothesis,
+    },
+  );
+}
+
 function syncAdaptationPrompt(): void {
   const active = currentApp()?.activeAdaptation;
   let prompt: AdaptationPrompt | undefined;
@@ -765,6 +874,7 @@ function syncAdaptationPrompt(): void {
     };
   }
   ui.setAdaptationPrompt(prompt);
+  syncAccessibilityPrompt();
 }
 
 async function reloadSavedDocumentWithoutFlush(appId: string): Promise<void> {
