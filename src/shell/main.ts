@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorRewritePrompt, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, deleteApp, formatReactionTelemetry, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -73,7 +73,6 @@ if (stored) {
 const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 const behaviorTracker = new BehaviorTracker();
-const behaviorRewriteInFlight = new Set<string>();
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
 const pausedRuns = new PausedRunStore();
 let jevSessionStats = { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, escalations: 0, coalescedEvents: 0 };
@@ -674,7 +673,7 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   const app = appId ? apps.find(item => item.id === appId) : undefined;
   if (!appId || !app) return;
   const state: JevState = behaviorTracker.observe(appId, message.state, app.behaviorSummary);
-  void maybeRewriteBehaviorHistory(appId);
+  const episode = formBehaviorEpisode(message.state, state.pattern);
   const controller = new AbortController();
   jevControllers.add(controller);
   const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
@@ -683,7 +682,13 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     if (!key) throw new Error('OpenRouter is not configured');
     jevSessionStats.requests++;
     jevSessionStats.coalescedEvents += state.pattern?.coalescedCount ?? 0;
-    const result = await new OpenRouterJevAdapter().evaluate({ state, signal: controller.signal }, key);
+    const result = await new OpenRouterJevAdapter().evaluate({
+      state: episode.action === 'triage' ? { ...state, behaviorEpisode: episode.candidate } : state,
+      ...(episode.action === 'triage'
+        ? { questions: { ...GENERIC_JEV_QUESTION, ...JEV_BEHAVIOR_EPISODE_QUESTIONS } }
+        : {}),
+      signal: controller.signal,
+    }, key);
     if (!current()) return;
     const usage = result.usage;
     jevSessionStats.inputTokens += usage?.inputTokens ?? 0;
@@ -695,7 +700,13 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     sessionUsage.recordJevDecision(usage);
     syncUsage();
     const decision = decideJevEscalation(result.probability, state);
+    const episodeDecision = episode.action === 'triage'
+      ? decideBehaviorEpisodeRetention(result)
+      : undefined;
     if (decision.escalated) jevSessionStats.escalations++;
+    if (episode.action === 'triage' && episodeDecision?.action === 'retain') {
+      await retainBehaviorEpisode(appId, episode.candidate, episodeDecision);
+    }
     await log('info', 'jev', 'Interaction decision', {
       ...compactJevDecisionTelemetry({
         correlationId: message.requestId,
@@ -711,6 +722,17 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
       pattern: state.pattern,
       durationMs: Math.round(performance.now() - startedAt),
       snapshotCharacters: state.document.length,
+      behaviorEpisode: episode.action === 'drop'
+        ? { localAction: 'drop', reason: episode.reason }
+        : {
+            localAction: 'triage',
+            questionSetVersion: JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION,
+            triageAction: episodeDecision?.action,
+            triageReason: episodeDecision?.reason,
+            kind: episodeDecision?.kind,
+            retentionProbability: episodeDecision?.retentionProbability,
+            classificationConfidence: episodeDecision?.classificationConfidence,
+          },
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
@@ -724,47 +746,43 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   } finally { jevControllers.delete(controller); }
 }
 
-async function maybeRewriteBehaviorHistory(appId: string): Promise<void> {
-  if (behaviorRewriteInFlight.has(appId)) return;
-  const app = apps.find(item => item.id === appId);
-  const key = credential();
-  if (!app || !key) return;
-  const batch = behaviorTracker.takeRewriteBatch(appId);
-  if (!batch) return;
+async function retainBehaviorEpisode(
+  appId: string,
+  candidate: import('./core').BehaviorEpisodeCandidate,
+  triage: import('./core').BehaviorEpisodeTriageDecision,
+): Promise<void> {
+  const existing = await db.behaviorEpisodes.forApp(appId);
+  const record = mergeBehaviorEpisode(appId, existing, candidate, triage, crypto.randomUUID(), Date.now());
+  if (!record) return;
 
-  behaviorRewriteInFlight.add(appId);
-  try {
-    const profile = await resolvedProfile('behavior-summary');
-    const result = await registry.generate({
-      purpose: 'behavior history rewrite',
-      model: profile.modelConfig,
-      system: 'Curate a compact behavioral summary for future application reasoning. Return only the summary.',
-      messages: [{ role: 'user', content: behaviorRewritePrompt(app.behaviorSummary, batch) }],
-      trace: createLlmTraceIdentity(profile.role, profile.id, { scope: appId }),
-    }, key);
-    syncUsage();
-    const summary = result.text.trim().slice(0, MAX_BEHAVIOR_SUMMARY_CHARACTERS);
-    if (!summary) throw new Error('Behavior history rewrite returned an empty summary');
+  await db.behaviorEpisodes.put(record);
+  const withRecord = [...existing.filter(item => item.id !== record.id), record];
+  const retention = behaviorEpisodeRetentionPlan(withRecord);
+  await Promise.all(retention.deleteIds.map(id => db.behaviorEpisodes.delete(id)));
 
-    const current = await db.apps.get(appId);
-    if (!current) return;
-    const updated: AppRecord = { ...current, behaviorSummary: summary, behaviorSummaryUpdatedAt: Date.now() };
+  const summary = behaviorSummaryFromEpisodes(retention.keep, MAX_BEHAVIOR_SUMMARY_CHARACTERS);
+  const current = await db.apps.get(appId);
+  if (current && summary) {
+    const updated: AppRecord = {
+      ...current,
+      behaviorSummary: summary,
+      behaviorSummaryUpdatedAt: Date.now(),
+    };
     await db.apps.put(updated);
     apps = apps.map(item => item.id === appId ? updated : item);
-    await log('info', 'behavior', 'Behavioral history summary updated', {
-      samples: batch.length,
-      summaryCharacters: summary.length,
-    }, appId);
-  } catch (error) {
-    behaviorTracker.restoreRewriteBatch(appId, batch);
-    await log('warn', 'behavior', 'Behavioral history rewrite failed', {
-      error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
-    }, appId);
-  } finally {
-    behaviorRewriteInFlight.delete(appId);
-    if (behaviorTracker.hasRewriteBatch(appId)) void maybeRewriteBehaviorHistory(appId);
   }
+
+  await log('info', 'behavior', 'Behavior episode retained', {
+    kind: record.kind,
+    occurrences: record.occurrences,
+    actionCount: record.actionCount,
+    retainedEpisodes: retention.keep.length,
+    prunedEpisodes: retention.deleteIds.length,
+    retentionProbability: record.retentionProbability,
+    classificationConfidence: record.classificationConfidence,
+  }, appId);
 }
+
 
 function reactionConfirmationGate(appId: string): ReactionConfirmationGate {
   let gate = reactionConfirmationGates.get(appId);
