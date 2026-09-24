@@ -1186,10 +1186,20 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   const adaptationContext = activeAdaptation
     ? adaptationOutcomeContext(activeAdaptation, state.pattern, app.alivePolicy?.successSignals)
     : undefined;
+  const deterministicAccessibility = !activeAdaptation
+    ? deterministicAccessibilitySuggestion(message.state, state.pattern)
+    : undefined;
+  const ambiguousAccessibility = !activeAdaptation && !deterministicAccessibility
+    ? ambiguousAccessibilityCandidate(message.state, state.pattern)
+    : undefined;
   const controller = new AbortController();
   jevControllers.add(controller);
   const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
+  let accessibilityOffered = false;
   try {
+    if (deterministicAccessibility) {
+      accessibilityOffered = await maybeOfferAccessibilitySuggestion(appId, deterministicAccessibility);
+    }
     const key = credential();
     if (!key) throw new Error('OpenRouter is not configured');
     jevSessionStats.requests++;
@@ -1200,13 +1210,15 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         ...(alivePolicy ? { alivePolicy } : {}),
         ...(episode.action === 'triage' ? { behaviorEpisode: episode.candidate } : {}),
         ...(adaptationContext ? { adaptationOutcome: adaptationContext } : {}),
+        ...(ambiguousAccessibility ? { accessibilityFriction: ambiguousAccessibility } : {}),
       },
-      ...((episode.action === 'triage' || adaptationContext)
+      ...((episode.action === 'triage' || adaptationContext || ambiguousAccessibility)
         ? {
             questions: {
               ...GENERIC_JEV_QUESTION,
               ...(episode.action === 'triage' ? JEV_BEHAVIOR_EPISODE_QUESTIONS : {}),
               ...(adaptationContext ? JEV_ADAPTATION_OUTCOME_QUESTIONS : {}),
+              ...(ambiguousAccessibility ? JEV_ACCESSIBILITY_FRICTION_QUESTIONS : {}),
             },
           }
         : {}),
@@ -1229,7 +1241,17 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const adaptationDecision = activeAdaptation
       ? decideAdaptationOutcome(result)
       : undefined;
-    if (decision.escalated) jevSessionStats.escalations++;
+    const accessibilityDecision = ambiguousAccessibility
+      ? decideAccessibilityFriction(result)
+      : undefined;
+    const jevAccessibilitySuggestion = ambiguousAccessibility && accessibilityDecision
+      ? accessibilitySuggestionFromJev(ambiguousAccessibility, accessibilityDecision)
+      : undefined;
+    if (jevAccessibilitySuggestion) {
+      accessibilityOffered = await maybeOfferAccessibilitySuggestion(appId, jevAccessibilitySuggestion) || accessibilityOffered;
+    }
+    const effectiveEscalation = decision.escalated && !accessibilityOffered;
+    if (effectiveEscalation) jevSessionStats.escalations++;
     if (episode.action === 'triage' && episodeDecision?.action === 'retain') {
       await retainBehaviorEpisode(appId, episode.candidate, episodeDecision);
     }
@@ -1278,11 +1300,29 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         classificationConfidence: adaptationDecision.classificationConfidence,
         assessmentCount: activeAdaptation.assessmentCount + 1,
       } : undefined,
+      accessibilityFriction: deterministicAccessibility
+        ? {
+            source: 'deterministic',
+            kind: deterministicAccessibility.kind,
+            offered: accessibilityOffered,
+            evidence: deterministicAccessibility.evidence,
+          }
+        : ambiguousAccessibility && accessibilityDecision
+          ? {
+              source: 'jev',
+              questionSetVersion: JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION,
+              action: accessibilityDecision.action,
+              kind: accessibilityDecision.kind,
+              probability: accessibilityDecision.probability,
+              confidence: accessibilityDecision.confidence,
+              offered: accessibilityOffered,
+            }
+          : undefined,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
-    respond(message, { type: 'jev.response', probability: result.probability, escalated: decision.escalated });
-    if (decision.escalated) {
+    respond(message, { type: 'jev.response', probability: result.probability, escalated: effectiveEscalation });
+    if (effectiveEscalation) {
       if (activeAdaptation) {
         await log('info', 'adaptation', 'Observer escalation suppressed while adaptation outcome is unresolved', {
           adaptationId: activeAdaptation.id,
