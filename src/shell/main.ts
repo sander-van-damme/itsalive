@@ -871,6 +871,92 @@ async function assessFailureWithJev(
   return { action: decision.action, reason: decision.reason, failureClass: decision.failureClass };
 }
 
+async function assessTriggerRoutingWithJev(
+  appId: string,
+  state: {
+    source: 'user-input' | 'runtime-wake';
+    text: string;
+    appPurpose: string;
+    inputSource?: UserInputSource;
+    hasTelemetry?: boolean;
+  },
+  signal?: AbortSignal,
+): Promise<TriggerRoutingDecision> {
+  const key = credential();
+  if (!key) throw new Error('OpenRouter is not configured');
+  const boundedState = {
+    source: state.source,
+    ...(state.inputSource ? { inputSource: state.inputSource } : {}),
+    text: state.text.replace(/\s+/g, ' ').trim().slice(0, 2_000),
+    appPurpose: state.appPurpose.replace(/\s+/g, ' ').trim().slice(0, 1_000),
+    hasTelemetry: Boolean(state.hasTelemetry),
+  };
+  const result = await new OpenRouterJevAdapter().evaluate({
+    state: boundedState,
+    questions: JEV_TRIGGER_ROUTING_QUESTIONS,
+    ...(signal ? { signal } : {}),
+  }, key);
+  sessionUsage.recordJevDecision(result.usage);
+  syncUsage();
+  const decision = decideTriggerRouting(result);
+  await log('info', 'jev', 'Trigger routing decision', {
+    ...compactJevDecisionTelemetry({
+      decisionKind: 'trigger-routing',
+      questionSetVersion: JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION,
+      result,
+      policy: DEFAULT_TRIGGER_ROUTING_POLICY,
+      action: decision.route,
+    }),
+    source: boundedState.source,
+    inputSource: boundedState.inputSource,
+    route: decision.route,
+    routeConfidence: decision.routeConfidence,
+    profileRoute: decision.profileRoute,
+    profileConfidence: decision.profileConfidence,
+    confident: decision.confident,
+    preferredWorkerProfile: decision.preferredWorkerProfile,
+  }, appId);
+  return decision;
+}
+
+async function handleRuntimeWake(reason: string): Promise<void> {
+  const app = currentApp();
+  if (!app || running) return;
+  let routing: TriggerRoutingDecision | undefined;
+  try {
+    routing = await assessTriggerRoutingWithJev(app.id, {
+      source: 'runtime-wake',
+      text: reason,
+      appPurpose: app.prompt,
+      hasTelemetry: true,
+    });
+  } catch (error) {
+    await log('warn', 'routing', 'JEV runtime-wake routing unavailable; preserving existing coding fallback', {
+      error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+    }, app.id);
+  }
+  if (routing && shouldSkipRuntimeWake(routing)) {
+    await log('info', 'routing', 'Runtime wake skipped by high-confidence JEV no-action route', {
+      route: routing.route,
+      routeConfidence: routing.routeConfidence,
+      profileRoute: routing.profileRoute,
+      profileConfidence: routing.profileConfidence,
+      intentModelCalled: false,
+      codingAgentCalled: false,
+    }, app.id);
+    return;
+  }
+  await runAgent(
+    technicalIntentBlock(runtimeSignalIntent(
+      'Handle the app-requested follow-up only if it requires an implementation change.',
+      reason,
+    )),
+    false,
+    undefined,
+    routingHint(routing),
+  );
+}
+
 async function assessContextRelevanceWithJev(
   appId: string,
   state: import('./core').ContextRelevanceState,
@@ -956,10 +1042,7 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
     }
     case 'wake': if (!running) {
       const reason = message.reason || 'The app requested an agent wake-up.';
-      void runAgent(technicalIntentBlock(runtimeSignalIntent(
-        'Handle the app-requested follow-up only if it requires an implementation change.',
-        reason,
-      )));
+      void handleRuntimeWake(reason);
     } break;
     case 'status':
       runtime.setState('ready');
