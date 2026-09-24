@@ -243,6 +243,15 @@ export function setPortablePreferenceEnabled(
   return records.map(item => item.id === id ? { ...item, enabled, updatedAt: now } : item);
 }
 
+export function removePortablePreferenceProvenance(
+  records: readonly PortablePreferenceRecord[],
+  appId: string,
+): PortablePreferenceRecord[] {
+  return records
+    .map(item => ({ ...item, provenance: item.provenance.filter(source => source.appId !== appId) }))
+    .filter(item => item.provenance.length > 0);
+}
+
 export function selectPortablePreferencesForApp(
   records: readonly PortablePreferenceRecord[],
   targetAppId: string,
