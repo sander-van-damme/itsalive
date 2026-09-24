@@ -132,7 +132,7 @@ describe("bridge protocol", () => {
   });
 
   it("bounds every Jev bridge field and rejects unexpected payload data", () => {
-    const envelope = { protocol: "itsalive", version: 5, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
+    const envelope = { protocol: "itsalive", version: 6, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
     const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
     const valid = { ...envelope, state: { interaction, document: "<main>ok</main>" } };
     expect(isBridgeMessage(valid)).toBe(true);
