@@ -628,7 +628,10 @@ async function assessContextRelevanceWithJev(
       decisionKind: 'context-relevance',
       questionSetVersion: JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION,
       result,
-      policy: DEFAULT_CONTEXT_RELEVANCE_POLICY,
+      policy: {
+        lowMax: DEFAULT_CONTEXT_RELEVANCE_POLICY.lowMax,
+        highMin: DEFAULT_CONTEXT_RELEVANCE_POLICY.highMin,
+      },
       action: 'filter',
     }),
     candidateCount: state.candidates.length,
