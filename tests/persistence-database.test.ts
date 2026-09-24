@@ -83,11 +83,11 @@ describe("runtime document persistence client", () => {
 });
 
 describe("shell persistence", () => {
-  it("persists apps, documents, history, logs, and schedules in the root database", async () => {
+  it("persists apps, documents, history, and logs in the root database", async () => {
     const databaseName = `shell-${crypto.randomUUID()}`;
     const db = new ShellDatabase(databaseName);
     const connection = await db.open();
-    expect([...connection.objectStoreNames]).toEqual(["apps", "behaviorEpisodes", "documents", "history", "logs", "schedules"]);
+    expect([...connection.objectStoreNames]).toEqual(["apps", "behaviorEpisodes", "documents", "history", "logs"]);
     expect([...connection.transaction("behaviorEpisodes").objectStore("behaviorEpisodes").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("history").objectStore("history").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("logs").objectStore("logs").indexNames]).toEqual(["appId"]);
@@ -121,7 +121,6 @@ describe("shell persistence", () => {
     });
     await db.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "hello" });
     await db.logs.add({ appId: APP_ID, timestamp: 4, level: "info", source: "test", message: "saved" });
-    await db.schedules.put({ id: `${APP_ID}:daily`, appId: APP_ID, expression: "0 8 * * *", registeredAt: 5, nextRun: 6 });
 
     const reloadedShell = new ShellDatabase(databaseName);
     expect(await reloadedShell.apps.get(APP_ID)).toMatchObject({
@@ -132,7 +131,6 @@ describe("shell persistence", () => {
     expect(await reloadedShell.behaviorEpisodes.forApp(APP_ID)).toEqual([expect.objectContaining({ id: "episode-1", kind: "unresolved-need" })]);
     expect(await reloadedShell.history.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.logs.forApp(APP_ID)).toHaveLength(1);
-    expect(await reloadedShell.schedules.forApp(APP_ID)).toHaveLength(1);
   });
 
   it("deletes the shell-owned document with app product data while retaining diagnostics", async () => {
@@ -160,8 +158,7 @@ describe("shell persistence", () => {
       });
       await db.history.add({ appId: id, timestamp: 3, role: "user", kind: "chat", content: id });
       await db.logs.add({ appId: id, timestamp: 4, level: "info", source: "test", message: id });
-      await db.schedules.put({ id: `${id}:daily`, appId: id, expression: "0 8 * * *", registeredAt: 5 });
-    }
+      }
 
     await db.apps.delete(APP_ID);
 
@@ -170,7 +167,6 @@ describe("shell persistence", () => {
     expect(await db.behaviorEpisodes.forApp(APP_ID)).toEqual([]);
     expect(await db.history.forApp(APP_ID)).toEqual([]);
     expect(await db.logs.forApp(APP_ID)).toHaveLength(1);
-    expect(await db.schedules.forApp(APP_ID)).toEqual([]);
     expect(await db.documents.get(otherId)).toBeDefined();
     expect(await db.behaviorEpisodes.forApp(otherId)).toHaveLength(1);
   });

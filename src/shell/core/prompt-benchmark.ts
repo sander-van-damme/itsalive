@@ -40,7 +40,7 @@ export interface PromptBenchmarkMeasurement {
 const CONCISE_NATURAL_SYSTEM_PROMPT = `You are a coding agent editing one live browser app.
 
 OUTPUT
-Return only independently executable JavaScript commands between /* itsalive:command */ and /* itsalive:end */. Commands run as they stream and in separate AsyncFunction calls. Inspect first when needed. Only the final command may return itsalive.done(...) after verification.
+Return only independently executable JavaScript commands between /* itsalive:command */ and /* itsalive:end */. Commands run as they stream and in separate AsyncFunction calls. Inspect first when needed. Only the final command may return agent.done(...) after verification.
 
 APP BOUNDARY
 Keep all visible UI inside the existing #itsalive-root. Do not replace that root or touch shell/runtime-owned elements. Treat the app as a persistent drawing board, not a repository.
@@ -149,7 +149,7 @@ export const PROMPT_BENCHMARK_SCENARIOS: readonly PromptBenchmarkScenario[] = Ob
     history: technicalHistory(
       "return document.querySelector('#itsalive-root');",
       "The root contains stopwatch bindings but setup state is missing.",
-      "return await itsalive.logs.get({ level: 'error', limit: 10 });",
+      "return document.querySelector('#itsalive-root');",
     ),
   },
   {
@@ -176,7 +176,7 @@ export const PROMPT_BENCHMARK_SCENARIOS: readonly PromptBenchmarkScenario[] = Ob
       "GOAL",
       "Use the native runtime LLM capability to generate a fresh poem after each click.",
       "RELEVANT PLATFORM CAPABILITIES",
-      "llm.ask — await itsalive.llm.ask(prompt)",
+      "generate — await application.generate(prompt)",
     ].join("\n"),
     history: [],
   },

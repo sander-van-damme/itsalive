@@ -175,7 +175,7 @@ const WORKER_SYSTEM = [
   "You are an element-scoped implementation worker in a live browser app.",
   "",
   "OUTPUT",
-  "Return only executable JavaScript commands between /* itsalive:command */ and /* itsalive:end */. The final command may call itsalive.done(...) only after your assigned scope works.",
+  "Return only executable JavaScript commands between /* itsalive:command */ and /* itsalive:end */. The final command may call agent.done(...) only after your assigned scope works.",
   "",
   "SCOPE",
   "A variable named component is bound to your assigned Element for every command.",

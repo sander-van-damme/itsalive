@@ -189,11 +189,3 @@ export interface LogEntry {
   appId?: string;
 }
 
-export interface ScheduleRecord {
-  id: string;
-  appId: string;
-  expression: string;
-  registeredAt: number;
-  lastFired?: number;
-  nextRun?: number;
-}

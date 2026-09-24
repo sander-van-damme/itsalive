@@ -23,8 +23,7 @@ vi.mock("../src/runtime/bridge", () => ({
     async request(payload: Record<string, unknown>) {
       state.requests.push(payload);
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
-      if (payload.type === "history.request") return { type: "history.response", results: ["match"] };
-      if (payload.type === "logs.request") return { type: "logs.response", results: [{ timestamp: 1, level: "error", source: "app", message: "boom" }] };
+      if (payload.type === "memory.request") return { type: "memory.response", memory: "Prefers fast feedback." };
       if (payload.type === "document.request") return {
         type: "document.response",
         document: { html: "<!doctype html><html><body><main>shell saved</main></body></html>", scripts: [], store: "{\"counter\":{\"count\":3}}" },
@@ -44,7 +43,8 @@ vi.mock("../src/runtime/logs", () => ({
 vi.mock("../src/runtime/persistence", () => ({
   serializeAppDocument: (store = "{}") => ({ html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [], store }),
   restoreAppDocument: async (document: { html: string; scripts: unknown[]; store: string }) => {
-    state.restoredWithApi = window.itsalive?.apiVersion === 2
+    state.restoredWithApi = Boolean(window.application)
+      && Boolean(window.agent)
       && (window.application.store.counter as { count?: number } | undefined)?.count === 3;
     state.restoredDocument = document;
   },
@@ -72,7 +72,7 @@ const emit = (data: Record<string, unknown>) => {
   listener(new MessageEvent("message", { data }));
 };
 
-describe("injected app runtime namespace", () => {
+describe("injected app runtime namespaces", () => {
   beforeAll(async () => {
     state.posts.length = 0;
     state.requests.length = 0;
@@ -88,25 +88,16 @@ describe("injected app runtime namespace", () => {
     });
   });
 
-  it("installs durable application.store before restoring app scripts", () => {
+  it("installs application and agent before restoring app scripts", () => {
     expect(window.history).toBe(nativeHistory);
     expect((window.application.store.counter as { count: number }).count).toBe(3);
+    expect(Object.keys(window.application)).toEqual(["store", "generate", "escalate"]);
+    expect(Object.keys(window.agent)).toEqual(["memory", "screenshot", "done"]);
     expect(Object.isFrozen(window.application)).toBe(true);
+    expect(Object.isFrozen(window.agent)).toBe(true);
+    expect(window).not.toHaveProperty("itsalive");
     expect(Object.getOwnPropertyDescriptor(window, "application")).toMatchObject({ writable: false, configurable: false, enumerable: false });
-    expect(Object.keys(window.itsalive)).toEqual([
-      "apiVersion", "llm", "history", "agent", "dom", "logs", "components", "cron", "done",
-    ]);
-    expect(window.itsalive.apiVersion).toBe(2);
-    expect(window.itsalive).not.toHaveProperty("db");
-    expect(window.itsalive).not.toHaveProperty("reload");
-    expect(Object.isFrozen(window.itsalive)).toBe(true);
-    expect(Object.isFrozen(window.itsalive.dom)).toBe(true);
-    expect(Object.isFrozen(window.itsalive.components)).toBe(true);
-    expect(Object.keys(window.itsalive.components)).toHaveLength(94);
-    expect(window.itsalive.components).toHaveProperty("modal");
-    expect(window.itsalive.components).toHaveProperty("date-picker");
-    expect(window.itsalive.components).toHaveProperty("modal/example-01");
-    expect(Object.getOwnPropertyDescriptor(window, "itsalive")).toMatchObject({ writable: false, configurable: false, enumerable: false });
+    expect(Object.getOwnPropertyDescriptor(window, "agent")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(state.restoredWithApi).toBe(true);
     expect(state.requests[0]).toEqual({ type: "document.request" });
     expect(state.restoredDocument?.html).toContain("shell saved");
@@ -114,33 +105,27 @@ describe("injected app runtime namespace", () => {
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
 
-  it("preserves bridge-backed LLM, history, wake, cron, DOM, logs, and completion behavior", async () => {
-    expect(await window.itsalive.llm.ask("question")).toBe("answer");
+  it("supports generation, escalation, curated memory, screenshot, and completion", async () => {
+    expect(await window.application.generate("question")).toBe("answer");
     expect(state.requests.find(request => request.type === "llm.request")).toEqual({ type: "llm.request", prompt: "question" });
-    expect(await window.itsalive.history.search({ query: "old" })).toEqual(["match"]);
-    await window.itsalive.agent.wake("continue");
+
+    window.application.escalate("continue");
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);
-    expect(window.itsalive.cron("daily", "0 8 * * *", () => "fired")).toEqual({ id: "daily", schedule: "0 8 * * *" });
-    expect(window.itsalive.dom).toEqual({ screenshot: expect.any(Function) });
-    expect(await window.itsalive.logs.get({ level: "error", limit: 10 })).toEqual([
-      { timestamp: 1, level: "error", source: "app", message: "boom" },
-    ]);
-    expect(state.requests.find(request => request.type === "logs.request")).toEqual({ type: "logs.request", level: "error", limit: 10 });
-    await expect(window.itsalive.logs.get({ limit: 201 })).rejects.toThrow("Log limit must be an integer from 1 to 200");
+    expect(() => window.application.escalate("   ")).toThrow("application.escalate requires a reason");
+
+    expect(await window.agent.memory()).toBe("Prefers fast feedback.");
+    expect(state.requests.find(request => request.type === "memory.request")).toEqual({ type: "memory.request" });
+    expect(await window.agent.screenshot()).toBe("HTML");
 
     document.getElementById("itsalive-root")!.insertAdjacentHTML("beforeend", '<main data-native-dom="yes"><h1>Native DOM</h1></main>');
-    emit({ type: "execute", code: "return itsalive.apiVersion;", requestId: "version" });
     emit({ type: "execute", code: "return document.querySelector('main[data-native-dom]');", requestId: "native-dom" });
-    emit({ type: "execute", code: 'return itsalive.done("ok");', requestId: "done" });
-    emit({ type: "cron.fire", callbackId: "daily", requestId: "cron" });
-    emit({ type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot" });
+    emit({ type: "execute", code: 'return agent.done("ok");', requestId: "done" });
+    emit({ type: "execute", code: "return await agent.screenshot();", requestId: "screenshot" });
     await nextTask();
-    expect(state.posts).toContainEqual({ payload: { type: "result", result: 2 }, requestId: "version" });
+
     expect(state.posts).toContainEqual({ payload: { type: "result", result: '<main data-native-dom="yes"><h1>Native DOM</h1></main>' }, requestId: "native-dom" });
     expect(state.posts).toContainEqual({ payload: { type: "result", done: true, message: "ok" }, requestId: "done" });
-    expect(state.posts).toContainEqual({ payload: { type: "result", result: "fired" }, requestId: "cron" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
-    expect(state.posts.some(({ payload }) => payload.type === "screenshot")).toBe(false);
   });
 
   it("tracks listeners installed only by transient agent commands", async () => {
@@ -185,7 +170,7 @@ describe("injected app runtime namespace", () => {
 
   it("keeps screenshot verification failures non-fatal", async () => {
     state.screenshotError = new Error("canvas export blocked");
-    emit({ type: "execute", code: "return await itsalive.dom.screenshot();", requestId: "screenshot-failure" });
+    emit({ type: "execute", code: "return await agent.screenshot();", requestId: "screenshot-failure" });
     await nextTask();
     state.screenshotError = undefined;
 
@@ -236,11 +221,15 @@ describe("injected app runtime namespace", () => {
     expect(state.scheduleSave).toHaveBeenCalled();
   });
 
-  it("fails clearly instead of overwriting an existing namespace", async () => {
-    const { installRuntimeApi } = await import("../src/runtime/runtime");
-    const target = {} as Window;
-    Object.defineProperty(target, "itsalive", { value: { unrelated: true }, configurable: true });
-    expect(() => installRuntimeApi(target, window.itsalive)).toThrow("window.itsalive already exists");
-    expect((target.itsalive as unknown as { unrelated: boolean }).unrelated).toBe(true);
+  it("fails clearly instead of overwriting existing application or agent globals", async () => {
+    const { installAgentApi, installApplicationApi } = await import("../src/runtime/runtime");
+
+    const applicationTarget = {} as Window;
+    Object.defineProperty(applicationTarget, "application", { value: { unrelated: true }, configurable: true });
+    expect(() => installApplicationApi(applicationTarget, window.application)).toThrow("window.application already exists");
+
+    const agentTarget = {} as Window;
+    Object.defineProperty(agentTarget, "agent", { value: { unrelated: true }, configurable: true });
+    expect(() => installAgentApi(agentTarget, window.agent)).toThrow("window.agent already exists");
   });
 });

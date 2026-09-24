@@ -79,8 +79,8 @@ describe("bootstrap protocol", () => {
 });
 
 describe("bridge protocol", () => {
-  it("uses bridge version 5 and recognizes messages by direction", () => {
-    expect(BRIDGE_VERSION).toBe(5);
+  it("uses bridge version 6 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(6);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
@@ -121,29 +121,18 @@ describe("bridge protocol", () => {
     expect(isBridgeMessage({ ...request, options: { temperature: 1 } })).toBe(false);
   });
 
-  it("validates bounded shell log queries and responses", () => {
-    const request = createBridgeMessage(APP_ID, "req_logs123", { type: "logs.request", level: "error", limit: 50 });
-    const response = createBridgeMessage(APP_ID, "req_logs123", {
-      type: "logs.response",
-      results: [{ timestamp: 1, level: "error", source: "app", message: "boom" }],
-    });
+
+  it("validates curated memory requests and responses", () => {
+    const request = createBridgeMessage(APP_ID, "req_memory", { type: "memory.request" });
+    const response = createBridgeMessage(APP_ID, "req_memory", { type: "memory.response", memory: "Prefers compact layouts." });
     expect(isAppToShellMessage(request)).toBe(true);
     expect(isShellToAppMessage(response)).toBe(true);
-    expect(isBridgeMessage({ ...request, level: "log" })).toBe(false);
-    expect(isBridgeMessage({ ...request, limit: 201 })).toBe(false);
-    expect(isBridgeMessage({ ...request, limit: 0 })).toBe(false);
-    expect(isBridgeMessage({ ...response, results: Array.from({ length: 201 }, () => response.results![0]) })).toBe(false);
-  });
-
-  it("rejects unused cron fields and runtime statuses", () => {
-    const envelope = { protocol: "itsalive", version: 5, appId: APP_ID, requestId: "req_fields" };
-    expect(isBridgeMessage({ ...envelope, type: "cron.register", registration: { callbackId: "daily", schedule: "0 8 * * *", description: "unused" } })).toBe(false);
-    for (const status of ["booting", "busy", "saving", "error"]) expect(isBridgeMessage({ ...envelope, type: "status", status })).toBe(false);
-    expect(isBridgeMessage({ ...envelope, type: "status", status: "ready" })).toBe(true);
+    expect(isBridgeMessage({ ...request, query: "raw history" })).toBe(false);
+    expect(isBridgeMessage({ ...response, memory: 42 })).toBe(false);
   });
 
   it("bounds every Jev bridge field and rejects unexpected payload data", () => {
-    const envelope = { protocol: "itsalive", version: 5, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
+    const envelope = { protocol: "itsalive", version: 6, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
     const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
     const valid = { ...envelope, state: { interaction, document: "<main>ok</main>" } };
     expect(isBridgeMessage(valid)).toBe(true);
@@ -165,14 +154,6 @@ describe("bridge protocol", () => {
     expect(isBridgeMessage({ ...valid, appId: "not.valid" })).toBe(false);
     expect(isBridgeMessage({ ...valid, requestId: "?" })).toBe(false);
     expect(isBridgeMessage({ ...valid, code: 42 })).toBe(false);
-  });
-
-  it("supports validated shell-to-app cron callback delivery", () => {
-    const fire = createBridgeMessage(APP_ID, "req_cron123", { type: "cron.fire", callbackId: "daily-review" });
-    expect(isShellToAppMessage(fire)).toBe(true);
-    expect(isAppToShellMessage(fire)).toBe(false);
-    expect(isBridgeMessage({ ...fire, callbackId: "" })).toBe(false);
-    expect(isBridgeMessage({ ...fire, callbackId: 42 })).toBe(false);
   });
 
   it("validates the complete MessageEvent trust boundary", () => {

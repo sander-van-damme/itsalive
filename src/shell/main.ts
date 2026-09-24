@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AccessibilityPrompt, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type PortablePreferenceView, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, accessibilitySuggestionFromJev, ambiguousAccessibilityCandidate, deterministicAccessibilitySuggestion, decideAccessibilityFriction, JEV_ACCESSIBILITY_FRICTION_QUESTIONS, JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION, recordAccessibilityDismissal, shouldSuppressAccessibilitySuggestion, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, decidePortablePreference, eligiblePortablePreferenceCandidate, JEV_PORTABLE_PREFERENCE_QUESTIONS, JEV_PORTABLE_PREFERENCE_QUESTION_SET_VERSION, mergePortablePreference, parsePortablePreferences, portablePreferenceLabel, removePortablePreferenceProvenance, selectPortablePreferencesForApp, setPortablePreferenceEnabled, type AgentProfileId, type AccessibilitySuggestionCandidate, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type PortablePreferenceCandidate, type PortablePreferenceRecord, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, accessibilitySuggestionFromJev, ambiguousAccessibilityCandidate, deterministicAccessibilitySuggestion, decideAccessibilityFriction, JEV_ACCESSIBILITY_FRICTION_QUESTIONS, JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION, recordAccessibilityDismissal, shouldSuppressAccessibilitySuggestion, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, renameAppRecord, resolveAgentProfile, selectAlivePolicyContext, technicalIntentBlock, decidePortablePreference, eligiblePortablePreferenceCandidate, JEV_PORTABLE_PREFERENCE_QUESTIONS, JEV_PORTABLE_PREFERENCE_QUESTION_SET_VERSION, mergePortablePreference, parsePortablePreferences, portablePreferenceLabel, removePortablePreferenceProvenance, selectPortablePreferencesForApp, setPortablePreferenceEnabled, type AgentProfileId, type AccessibilitySuggestionCandidate, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type PortablePreferenceCandidate, type PortablePreferenceRecord, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -258,7 +258,6 @@ if (settings.apiKey) {
 
 window.addEventListener('unhandledrejection', event => { void log('error', 'shell', String(event.reason), event.reason); });
 window.addEventListener('error', event => { void log('error', 'shell', event.message, event.error); });
-setInterval(() => { void fireDueSchedules(); }, 30_000);
 
 async function refreshApps(select?: string): Promise<void> {
   apps = (await db.apps.list()).sort((a,b) => b.updatedAt - a.updatedAt);
@@ -1245,24 +1244,11 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
       try { await runtimeLogWrites; }
       catch (error) { console.warn('[itsalive] Could not persist app runtime log', error); }
       break;
-    case 'history.request':
-      respond(message, { type: 'history.response', results: await searchHistory(db, activeId, message.query, message.limit) });
-      break;
-    case 'logs.request':
-      try {
-        await runtimeLogWrites;
-        respond(message, { type: 'logs.response', results: await queryRuntimeLogs(db, message.appId, { level: message.level, limit: message.limit }) });
-      } catch (error) {
-        respond(message, { type: 'logs.response', error: serializeError(error) });
-      }
+    case 'memory.request':
+      respond(message, { type: 'memory.response', memory: currentApp()?.behaviorSummary?.trim() ?? '' });
       break;
     case 'jev.request': await handleJevRequest(message); break;
     case 'llm.request': await handleLlmRequest(message); break;
-    case 'cron.register': {
-      const id = `${activeId}:${message.registration.callbackId}`; const previous = await db.get<import('./core').ScheduleRecord>('schedules', id);
-      await db.schedules.put({ id, appId: activeId, expression: message.registration.schedule, registeredAt: Date.now(), lastFired: previous?.lastFired, nextRun: nextCronRun(message.registration.schedule) });
-      break;
-    }
     case 'wake': if (!running) {
       const reason = message.reason || 'The app requested an agent wake-up.';
       void handleRuntimeWake(reason);
@@ -1696,21 +1682,11 @@ async function resolveInteractionPrompt(id: string, clarification?: string): Pro
   );
 }
 
-async function fireDueSchedules(): Promise<void> {
-  const now = Date.now();
-  for (const schedule of await db.schedules.list()) {
-    if (!schedule.nextRun || schedule.nextRun > now || schedule.appId !== activeId || runtime.state !== 'ready') continue;
-    const callbackId = schedule.id.slice(schedule.appId.length + 1);
-    runtime.post({ type: 'cron.fire', callbackId });
-    await db.schedules.put({ ...schedule, lastFired: now, nextRun: nextCronRun(schedule.expression, now) });
-  }
-}
-
 async function handleLlmRequest(message: BridgeMessage & { type: 'llm.request'; prompt: string }): Promise<void> {
   try {
     const profile = await resolvedProfile('runtime-llm');
     const result = await registry.generate({
-      purpose: 'app itsalive.llm.ask',
+      purpose: 'app application.generate',
       model: profile.modelConfig,
       system: 'Respond helpfully to this request from the active app.',
       messages: [{ role: 'user', content: message.prompt }],

@@ -29,20 +29,19 @@ The shell initializes each app over the validated bootstrap handshake, transferr
 
 Persistent app state remains shell-owned as separate markup and app-authored setup-script snapshots: the injected runtime may normalize/serialize and restore the live DOM because those operations require app-origin document access, but snapshots are sent back for root-origin persistence. Platform/bootstrap assets are excluded from saved markup. Do not add platform-private durable storage to the app origin.
 
-The `window.itsalive` namespace follows the same rule. Its contract, source, product policy, catalogs, and durable state are shell-owned. The injected runtime may expose local implementations or RPC proxies as needed, but those implementations are part of the shell-delivered runtime rather than permanent app-bootstrap code. Generated apps may still use ordinary browser APIs and their own origin-local storage.
+The `window.application` and `window.agent` globals follow the same rule. Their contracts and implementations are shell-owned and delivered by the injected runtime rather than baked into the permanent app bootstrap. `application` is for durable/generated-app capabilities; `agent` is for coding/inspection capabilities. Generated apps otherwise use ordinary browser APIs directly.
 
 ## Included capabilities
 
 - Per-app origin isolation with no storage namespaces or shared app database.
-- IndexedDB shell repositories for app metadata, persistent app HTML, full history, schedules, and logs.
+- IndexedDB shell repositories for app metadata, persistent app HTML/state, full history, and logs.
 - Shell-injected runtime initialization over the cross-origin bridge, including persistent HTML restoration/saving, form-control normalization, script re-execution, observation, screenshots, logging, and runtime API installation.
-- JavaScript agent loop with `itsalive.done()`, bounded observations, time/cost/progress budgets, explicit failure/stall stop reasons, and streamed multi-command responses whose completed commands execute immediately while generation continues.
+- JavaScript agent loop with `agent.done()`, bounded observations, time/cost/progress budgets, explicit failure/stall stop reasons, and streamed multi-command responses whose completed commands execute immediately while generation continues.
 - A user-facing intent layer that separates explanation/question/preference handling from explicit change requests and translates authorized changes into compact technical intents.
 - Coding-context budgeting that always retains the immutable system prompt, app prompt, and current technical intent while excluding raw user/assistant chat from automatic worker history.
 - OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
-- Native DOM inspection through ordinary browser APIs and execution results, plus literal history search, in-frame screenshots, and app log retrieval.
-- App-to-shell LLM requests and agent wake-ups, with canonical agent-facing capability metadata used to generate both intent-manager and coding-agent help.
-- Stable cron registrations and callback dispatch protocol. Cron callbacks run only while the relevant app runtime and shell are active; this is not server-side or background scheduling.
+- Native DOM inspection through ordinary browser APIs and execution results, plus coding-agent screenshot and curated-memory capabilities.
+- App-to-shell generation requests and explicit escalation to the external coding agent, with canonical capability metadata used for agent help.
 - Tailwind's browser runtime, Alpine.js with common plugins, Feather Icons, and preloaded browser libraries for charts, visualization, 3D, diagrams, math, dates, sliders, maps, animation, CSV, fuzzy search, and code highlighting. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
@@ -89,24 +88,31 @@ Configure the first Worker route/custom domain for the exact root host and the s
 
 ## Runtime API
 
-Agent JavaScript executes inside the active app and can use ordinary browser APIs plus the single, versioned `itsalive` runtime namespace (`itsalive.apiVersion === 2`):
+Generated application code uses native browser APIs plus a deliberately small shell-owned `application` global:
 
 ```js
-itsalive.dom.screenshot()
-itsalive.logs.get({ level, limit })
-itsalive.history.search({ query, limit })
-itsalive.components.modal // Pines Alpine + Tailwind component recipes
-itsalive.cron(id, expression, callback)
-itsalive.agent.wake(reason)
-itsalive.llm.ask(prompt)
-itsalive.done(message)
+application.store
+application.generate(prompt)
+application.escalate(reason)
 ```
 
-The platform uses one branded browser global because persisted generated scripts execute independently of an individual agent invocation. Keeping every platform capability under `window.itsalive` minimizes global namespace pollution and leaves ordinary browser APIs—including `window.history`—untouched. The namespace reference and its stable groups are frozen for correctness, not as a security boundary. The shell owns and supplies the runtime source that installs this API inside the app frame; local DOM/origin implementations execute there only because the browser requires them to. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
+`application.store` is a durable JSON-like object tree persisted atomically with the app document. Ordinary app state can use normal JavaScript property access and initialization such as `application.store.counter ??= { count: 0 }`. Larger, binary, or query-heavy data may still use native IndexedDB directly.
 
-Generated apps should keep reasonably sized durable state in persistent semantic HTML. Larger, binary, or query-heavy structured state may use native browser IndexedDB directly; each app has its own browser origin, so that generated-app storage is naturally isolated. Platform persistence of the saved HTML belongs to the root shell database, not to runtime-private app-origin IndexedDB. The system prompt treats the document as a live drawing board: ordinary semantic HTML and browser DOM APIs are the default, native Custom Elements are optional rather than mandatory, and substantial work can be emitted as multiple independently executable commands in one streamed response. The shell applies each complete command as soon as its delimiter arrives, so users can see the app take shape before the model finishes generating the response. Native DOM values returned by generated code are serialized into readable observations, so no custom inspector/ref protocol is needed. Raw interaction events remain ephemeral; behavioral-history curation and durable summaries are platform state owned by the shell rather than hidden state inside the app document.
+`application.generate(prompt)` returns model-generated content to the running app. `application.escalate(reason)` instead hands a problem to the external coding agent; it is not a content-generation call and does not return the agent's work product.
 
-Deleting an app removes its shell-owned metadata, persistent document, behavioral summary, history, logs, and schedules and then forgets the immutable UUID. App-origin browser data is cleanup hygiene rather than part of deletion correctness. The shell may make a best-effort request to a protected wildcard cleanup endpoint that responds with `Clear-Site-Data: "storage", "cache"`; cleanup failure must not block deletion, and UUIDs are never reused.
+Coding commands also receive a small `agent` global:
+
+```js
+await agent.memory()
+await agent.screenshot()
+return agent.done(message)
+```
+
+`agent.memory()` exposes curated shell-owned context rather than raw history records. `agent.screenshot()` is best-effort visual verification, while `agent.done()` signals that the current coding task is complete. The naming is intentionally a semantic nudge: persist `application.*` behavior into the app when appropriate; use `agent.*` for coding and inspection.
+
+The shell may internally retain richer histories, behavioral summaries, logs, and diagnostics without making those internal schemas part of the generated-app API. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
+
+Deleting an app removes its shell-owned metadata, persistent document/store, behavioral summary, and history and then forgets the immutable UUID. Diagnostic logs may outlive app deletion for export/debugging. App-origin browser data is cleanup hygiene rather than part of deletion correctness. The shell may make a best-effort request to a protected wildcard cleanup endpoint that responds with `Clear-Site-Data: "storage", "cache"`; cleanup failure must not block deletion, and UUIDs are never reused.
 
 ## Security notes
 

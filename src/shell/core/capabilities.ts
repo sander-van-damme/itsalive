@@ -1,67 +1,51 @@
 export const PLATFORM_CAPABILITIES = [
   {
     id: "done",
-    signature: "return itsalive.done('Ready')",
+    signature: "return agent.done('Ready')",
     purpose: "Signal that the current coding task is actually complete and optionally provide a short user-facing completion message.",
     whenToUse: "Use only from the final coding command after the requested outcome works and verification is complete.",
     whenNotToUse: "Do not use while staged UI is unfinished or while a repair/verification step remains.",
-    example: "return itsalive.done('Ready to use.');",
+    example: "return agent.done('Ready to use.');",
   },
   {
-    id: "llm.ask",
-    signature: "await itsalive.llm.ask(prompt)",
-    purpose: "Ask the configured LLM for open-ended generated or transformed content at app runtime.",
-    whenToUse: "Use when the app itself must generate, rewrite, summarize, translate, classify, or answer with content that should not be pre-baked locally.",
+    id: "generate",
+    signature: "await application.generate(prompt)",
+    purpose: "Generate or transform content for the running app and return the model output to the caller.",
+    whenToUse: "Use when app behavior genuinely needs generated, rewritten, summarized, translated, classified, or answered content.",
     whenNotToUse: "Do not use for deterministic calculations, fixed copy, or behavior the browser can implement directly.",
-    example: "const poem = await itsalive.llm.ask('Write a short poem about the sea.');",
+    example: "const poem = await application.generate('Write a short poem about the sea.');",
   },
   {
-    id: "history.search",
-    signature: "await itsalive.history.search({ query: 'preferred tempo', limit: 5 })",
-    purpose: "Search shell-owned app history with literal text retrieval.",
-    whenToUse: "Use when runtime behavior genuinely needs earlier app conversation or events and a focused literal query is known.",
-    whenNotToUse: "Do not use as a substitute for current DOM state or to load the entire chat transcript.",
-    example: "const matches = await itsalive.history.search({ query: 'preferred tempo', limit: 5 });",
+    id: "escalate",
+    signature: "application.escalate(reason)",
+    purpose: "Hand control to the external coding agent when the running app needs the app itself inspected or changed.",
+    whenToUse: "Use sparingly when the app cannot solve the problem locally and a coding-agent run is genuinely required.",
+    whenNotToUse: "Do not use when you need generated text back in the current script; use application.generate instead.",
+    example: "application.escalate('The imported schema changed. Inspect the app and adapt it.');",
   },
   {
-    id: "logs.get",
-    signature: "await itsalive.logs.get({ level: 'error', limit: 20 })",
-    purpose: "Read bounded shell-owned runtime logs for diagnosis.",
-    whenToUse: "Use when a runtime failure needs recent error or warning evidence.",
-    whenNotToUse: "Do not poll logs for ordinary state or user-facing data.",
-    example: "const errors = await itsalive.logs.get({ level: 'error', limit: 20 });",
+    id: "memory",
+    signature: "await agent.memory()",
+    purpose: "Read curated shell-owned memory relevant to the current app without exposing raw history records.",
+    whenToUse: "Use during coding when earlier app/user context is genuinely needed.",
+    whenNotToUse: "Do not use as application state; durable app state belongs in application.store.",
+    example: "const memory = await agent.memory();",
   },
   {
-    id: "dom.screenshot",
-    signature: "await itsalive.dom.screenshot()",
-    purpose: "Capture a best-effort screenshot for visual verification.",
+    id: "screenshot",
+    signature: "await agent.screenshot()",
+    purpose: "Capture a best-effort screenshot for visual verification while coding.",
     whenToUse: "Use when visual layout or rendering needs verification beyond DOM inspection.",
     whenNotToUse: "Do not block completion solely because screenshot capture is unavailable.",
-    example: "const image = await itsalive.dom.screenshot();",
+    example: "const image = await agent.screenshot();",
   },
   {
-    id: "components",
-    signature: "itsalive.components['modal']",
-    purpose: "Read a platform-provided catalog of editable Alpine/Tailwind component recipes.",
-    whenToUse: "Use when a known UI pattern such as a modal, picker, menu, or alternate example would save implementation work.",
-    whenNotToUse: "Do not insert recipes blindly or treat the catalog as a runtime widget framework.",
-    example: "const modalRecipe = itsalive.components['modal'];",
-  },
-  {
-    id: "cron",
-    signature: "itsalive.cron('daily-review', '0 8 * * *', callback)",
-    purpose: "Register a stable scheduled callback through the shell.",
-    whenToUse: "Use when the app has an explicit recurring or scheduled behavior.",
-    whenNotToUse: "Do not use for short timers, animation, or immediate interaction handling.",
-    example: "itsalive.cron('daily-review', '0 8 * * *', () => refreshDailyReview());",
-  },
-  {
-    id: "agent.wake",
-    signature: "await itsalive.agent.wake('Describe the follow-up')",
-    purpose: "Ask the shell to start another agent run for follow-up work.",
-    whenToUse: "Use sparingly when app runtime evidence shows that another coding/agent turn is genuinely needed.",
-    whenNotToUse: "Do not use for ordinary UI actions or as a general event bus.",
-    example: "await itsalive.agent.wake('The imported data schema changed; adapt the parser.');",
+    id: "store",
+    signature: "application.store.namespace",
+    purpose: "Keep ordinary serializable application state durable across reloads.",
+    whenToUse: "Use for reasonably sized durable app state that should survive reloads.",
+    whenNotToUse: "Use native IndexedDB directly for large, binary, or query-heavy datasets.",
+    example: "application.store.counter ??= { count: 0 };",
   },
 ] as const;
 
@@ -97,12 +81,10 @@ export function inferPlatformCapabilities(text: string): PlatformCapabilityId[] 
   const ids: PlatformCapabilityId[] = [];
   const add = (id: PlatformCapabilityId, matches: boolean) => { if (matches && !ids.includes(id)) ids.push(id); };
 
-  add("llm.ask", /\b(poem|story|haiku|lyrics?|generate (?:text|copy|content|an? answer)|write (?:text|copy|a |an )|rewrite|summari[sz]e|translate|open[- ]ended|ai[- ]generated|llm)\b/.test(lower));
-  add("history.search", /\b(history|earlier conversation|previous conversation|remember|past interaction)\b/.test(lower));
-  add("logs.get", /\b(logs?|runtime error|debug|diagnos|stack trace)\b/.test(lower));
-  add("dom.screenshot", /\b(screenshot|visual verification|verify (?:the )?layout|rendering)\b/.test(lower));
-  add("components", /\b(modal|dialog|date picker|dropdown|menu|popover|component recipe)\b/.test(lower));
-  add("cron", /\b(cron|schedule|scheduled|every day|daily|weekly|recurring)\b/.test(lower));
-  add("agent.wake", /\b(wake (?:the )?agent|follow[- ]up agent|agent follow[- ]up)\b/.test(lower));
+  add("generate", /\b(poem|story|haiku|lyrics?|generate (?:text|copy|content|an? answer)|write (?:text|copy|a |an )|rewrite|summari[sz]e|translate|open[- ]ended|ai[- ]generated|llm)\b/.test(lower));
+  add("memory", /\b(memory|history|earlier conversation|previous conversation|remember|past interaction)\b/.test(lower));
+  add("screenshot", /\b(screenshot|visual verification|verify (?:the )?layout|rendering)\b/.test(lower));
+  add("escalate", /\b(escalat|wake (?:the )?agent|follow[- ]up agent|agent follow[- ]up|adapt the app|change the app itself)\b/.test(lower));
+  add("store", /\b(persist|durable state|survive reload|remember state|application state)\b/.test(lower));
   return ids;
 }

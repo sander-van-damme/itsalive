@@ -6,7 +6,7 @@ export const BOOTSTRAP_PROTOCOL = "itsalive-bootstrap" as const;
 export const BOOTSTRAP_VERSION = 1 as const;
 export const RUNTIME_BOOTSTRAP_KEY = "__itsaliveShellRuntimeInitV1" as const;
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 5 as const;
+export const BRIDGE_VERSION = 6 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
 export const MAX_SAVED_DOCUMENT_CHARACTERS = 5_000_000;
@@ -53,7 +53,6 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export type RuntimeStatus = "ready";
 
 export interface LogRecord { timestamp: number; level: LogLevel; source: string; message: string; details?: unknown; }
-export interface CronRegistration { callbackId: string; schedule: string; }
 export interface InteractionTarget { tag: string; id?: string; value?: string; state?: Record<string, string | boolean>; }
 export interface InteractionSnapshot { seq: number; at: string; type: string; target: InteractionTarget; actualTarget: InteractionTarget; key?: string; }
 export interface InteractionPatternSample {
@@ -76,10 +75,8 @@ export type ShellToAppPayload =
   | { type: "document.snapshot" }
   | { type: "document.response"; document?: AppDocumentSnapshot; error?: SerializedError }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
-  | { type: "history.response"; results?: unknown[]; error?: SerializedError }
-  | { type: "logs.response"; results?: LogRecord[]; error?: SerializedError }
-  | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError }
-  | { type: "cron.fire"; callbackId: string };
+  | { type: "memory.response"; memory?: string; error?: SerializedError }
+  | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError };
 
 export type AppToShellPayload =
   | { type: "result"; result?: unknown; done?: boolean; message?: string }
@@ -88,11 +85,9 @@ export type AppToShellPayload =
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
   | { type: "llm.request"; prompt: string }
-  | { type: "history.request"; query: string; limit?: number }
-  | { type: "logs.request"; level?: LogLevel; limit?: number }
+  | { type: "memory.request" }
   | { type: "jev.request"; state: InteractionObservation }
   | { type: "log"; record: LogRecord }
-  | { type: "cron.register"; registration: CronRegistration }
   | { type: "status"; status: RuntimeStatus };
 
 export type BridgePayload = ShellToAppPayload | AppToShellPayload;
@@ -103,8 +98,8 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "document.response", "llm.response", "history.response", "logs.response", "jev.response", "cron.fire"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.request", "document.save", "wake", "llm.request", "history.request", "logs.request", "jev.request", "log", "cron.register", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "document.response", "llm.response", "memory.response", "jev.response"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.request", "document.save", "wake", "llm.request", "memory.request", "jev.request", "log", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -197,17 +192,13 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
     case "document.response": return (value.document === undefined || isAppDocumentSnapshot(value.document))
       && (value.error === undefined || isSerializedError(value.error));
     case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
-    case "history.request": return typeof value.query === "string";
-    case "logs.request": return (value.level === undefined || ["debug", "info", "warn", "error"].includes(String(value.level)))
-      && (value.limit === undefined || Number.isSafeInteger(value.limit) && Number(value.limit) >= 1 && Number(value.limit) <= 200);
-    case "logs.response": return (value.results === undefined || Array.isArray(value.results) && value.results.length <= 200 && value.results.every(isLogRecord))
+    case "memory.request": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId"]);
+    case "memory.response": return (value.memory === undefined || typeof value.memory === "string" && value.memory.length <= MAX_SEMANTIC_DOCUMENT_CHARACTERS)
       && (value.error === undefined || isSerializedError(value.error));
     case "jev.request": return isInteractionObservation(value.state);
     case "jev.response": return typeof value.probability === "number" && value.probability >= 0 && value.probability <= 1 && typeof value.escalated === "boolean" && (value.error === undefined || isSerializedError(value.error));
-    case "cron.fire": return typeof value.callbackId === "string" && value.callbackId.length > 0 && value.callbackId.length <= 200;
     case "execution.error": return isSerializedError(value.error);
     case "log": return isLogRecord(value.record);
-    case "cron.register": return isObject(value.registration) && typeof value.registration.callbackId === "string" && typeof value.registration.schedule === "string" && value.registration.description === undefined;
     case "status": return value.status === "ready";
     default: return true;
   }

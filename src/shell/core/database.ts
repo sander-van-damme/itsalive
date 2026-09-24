@@ -1,10 +1,10 @@
-import type { AppDocumentRecord, AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
+import type { AppDocumentRecord, AppRecord, HistoryEntry, LogEntry } from "./types";
 import type { BehaviorEpisodeRecord } from "./behavior-episodes";
 
 const DB_NAME = "itsalive-shell-v5";
 const DB_VERSION = 1;
 
-type Store = "apps" | "behaviorEpisodes" | "documents" | "history" | "logs" | "schedules";
+type Store = "apps" | "behaviorEpisodes" | "documents" | "history" | "logs";
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -42,8 +42,6 @@ export class ShellDatabase {
         history.createIndex("appId", "appId");
         const logs = db.createObjectStore("logs", { keyPath: "id", autoIncrement: true });
         logs.createIndex("appId", "appId");
-        const schedules = db.createObjectStore("schedules", { keyPath: "id" });
-        schedules.createIndex("appId", "appId");
       };
       open.onsuccess = () => {
         open.result.onversionchange = () => open.result.close();
@@ -89,11 +87,11 @@ export class ShellDatabase {
     const db = await this.open();
     // Diagnostics intentionally outlive app deletion so a just-failed test can
     // still be exported after the user removes the app itself.
-    const tx = db.transaction(["apps", "behaviorEpisodes", "documents", "history", "schedules"], "readwrite");
+    const tx = db.transaction(["apps", "behaviorEpisodes", "documents", "history"], "readwrite");
     const completed = transactionDone(tx);
     tx.objectStore("apps").delete(id);
     tx.objectStore("documents").delete(id);
-    for (const store of ["behaviorEpisodes", "history", "schedules"] as const) {
+    for (const store of ["behaviorEpisodes", "history"] as const) {
       const cursor = tx.objectStore(store).index("appId").openKeyCursor(IDBKeyRange.only(id));
       cursor.onsuccess = () => {
         const row = cursor.result;
@@ -132,11 +130,5 @@ export class ShellDatabase {
     add: async (entry: LogEntry) => Number(await this.put("logs", entry)),
     all: () => this.all<LogEntry>("logs"),
     forApp: (id: string) => this.byIndex<LogEntry>("logs", "appId", id),
-  };
-  schedules = {
-    list: () => this.all<ScheduleRecord>("schedules"),
-    forApp: (id: string) => this.byIndex<ScheduleRecord>("schedules", "appId", id),
-    put: (item: ScheduleRecord) => this.put("schedules", item),
-    delete: (id: string) => this.delete("schedules", id),
   };
 }
