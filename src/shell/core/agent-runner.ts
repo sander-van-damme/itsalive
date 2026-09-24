@@ -6,6 +6,7 @@ import type { ProviderRegistry } from "./providers";
 import { sanitizeDiagnostic } from './diagnostics';
 import { createAgentTimeout } from "./run-lifecycle";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
+import { appendFailureRoute, assessFailureRoute, failureRouteStopResult } from "./failure-routing";
 
 export interface ExecutionResult {
   value?: unknown;
@@ -54,6 +55,30 @@ export type CompletionAssessor = (
   signal: AbortSignal,
 ) => Promise<CompletionAssessmentDecision>;
 
+export type FailureAssessmentPhase = "generation" | "runtime";
+
+export interface FailureAssessmentState {
+  correlationId: string;
+  requestedOutcome: string;
+  phase: FailureAssessmentPhase;
+  failureEvidence: string;
+  latestObservation?: string;
+  scopeSelector?: string;
+  attempt: number;
+  maxAttempts: number;
+}
+
+export interface FailureAssessmentDecision {
+  action: "repair" | "retry" | "clarify" | "stop" | "uncertain";
+  reason: string;
+  failureClass?: string;
+}
+
+export type FailureAssessor = (
+  state: FailureAssessmentState,
+  signal: AbortSignal,
+) => Promise<FailureAssessmentDecision>;
+
 export interface RunOptions {
   appId: string;
   appPrompt: string;
@@ -90,10 +115,12 @@ export interface RunOptions {
   completionAssessor?: CompletionAssessor;
   /** JEV-style completion rejection gets at most this many extra repair turns. Defaults to one. */
   maxCompletionAssessmentRepairs?: number;
+  /** Optional bounded semantic routing after a generation/runtime failure and before another model turn. */
+  failureAssessor?: FailureAssessor;
 }
 
 export interface RunResult {
-  status: "done" | RunBudgetStopKind;
+  status: "done" | "clarification-needed" | "failure-stop" | RunBudgetStopKind;
   message?: string;
   /** Unsanitized done() payload for structured worker handoff parsing. */
   rawMessage?: string;
@@ -333,6 +360,10 @@ export class AgentRunner {
               await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
+              const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
+              const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+              if (routeStop) return routeStop;
+              if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
@@ -362,6 +393,10 @@ export class AgentRunner {
               await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
               if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
               if (failureStop) return budgetStopResult(failureStop, turn, budget);
+              const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
+              const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+              if (routeStop) return routeStop;
+              if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
               repeatedLowSignalObservation = undefined;
               repeatedLowSignalState = undefined;
               reportProgress(options, "repairing", turn);
@@ -382,16 +417,28 @@ export class AgentRunner {
           if (result.error) {
             if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
             const failureStop = budget.recordFailure("runtime");
+            if (failureStop) return budgetStopResult(failureStop, turn, budget);
+            const failureRoute = await assessFailureRoute(
+              options,
+              "runtime",
+              observation ?? JSON.stringify(result.error),
+              turn,
+              budget,
+              controller.signal,
+            );
+            const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+            if (routeStop) return routeStop;
+            if (failureRoute && observation) observation = appendFailureRoute(observation, failureRoute);
             reportProgress(options, "repairing", turn);
             repeatedLowSignalObservation = undefined;
             repeatedLowSignalState = undefined;
             budget.clearStall();
             console.info('Turn outcome', {
-              kind: 'runtime-repair',
+              kind: 'runtime-' + (failureRoute?.action ?? 'repair'),
+              failureClass: failureRoute?.failureClass,
               consecutiveFailures: budget.snapshot().consecutiveFailures.runtime,
             });
-            if (failureStop) return budgetStopResult(failureStop, turn, budget);
-            console.info('A command failed; continuing to next turn for repair');
+            console.info('A command failed; continuing according to failure route');
             continue;
           }
           budget.recordSuccess("runtime");

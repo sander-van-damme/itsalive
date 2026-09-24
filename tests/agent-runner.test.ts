@@ -902,4 +902,97 @@ describe('AgentRunner lifecycle', () => {
     expect(completionAssessor).toHaveBeenCalledTimes(2);
   });
 
+
+  it('stops before a second LLM turn when failure routing needs user clarification', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return component.missingMethod();' })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({
+      error: { message: 'TypeError: component.missingMethod is not a function' },
+    })) };
+    const failureAssessor = vi.fn(async (...args: [import('../src/shell/core/agent-runner').FailureAssessmentState, AbortSignal]) => {
+      void args;
+      return { action: 'clarify' as const, reason: 'user-clarification-needed', failureClass: 'user_clarification' };
+    });
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId,
+      appPrompt: 'Maintain it',
+      trigger: 'Make the ambiguous control behave correctly',
+      model,
+      failureAssessor,
+      budget: { emergencyTurnCeiling: 5 },
+    });
+
+    expect(result).toMatchObject({ status: 'clarification-needed', turns: 1 });
+    expect(providers.generate).toHaveBeenCalledTimes(1);
+    expect(failureAssessor).toHaveBeenCalledTimes(1);
+    expect(failureAssessor.mock.calls[0]![0]).toMatchObject({
+      phase: 'runtime',
+      requestedOutcome: 'Make the ambiguous control behave correctly',
+      attempt: 1,
+      failureEvidence: expect.stringContaining('missingMethod'),
+    });
+  });
+
+  it('keeps the existing repair path when JEV failure routing is uncertain', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn()
+      .mockResolvedValueOnce({ text: 'return component.missingMethod();' })
+      .mockResolvedValueOnce({ text: 'return itsalive.done("ready");' }) };
+    let execution = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      }
+      execution++;
+      return execution === 1
+        ? { error: { message: 'temporary runtime failure' } }
+        : { done: true, message: 'ready' };
+    }) };
+    const failureAssessor = vi.fn(async () => ({ action: 'uncertain' as const, reason: 'failure-class-uncertain' }));
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Repair it', model,
+      failureAssessor,
+      budget: { emergencyTurnCeiling: 3 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 2 });
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+    expect(failureAssessor).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps deterministic failure budgets authoritative over JEV routing', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return component.missingMethod();' })) };
+    const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({
+      error: { message: 'persistent runtime failure' },
+    })) };
+    const failureAssessor = vi.fn(async () => ({ action: 'repair' as const, reason: 'focused-code-repair', failureClass: 'generated_code' }));
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Repair it', model,
+      failureAssessor,
+      budget: { maxConsecutiveFailures: 1, emergencyTurnCeiling: 5 },
+    });
+
+    expect(result).toMatchObject({ status: 'runtime-failure', turns: 1 });
+    expect(failureAssessor).not.toHaveBeenCalled();
+  });
+
 });
