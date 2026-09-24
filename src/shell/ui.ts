@@ -7,6 +7,7 @@ export interface AppSummary { id: string; name: string }
 export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
 export interface InteractionPrompt { id: string; content: string; intentPlaceholder: string; confirmLabel: string; dismissLabel: string }
 export interface ResumePrompt { id: string; content: string; actionLabel: string }
+export interface AdaptationPrompt { id: string; content: string; undoLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
 export interface UsageBucketValue {
@@ -36,6 +37,7 @@ export interface ShellActions {
   sendMessage(content: string): Promise<void>;
   stopAgent(): void;
   resumePausedRun(id: string): Promise<void>;
+  undoAdaptation(id: string): Promise<void>;
   resolveInteractionPrompt(id: string, intent?: string): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
@@ -70,6 +72,7 @@ export class ShellUI {
   private messages: ChatLine[] = [];
   private interactionPrompt?: InteractionPrompt;
   private resumePrompt?: ResumePrompt;
+  private adaptationPrompt?: AdaptationPrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
   private usage: UsageValue = {
@@ -106,6 +109,7 @@ export class ShellUI {
       this.mobileView = 'chat';
       this.interactionPrompt = undefined;
       this.resumePrompt = undefined;
+      this.adaptationPrompt = undefined;
       this.appDialog = undefined;
       this.dialogError = '';
     }
@@ -126,6 +130,11 @@ export class ShellUI {
 
   setResumePrompt(prompt: ResumePrompt | undefined): void {
     this.resumePrompt = prompt;
+    if (this.view === 'workspace') this.renderPanel();
+  }
+
+  setAdaptationPrompt(prompt: AdaptationPrompt | undefined): void {
+    this.adaptationPrompt = prompt;
     if (this.view === 'workspace') this.renderPanel();
   }
 
@@ -411,7 +420,15 @@ export class ShellUI {
           </div>
         </div>`
       : '';
-    const prompts = `${resumePrompt}${interactionPrompt}`;
+    const adaptationPrompt = this.adaptationPrompt
+      ? `<div class="message assistant interaction-prompt" data-adaptation-prompt="${esc(this.adaptationPrompt.id)}">
+          <span>${esc(this.adaptationPrompt.content)}</span>
+          <div class="prompt-actions">
+            <button class="action" data-adaptation-undo type="button" ${this.busy ? 'disabled' : ''}>${esc(this.adaptationPrompt.undoLabel)}</button>
+          </div>
+        </div>`
+      : '';
+    const prompts = `${resumePrompt}${adaptationPrompt}${interactionPrompt}`;
     const messages = this.messages.length || prompts
       ? `${this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')}${prompts}`
       : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>What should we change?</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
@@ -445,6 +462,12 @@ export class ShellUI {
       if (!current) return;
       (event.currentTarget as HTMLButtonElement).disabled = true;
       void this.actions.resumePausedRun(current.id);
+    });
+    panel.querySelector<HTMLButtonElement>('[data-adaptation-undo]')?.addEventListener('click', event => {
+      const current = this.adaptationPrompt;
+      if (!current) return;
+      (event.currentTarget as HTMLButtonElement).disabled = true;
+      void this.actions.undoAdaptation(current.id);
     });
     panel.querySelector<HTMLButtonElement>('[data-stop]')?.addEventListener('click', event => {
       (event.currentTarget as HTMLButtonElement).disabled = true;
