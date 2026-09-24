@@ -17,6 +17,7 @@ export interface AppRecord {
   activeAdaptation?: ActiveAdaptation;
   adaptationHistory?: AdaptationHistoryEntry[];
   accessibilityDismissals?: AccessibilityDismissal[];
+  crossAppPreferencesIsolated?: boolean;
 }
 
 export interface AppDocumentRecord {
