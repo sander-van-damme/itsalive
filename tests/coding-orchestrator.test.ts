@@ -27,8 +27,6 @@ describe("coding manager and scoped workers", () => {
           dependencies: [],
           capabilityIds: [],
           profile: "component-worker",
-          idPrefix: "timer-controls-",
-          storeNamespace: "timerControls",
         },
         {
           id: "laps",
@@ -38,21 +36,19 @@ describe("coding manager and scoped workers", () => {
           dependencies: ["controls"],
           capabilityIds: [],
           profile: "component-worker",
-          idPrefix: "lap-list-",
-          storeNamespace: "lapList",
         },
       ],
     }));
     expect(plan.tasks).toHaveLength(2);
     expect(plan.shared.ref).toBe("shared-v1");
     expect(plan.shared.stores).toEqual(["sharedTimer"]);
-    expect(plan.tasks[0]).toMatchObject({ idPrefix: "timer-controls-", storeNamespace: "timerControls" });
+    expect(plan.tasks[0]).toMatchObject({ idPrefix: "timer-controls-", storeNamespace: "timer_controls" });
     expect(plan.tasks[1]).toMatchObject({
       scope: "#lap-list",
       dependencies: ["controls"],
       sharedContractRef: "shared-v1",
       idPrefix: "lap-list-",
-      storeNamespace: "lapList",
+      storeNamespace: "lap_list",
       parallel: false,
     });
 
@@ -78,13 +74,16 @@ describe("coding manager and scoped workers", () => {
       ],
     }))).toThrow(/not earlier/);
 
-    expect(() => parseCodingManagerPlan(JSON.stringify({
-      shared: { design: [], state: [], stores: [] },
+    const normalized = parseCodingManagerPlan(JSON.stringify({
+      shared: { design: [], state: [], stores: ["counter"] },
       tasks: [
-        { id: "left", goal: "Left", scope: "#left", acceptanceCriteria: [], dependencies: [], capabilityIds: [], storeNamespace: "same" },
-        { id: "right", goal: "Right", scope: "#right", acceptanceCriteria: [], dependencies: [], capabilityIds: [], storeNamespace: "same" },
+        { id: "counter", goal: "Counter", scope: "#counter", acceptanceCriteria: [], dependencies: [], capabilityIds: [] },
+        { id: "hyphen", goal: "Hyphen", scope: "#same-name", acceptanceCriteria: [], dependencies: [], capabilityIds: [] },
+        { id: "underscore", goal: "Underscore", scope: "#same_name", acceptanceCriteria: [], dependencies: [], capabilityIds: [] },
       ],
-    }))).toThrow(/already owned/);
+    }));
+    expect(normalized.tasks.map(task => task.storeNamespace)).toEqual(["counter_2", "same_name", "same_name_2"]);
+    expect(normalized.tasks.map(task => task.idPrefix)).toEqual(["counter-", "same-name-", "same_name-"]);
   });
 
   it("parses manager integration verification separately from worker results", () => {
@@ -329,17 +328,17 @@ describe("coding manager and scoped workers", () => {
         {
           id: "a", goal: "Build A", scope: "#component-a", acceptanceCriteria: ["A ready"],
           dependencies: [], capabilityIds: [], profile: "component-worker",
-          sharedContractRef: "shared-v2", idPrefix: "a-", storeNamespace: "componentA", parallel: true,
+          sharedContractRef: "shared-v2", parallel: true,
         },
         {
           id: "b", goal: "Build B", scope: "#component-b", acceptanceCriteria: ["B ready"],
           dependencies: [], capabilityIds: [], profile: "component-worker",
-          sharedContractRef: "shared-v2", idPrefix: "b-", storeNamespace: "componentB", parallel: true,
+          sharedContractRef: "shared-v2", parallel: true,
         },
         {
           id: "c", goal: "Integrate C", scope: "#component-c", acceptanceCriteria: ["C ready"],
           dependencies: ["a", "b"], capabilityIds: [], profile: "component-worker",
-          sharedContractRef: "shared-v2", idPrefix: "c-", storeNamespace: "componentC", parallel: true,
+          sharedContractRef: "shared-v2", parallel: true,
         },
       ],
     };
@@ -416,11 +415,11 @@ describe("coding manager and scoped workers", () => {
     const bRequest = requests.find(request => request.trace?.scope === "#component-b")!;
     const aContext = aRequest.messages.map(message => message.content).join("\n");
     const bContext = bRequest.messages.map(message => message.content).join("\n");
-    expect(aContext).toContain("DOM ID PREFIX\na-");
-    expect(aContext).toContain("STORE NAMESPACE\ncomponentA");
+    expect(aContext).toContain("DOM ID PREFIX\ncomponent-a-");
+    expect(aContext).toContain("STORE NAMESPACE\ncomponent_a");
     expect(aContext).toContain("SHARED STORE NAMESPACES\n- sharedApp");
-    expect(bContext).toContain("DOM ID PREFIX\nb-");
-    expect(bContext).toContain("STORE NAMESPACE\ncomponentB");
+    expect(bContext).toContain("DOM ID PREFIX\ncomponent-b-");
+    expect(bContext).toContain("STORE NAMESPACE\ncomponent_b");
     expect(bContext).toContain("SHARED STORE NAMESPACES\n- sharedApp");
     const cRequest = requests.find(request => request.trace?.scope === "#component-c")!;
     const cContext = cRequest.messages.map(message => message.content).join("\n");
