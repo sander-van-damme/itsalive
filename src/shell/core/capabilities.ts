@@ -87,7 +87,7 @@ export function inferPlatformCapabilities(text: string): PlatformCapabilityId[] 
   const ids: PlatformCapabilityId[] = [];
   const add = (id: PlatformCapabilityId, matches: boolean) => { if (matches && !ids.includes(id)) ids.push(id); };
 
-  add("ai", /\b(poem|story|haiku|lyrics?|generate (?:text|copy|content|an? answer)|write (?:text|copy|a |an )|rewrite|summari[sz]e|translate|open[- ]ended|ai[- ]generated|llm|classif|choose|decision|score|probability)\b/.test(lower));
+  add("ai", /\b(poem|story|haiku|lyrics?|generate (?:text|copy|content|an? answer)|write (?:text|copy|a |an )|rewrite|summari[sz]e|translate|open[- ]ended|ai[- ]generated|llm|classif(?:y|ication|ied|ier|ying)?|choose|decision|score|probability)\b/.test(lower));
   add("memory", /\b(memory|history|earlier conversation|previous conversation|remember|past interaction)\b/.test(lower));
   add("screenshot", /\b(screenshot|visual verification|verify (?:the )?layout|rendering)\b/.test(lower));
   add("escalate", /\b(escalat|wake (?:the )?agent|follow[- ]up agent|agent follow[- ]up|adapt the app|change the app itself)\b/.test(lower));
