@@ -9,7 +9,8 @@ function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
-    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), resolveAdaptationPrompt: vi.fn().mockResolvedValue(undefined), resolveAccessibilityPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
+    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), resolveAdaptationPrompt: vi.fn().mockResolvedValue(undefined), resolveAccessibilityPrompt: vi.fn().mockResolvedValue(undefined),
+    togglePortablePreference: vi.fn().mockResolvedValue(undefined), setActiveAppCrossAppIsolation: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     refreshUsage: vi.fn().mockResolvedValue(undefined), renameApp: vi.fn().mockResolvedValue(undefined),
     checkDiagnostics: vi.fn().mockResolvedValue(12), exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
@@ -179,7 +180,7 @@ describe('ShellUI workspace', () => {
     apiKey.value = 'test-key';
     document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
 
-    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'test-key', historyContextTokens: 12_000 }));
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'test-key', historyContextTokens: 12_000, crossAppPreferencesEnabled: false }));
     await vi.waitFor(() => expect(document.querySelector('h1')?.textContent).toBe('What do you want to make?'));
   });
 
@@ -202,11 +203,42 @@ describe('ShellUI workspace', () => {
     document.querySelector<HTMLInputElement>('#historyContextTokens')!.value = '4000';
     document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
 
-    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'sk-or-v1-test', historyContextTokens: 4000 }));
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({ apiKey: 'sk-or-v1-test', historyContextTokens: 4000, crossAppPreferencesEnabled: false }));
     expect(document.querySelector('h1')?.textContent).toBe('Settings');
     expect(document.querySelector('[data-result]')?.textContent).toContain('OpenRouter connection works');
     ui.setModelContextCapacity(1_000_000);
     expect(document.querySelector('[data-model-context]')?.textContent).toContain('1,000,000 tokens');
+  });
+
+  it('keeps cross-app preference transfer opt-in, inspectable, disableable, and isolatable per app', async () => {
+    const callbacks = actions();
+    const ui = new ShellUI(document.querySelector('#app')!, callbacks);
+    ui.setApps([{ ...app, crossAppPreferencesIsolated: false }, other], app.id);
+    ui.setPortablePreferences([
+      { id: 'pref-1', label: 'Keyboard-first interaction', source: 'Learned from Budget Pal', enabled: true },
+    ]);
+    document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
+
+    const optIn = document.querySelector<HTMLInputElement>('#crossAppPreferencesEnabled')!;
+    expect(optIn.checked).toBe(false);
+    expect(document.querySelector('[data-portable-preference-list]')?.textContent).toContain('Keyboard-first interaction');
+    expect(document.querySelector('[data-portable-preference-list]')?.textContent).toContain('Learned from Budget Pal');
+
+    document.querySelector<HTMLButtonElement>('[data-toggle-portable-preference="pref-1"]')!.click();
+    expect(callbacks.togglePortablePreference).toHaveBeenCalledWith('pref-1', false);
+
+    const isolation = document.querySelector<HTMLInputElement>('[data-cross-app-isolation]')!;
+    isolation.checked = true;
+    isolation.dispatchEvent(new Event('change', { bubbles: true }));
+    expect(callbacks.setActiveAppCrossAppIsolation).toHaveBeenCalledWith(true);
+
+    optIn.checked = true;
+    document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
+    await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({
+      apiKey: '',
+      historyContextTokens: 12_000,
+      crossAppPreferencesEnabled: true,
+    }));
   });
 
   it('shows independent LLM and JEV usage meters with context and key usage', () => {
