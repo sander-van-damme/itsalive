@@ -653,6 +653,131 @@ describe("coding manager and scoped workers", () => {
     expect(providers.generate.mock.calls.some(([request]) => request.purpose === "coding manager integration verification")).toBe(false);
   });
 
+
+  it("parses an alive policy from the manager plan", () => {
+    const plan = parseCodingManagerPlan(JSON.stringify({
+      shared: { ref: "shared-v1", design: [], state: [] },
+      alivePolicy: {
+        meaningfulEvents: [{ id: "lap", description: "Lap created", match: { targetIds: ["lap"] } }],
+        repeatableInteractions: [{ id: "controls", description: "Timer controls are normal repeats", match: { targetIds: ["lap"] } }],
+        successSignals: ["Lap appears in history"],
+        safeReactions: [{ id: "hint", label: "Highlight Lap", kind: "highlight" }],
+        invariants: ["Preserve elapsed time"],
+        clarificationSignals: ["Repeated static time clicks"],
+        agentSignals: ["Timer control missing"],
+        retainEvidence: ["Recurring timer-control friction"],
+      },
+      tasks: [{
+        id: "timer",
+        goal: "Build timer",
+        scope: "#timer",
+        acceptanceCriteria: ["works"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "shared-v1",
+        parallel: false,
+      }],
+    }));
+    expect(plan.alivePolicy).toMatchObject({
+      repeatableInteractions: [expect.objectContaining({ id: "controls" })],
+      safeReactions: [expect.objectContaining({ id: "hint", reversible: true })],
+      invariants: ["Preserve elapsed time"],
+    });
+  });
+
+  it("activates a proposed alive policy only after successful integration verification", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [] },
+      alivePolicy: {
+        meaningfulEvents: [{ id: "lap", description: "Lap created", match: { targetIds: ["lap"] } }],
+        repeatableInteractions: [{ id: "controls", description: "Timer controls are normal repeats", match: { targetIds: ["lap"] } }],
+        successSignals: ["Lap appears"],
+        safeReactions: [{ id: "hint", label: "Highlight Lap", kind: "highlight" }],
+        invariants: ["Preserve elapsed time"],
+        clarificationSignals: [],
+        agentSignals: ["Control missing"],
+        retainEvidence: ["Timer friction"],
+      },
+      tasks: [{
+        id: "timer", goal: "Build timer", scope: "#timer", acceptanceCriteria: ["works"],
+        dependencies: [], capabilityIds: [], profile: "component-worker",
+        sharedContractRef: "shared-v1", parallel: false,
+      }],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return { text: '{"ok":true,"summary":"ready","unresolved":[]}', usage: { cost: 0 } };
+        }
+        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
+      }),
+    };
+    const onAlivePolicyProposal = vi.fn(async () => undefined);
+    vi.spyOn(console, "groupCollapsed").mockImplementation(() => undefined);
+    vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set())).run({
+      appId,
+      appPrompt: "A stopwatch",
+      technicalIntent: "Build the timer.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+      onAlivePolicyProposal,
+    });
+
+    expect(result).toMatchObject({ status: "done" });
+    expect(onAlivePolicyProposal).toHaveBeenCalledTimes(1);
+    expect(onAlivePolicyProposal).toHaveBeenCalledWith(expect.objectContaining({
+      invariants: ["Preserve elapsed time"],
+    }));
+  });
+
+  it("does not activate a proposed alive policy when integration verification fails", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [] },
+      alivePolicy: {
+        invariants: ["Preserve user data"],
+      },
+      tasks: [{
+        id: "panel", goal: "Build panel", scope: "#panel", acceptanceCriteria: ["works"],
+        dependencies: [], capabilityIds: [], profile: "component-worker",
+        sharedContractRef: "shared-v1", parallel: false,
+      }],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return { text: '{"ok":false,"summary":"not ready","unresolved":["missing integration"]}', usage: { cost: 0 } };
+        }
+        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
+      }),
+    };
+    const onAlivePolicyProposal = vi.fn(async () => undefined);
+    vi.spyOn(console, "groupCollapsed").mockImplementation(() => undefined);
+    vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set())).run({
+      appId,
+      appPrompt: "A panel",
+      technicalIntent: "Build it.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+      onAlivePolicyProposal,
+    });
+
+    expect(result).toMatchObject({ status: "manager-verification-failed" });
+    expect(onAlivePolicyProposal).not.toHaveBeenCalled();
+  });
+
 function managerTrace() {
   return {
     runId: "manager-run",

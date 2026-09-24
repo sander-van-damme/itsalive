@@ -8,6 +8,7 @@ import {
   type BehaviorEpisodeRecord,
 } from "../src/shell/core/behavior-episodes";
 import { interpretInteractionPattern } from "../src/shell/core/behavior";
+import { activateAlivePolicy, normalizeAlivePolicyProposal } from "../src/shell/core/alive-policy";
 import type { JevDecisionResult } from "../src/shell/core/jev";
 import type { InteractionObservation } from "../src/shared";
 
@@ -56,7 +57,14 @@ describe("behavior episode formation and triage", () => {
 
   it("drops repeatable or visibly successful repeats before semantic triage", () => {
     const benign = observation("Hear chord");
-    const benignPattern = interpretInteractionPattern(benign);
+    const policy = activateAlivePolicy(normalizeAlivePolicyProposal({
+      repeatableInteractions: [{
+        id: "hear-chord",
+        description: "Chord playback is intentionally repeatable",
+        match: { targetHints: ["Hear chord"] },
+      }],
+    })!, undefined, 1);
+    const benignPattern = interpretInteractionPattern(benign, policy);
     expect(formBehaviorEpisode(benign, benignPattern)).toEqual({ action: "drop", reason: "benign-repeat" });
 
     const changed = observation("Check answer", 2);

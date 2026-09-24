@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -460,6 +460,8 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       completionAssessor: (state, signal) => assessCompletionWithJev(app.id, state, signal),
       failureAssessor: (state, signal) => assessFailureWithJev(app.id, state, signal),
       contextRelevanceAssessor: (state, signal) => assessContextRelevanceWithJev(app.id, state, signal),
+      alivePolicy: app.alivePolicy,
+      onAlivePolicyProposal: proposal => activateAlivePolicyForApp(app.id, proposal),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
       workerTurns: result.workerTurns,
@@ -514,6 +516,19 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
     }
   }
   return true;
+}
+
+async function activateAlivePolicyForApp(
+  appId: string,
+  proposal: import('./core').AlivePolicyProposal,
+): Promise<void> {
+  const current = await db.apps.get(appId);
+  if (!current) return;
+  const policy = activateAlivePolicy(proposal, current.alivePolicy);
+  const updated: AppRecord = { ...current, alivePolicy: policy, updatedAt: Date.now() };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'alive-policy', 'Alive policy activated', alivePolicyDiagnostic(policy), appId);
 }
 
 async function startPendingInitialBuild(): Promise<void> {
@@ -712,7 +727,8 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   const epoch = runtimeEpoch;
   const app = appId ? apps.find(item => item.id === appId) : undefined;
   if (!appId || !app) return;
-  const state: JevState = behaviorTracker.observe(appId, message.state, app.behaviorSummary);
+  const state: JevState = behaviorTracker.observe(appId, message.state, app.behaviorSummary, app.alivePolicy);
+  const alivePolicy = selectAlivePolicyContext(app.alivePolicy, message.state, state.pattern);
   const episode = formBehaviorEpisode(message.state, state.pattern);
   const controller = new AbortController();
   jevControllers.add(controller);
@@ -723,7 +739,11 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     jevSessionStats.requests++;
     jevSessionStats.coalescedEvents += state.pattern?.coalescedCount ?? 0;
     const result = await new OpenRouterJevAdapter().evaluate({
-      state: episode.action === 'triage' ? { ...state, behaviorEpisode: episode.candidate } : state,
+      state: {
+        ...state,
+        ...(alivePolicy ? { alivePolicy } : {}),
+        ...(episode.action === 'triage' ? { behaviorEpisode: episode.candidate } : {}),
+      },
       ...(episode.action === 'triage'
         ? { questions: { ...GENERIC_JEV_QUESTION, ...JEV_BEHAVIOR_EPISODE_QUESTIONS } }
         : {}),
@@ -762,6 +782,13 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
       pattern: state.pattern,
       durationMs: Math.round(performance.now() - startedAt),
       snapshotCharacters: state.document.length,
+      alivePolicy: alivePolicy ? {
+        revision: alivePolicy.revision,
+        meaningfulMatches: alivePolicy.matchedMeaningfulEvents.length,
+        repeatableMatches: alivePolicy.matchedRepeatableInteractions.length,
+        safeReactions: alivePolicy.safeReactions.length,
+        invariants: alivePolicy.invariants.length,
+      } : undefined,
       behaviorEpisode: episode.action === 'drop'
         ? { localAction: 'drop', reason: episode.reason }
         : {

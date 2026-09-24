@@ -1,4 +1,5 @@
 import type { AppScriptSnapshot } from "../../shared";
+import type { AlivePolicy } from "./alive-policy";
 
 export type HistoryRole = "user" | "assistant" | "agent" | "observation" | "system";
 
@@ -10,6 +11,7 @@ export interface AppRecord {
   updatedAt: number;
   behaviorSummary?: string;
   behaviorSummaryUpdatedAt?: number;
+  alivePolicy?: AlivePolicy;
 }
 
 export interface AppDocumentRecord {

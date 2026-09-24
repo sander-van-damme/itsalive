@@ -3,6 +3,7 @@ import {
   BehaviorTracker,
   interpretInteractionPattern,
 } from "../src/shell/core/behavior";
+import { activateAlivePolicy, normalizeAlivePolicyProposal } from "../src/shell/core/alive-policy";
 import type { InteractionObservation } from "../src/shared";
 
 const appId = "550e8400-e29b-41d4-a716-446655440000";
@@ -50,7 +51,7 @@ describe("shell behavioral session policy", () => {
     });
   });
 
-  it("treats explicit/media-style repeatable controls as benign", () => {
+  it("uses the app policy rather than hard-coded app words for repeatable controls", () => {
     const state = observation(5, {
       interaction: {
         ...observation(5).interaction,
@@ -66,6 +67,19 @@ describe("shell behavioral session policy", () => {
       },
     });
     expect(interpretInteractionPattern(state)).toMatchObject({
+      likelyBenign: false,
+      frustrationSignal: true,
+    });
+
+    const proposal = normalizeAlivePolicyProposal({
+      repeatableInteractions: [{
+        id: "hear-chord",
+        description: "Repeated chord playback is normal practice",
+        match: { targetHints: ["Hear chord"] },
+      }],
+    })!;
+    const policy = activateAlivePolicy(proposal, undefined, 1);
+    expect(interpretInteractionPattern(state, policy)).toMatchObject({
       likelyBenign: true,
       frustrationSignal: false,
     });
