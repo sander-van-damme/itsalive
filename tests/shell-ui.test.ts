@@ -233,9 +233,10 @@ describe('ShellUI workspace', () => {
     expect(callbacks.setActiveAppCrossAppIsolation).toHaveBeenCalledWith(true);
 
     optIn.checked = true;
+    document.querySelector<HTMLInputElement>('#apiKey')!.value = 'test-key';
     document.querySelector<HTMLFormElement>('[data-settings-form]')!.requestSubmit();
     await vi.waitFor(() => expect(callbacks.saveSettings).toHaveBeenCalledWith({
-      apiKey: '',
+      apiKey: 'test-key',
       historyContextTokens: 12_000,
       crossAppPreferencesEnabled: true,
     }));
