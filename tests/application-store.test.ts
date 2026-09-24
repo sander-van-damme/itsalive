@@ -5,11 +5,13 @@ describe("application store", () => {
   it("restores JSON state and snapshots nested mutations", () => {
     const controller = createApplicationStore();
     controller.restore('{"counter":{"count":4},"tasks":[{"done":false}]}');
-    const store = controller.store as Record<string, any>;
+    const store = controller.store;
+    const counter = store.counter as { count: number };
+    const tasks = store.tasks as Array<{ done: boolean }>;
 
-    store.counter.count++;
-    store.tasks.push({ done: false });
-    store.tasks[0].done = true;
+    counter.count++;
+    tasks.push({ done: false });
+    tasks[0]!.done = true;
     delete store.counter;
 
     expect(JSON.parse(controller.snapshot())).toEqual({
@@ -22,19 +24,21 @@ describe("application store", () => {
     controller.restore('{"profile":{"name":"Ada"},"items":[]}');
     const dirty = vi.fn();
     controller.setOnDirty(dirty);
-    const store = controller.store as Record<string, any>;
+    const store = controller.store;
+    const profile = store.profile as { name?: string };
+    const items = store.items as string[];
 
-    store.profile.name = "Grace";
-    store.items.push("one");
-    store.items[0] = "two";
-    delete store.profile.name;
+    profile.name = "Grace";
+    items.push("one");
+    items[0] = "two";
+    delete profile.name;
 
     expect(dirty).toHaveBeenCalled();
   });
 
   it("schedules a save when state changed before the dirty callback was installed", () => {
     const controller = createApplicationStore();
-    (controller.store as Record<string, any>).count = 1;
+    controller.store.count = 1;
     const dirty = vi.fn();
 
     controller.setOnDirty(dirty);
@@ -44,7 +48,7 @@ describe("application store", () => {
 
   it("rejects values that cannot survive JSON-style persistence", () => {
     const controller = createApplicationStore();
-    const store = controller.store as Record<string, any>;
+    const store = controller.store;
 
     expect(() => { store.fn = () => undefined; }).toThrow(/JSON-like/);
     expect(() => { store.date = new Date(); }).toThrow(/arrays and plain objects/);
