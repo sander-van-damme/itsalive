@@ -351,6 +351,7 @@ async function handleUserFacingInput(
   const userText = content.trim();
   if (!app || !userText || interpreting) return;
   const appId = app.id;
+  if (source === 'chat' && accessibilitySuggestions.delete(appId)) syncAccessibilityPrompt();
   const intentController = new AbortController();
   activeIntent = intentController;
   interpreting = true;
@@ -1199,6 +1200,15 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   try {
     if (deterministicAccessibility) {
       accessibilityOffered = await maybeOfferAccessibilitySuggestion(appId, deterministicAccessibility);
+      await log('info', 'accessibility', 'Deterministic accessibility friction handled without JEV', {
+        key: deterministicAccessibility.key,
+        kind: deterministicAccessibility.kind,
+        offered: accessibilityOffered,
+        evidence: deterministicAccessibility.evidence,
+      }, appId);
+      if (!current()) return;
+      respond(message, { type: 'jev.response', probability: 0, escalated: false });
+      return;
     }
     const key = credential();
     if (!key) throw new Error('OpenRouter is not configured');
