@@ -558,7 +558,7 @@ async function handleUserFacingInput(
         hypothesis: adaptationContext.hypothesis,
         technicalGoal: decision.technicalIntent.goal,
         intendedOutcome: decision.technicalIntent.acceptanceCriteria.join(' '),
-        beforeDocument: { html: before.html, scripts: before.scripts },
+        beforeDocument: { html: before.html, scripts: before.scripts, store: before.store },
       });
       const updated: AppRecord = { ...current, activeAdaptation: active, updatedAt: Date.now() };
       await db.apps.put(updated);
