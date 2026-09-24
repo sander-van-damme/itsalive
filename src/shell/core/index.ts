@@ -1,3 +1,4 @@
+export * from "./adaptation";
 export * from "./agent-runner";
 export * from "./alive-policy";
 export * from "./agent-context";

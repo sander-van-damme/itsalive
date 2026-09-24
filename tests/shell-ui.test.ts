@@ -9,7 +9,7 @@ function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
-    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
+    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), resolveAdaptationPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     refreshUsage: vi.fn().mockResolvedValue(undefined), renameApp: vi.fn().mockResolvedValue(undefined),
     checkDiagnostics: vi.fn().mockResolvedValue(12), exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
@@ -26,6 +26,29 @@ describe('ShellUI workspace', () => {
     if (selected) ui.mountFrame(frame);
     return { ui, frame, callbacks };
   }
+
+  it('shows deterministic Keep and Undo actions for a reversible adaptation', async () => {
+    const { ui, callbacks } = mounted();
+    ui.setAdaptationPrompt({
+      id: 'adapt-1',
+      content: 'This change may not have helped.',
+      keepLabel: 'Keep change',
+      undoLabel: 'Undo change',
+    });
+
+    expect(document.querySelector('[data-adaptation-prompt]')?.textContent).toContain('This change may not have helped');
+    document.querySelector<HTMLButtonElement>('[data-adaptation-undo]')!.click();
+    await vi.waitFor(() => expect(callbacks.resolveAdaptationPrompt).toHaveBeenCalledWith('adapt-1', 'undo'));
+
+    ui.setAdaptationPrompt({
+      id: 'adapt-2',
+      content: 'This change appears to be helping.',
+      keepLabel: 'Keep change',
+      undoLabel: 'Undo change',
+    });
+    document.querySelector<HTMLButtonElement>('[data-adaptation-keep]')!.click();
+    await vi.waitFor(() => expect(callbacks.resolveAdaptationPrompt).toHaveBeenCalledWith('adapt-2', 'keep'));
+  });
 
   it('opens a selected app directly in chat without desktop Apps/Chat tabs', () => {
     mounted();

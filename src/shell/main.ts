@@ -1,6 +1,6 @@
 import './styles.css';
-import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -121,6 +121,7 @@ const ui = new ShellUI(root, {
   },
   resumePausedRun: async id => { await resumePausedRun(id); },
   resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
+  resolveAdaptationPrompt: async (id, action) => { await resolveAdaptationPrompt(id, action); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -206,6 +207,7 @@ async function refreshApps(select?: string): Promise<void> {
     ui.setApps(apps as AppSummary[], activeId);
     syncInteractionPrompt();
     syncResumePrompt();
+    syncAdaptationPrompt();
     await refreshMessages();
   }
 }
@@ -230,6 +232,7 @@ async function selectApp(id: string): Promise<void> {
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
+  syncAdaptationPrompt();
   const runtimeSource = await loadRuntimeSource();
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
@@ -327,7 +330,17 @@ async function refreshOpenRouterUsage(): Promise<void> {
   }
 }
 
-async function handleUserFacingInput(content: string, source: UserInputSource, telemetrySummary?: string): Promise<void> {
+interface InteractionAdaptationContext {
+  interactionKey: string;
+  hypothesis: string;
+}
+
+async function handleUserFacingInput(
+  content: string,
+  source: UserInputSource,
+  telemetrySummary?: string,
+  adaptationContext?: InteractionAdaptationContext,
+): Promise<void> {
   const app = currentApp();
   const userText = content.trim();
   if (!app || !userText || interpreting) return;
@@ -382,6 +395,83 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
       return;
     }
 
+    const latestApp = await db.apps.get(appId) ?? app;
+    if (latestApp.activeAdaptation) {
+      if (source === 'interaction') {
+        await appendHistory(db, {
+          appId,
+          role: 'assistant',
+          kind: 'chat',
+          content: 'There is already a reversible adaptation waiting for a Keep or Undo decision. I won’t stack another automatic adaptation on top of it.',
+        });
+        syncAdaptationPrompt();
+        await refreshMessages();
+        return;
+      }
+      await completeAdaptationForApp(
+        appId,
+        latestApp.activeAdaptation.id,
+        latestApp.activeAdaptation.status === 'applied' ? 'neutral' : 'failed',
+        'superseded-by-explicit-user-change',
+      );
+    }
+
+    if (source === 'interaction' && adaptationContext) {
+      await flushActiveDocument();
+      const before = await db.documents.get(appId);
+      const current = await db.apps.get(appId);
+      if (!before || !current) throw new Error('Could not capture a reversible pre-adaptation snapshot');
+
+      const fingerprint = adaptationFingerprint(adaptationContext.interactionKey, decision.technicalIntent.goal);
+      if (shouldSuppressAdaptation(current.adaptationHistory, fingerprint)) {
+        await log('info', 'adaptation', 'Repeated failed adaptation suppressed', {
+          fingerprint,
+          goal: decision.technicalIntent.goal.slice(0, 500),
+        }, appId);
+        await appendHistory(db, {
+          appId,
+          role: 'assistant',
+          kind: 'chat',
+          content: 'A very similar adaptation has already failed more than once, so I won’t keep reshaping the app from the same signal. Tell me the exact change you want and I can treat it as a normal explicit edit.',
+        });
+        await refreshMessages();
+        return;
+      }
+
+      const active = createActiveAdaptation({
+        id: crypto.randomUUID(),
+        interactionKey: adaptationContext.interactionKey,
+        hypothesis: adaptationContext.hypothesis,
+        technicalGoal: decision.technicalIntent.goal,
+        intendedOutcome: decision.technicalIntent.acceptanceCriteria.join(' '),
+        beforeDocument: { html: before.html, scripts: before.scripts },
+      });
+      const updated: AppRecord = { ...current, activeAdaptation: active, updatedAt: Date.now() };
+      await db.apps.put(updated);
+      apps = apps.map(item => item.id === appId ? updated : item);
+      await log('info', 'adaptation', 'Interaction adaptation hypothesis created', {
+        adaptationId: active.id,
+        fingerprint: active.fingerprint,
+        hypothesis: active.hypothesis,
+        intendedOutcome: active.intendedOutcome,
+      }, appId);
+
+      ui.setAgentProgress('Planning your change…');
+      const started = await runAgent(technicalIntentBlock(decision.technicalIntent), false, async result => {
+        if (result.status !== 'done') {
+          await completeAdaptationForApp(appId, active.id, 'failed', 'coding-run-' + result.status);
+          return;
+        }
+        await flushActiveDocument();
+        await markAdaptationAppliedForApp(appId, active.id);
+      });
+      const afterRun = await db.apps.get(appId);
+      if (!started || afterRun?.activeAdaptation?.id === active.id && afterRun.activeAdaptation.status === 'pending') {
+        await completeAdaptationForApp(appId, active.id, 'failed', started ? 'coding-run-ended-without-completion' : 'coding-run-not-started');
+      }
+      return;
+    }
+
     ui.setAgentProgress('Planning your change…');
     await runAgent(technicalIntentBlock(decision.technicalIntent));
   } catch (error) {
@@ -418,7 +508,11 @@ function runtimeSignalIntent(goal: string, telemetrySummary: string): TechnicalI
   };
 }
 
-async function runAgent(trigger: string, isInitialBuild = false): Promise<boolean> {
+async function runAgent(
+  trigger: string,
+  isInitialBuild = false,
+  onResult?: (result: CodingOrchestratorResult) => void | Promise<void>,
+): Promise<boolean> {
   const app = currentApp();
   if (!app || running) return false;
   let executor: ReturnType<RuntimeSession['requireReady']>;
@@ -471,6 +565,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       handoffs: result.handoffs,
       timeline: result.timeline,
     }, app.id);
+    await onResult?.(result);
     if (result.message) {
       await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: result.message });
     }
@@ -499,6 +594,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
         ui.setBusy(false);
         ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
         syncResumePrompt();
+        syncAdaptationPrompt();
         await refreshMessages();
       }
       void startPendingInitialBuild();
@@ -529,6 +625,117 @@ async function activateAlivePolicyForApp(
   await db.apps.put(updated);
   apps = apps.map(item => item.id === appId ? updated : item);
   await log('info', 'alive-policy', 'Alive policy activated', alivePolicyDiagnostic(policy), appId);
+}
+
+async function markAdaptationAppliedForApp(appId: string, adaptationId: string): Promise<void> {
+  const current = await db.apps.get(appId);
+  if (!current?.activeAdaptation || current.activeAdaptation.id !== adaptationId) return;
+  const activeAdaptation = markAdaptationApplied(current.activeAdaptation);
+  const updated: AppRecord = { ...current, activeAdaptation, updatedAt: Date.now() };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'adaptation', 'Interaction adaptation applied', {
+    adaptationId,
+    fingerprint: activeAdaptation.fingerprint,
+    hypothesis: activeAdaptation.hypothesis,
+    intendedOutcome: activeAdaptation.intendedOutcome,
+  }, appId);
+  if (activeId === appId) syncAdaptationPrompt();
+}
+
+async function completeAdaptationForApp(
+  appId: string,
+  adaptationId: string,
+  outcome: import('./core').AdaptationOutcome,
+  reason: string,
+): Promise<void> {
+  const current = await db.apps.get(appId);
+  const active = current?.activeAdaptation;
+  if (!current || !active || active.id !== adaptationId) return;
+  const entry = finalizeAdaptation(active, outcome, reason);
+  const updated: AppRecord = {
+    ...current,
+    activeAdaptation: undefined,
+    adaptationHistory: appendAdaptationHistory(current.adaptationHistory, entry),
+    updatedAt: Date.now(),
+  };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'adaptation', 'Interaction adaptation finalized', {
+    adaptationId,
+    fingerprint: entry.fingerprint,
+    outcome: entry.outcome,
+    reason: entry.reason,
+    assessments: entry.assessments,
+    hypothesis: entry.hypothesis,
+    intendedOutcome: entry.intendedOutcome,
+  }, appId);
+  if (activeId === appId) syncAdaptationPrompt();
+}
+
+async function recordAdaptationOutcomeForApp(
+  appId: string,
+  adaptationId: string,
+  assessment: import('./core').AdaptationAssessment,
+): Promise<void> {
+  const current = await db.apps.get(appId);
+  const active = current?.activeAdaptation;
+  if (!current || !active || active.id !== adaptationId || active.status !== 'applied') return;
+  const next = recordAdaptationAssessment(active, assessment);
+  const updated: AppRecord = { ...current, activeAdaptation: next, updatedAt: Date.now() };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'adaptation', 'Adaptation outcome assessed', {
+    adaptationId,
+    fingerprint: next.fingerprint,
+    assessment: assessment.action,
+    reason: assessment.reason,
+    helpedProbability: assessment.helpedProbability,
+    classificationConfidence: assessment.classificationConfidence,
+    assessmentCount: next.assessmentCount,
+  }, appId);
+  if (activeId === appId) syncAdaptationPrompt();
+}
+
+function syncAdaptationPrompt(): void {
+  const active = currentApp()?.activeAdaptation;
+  let prompt: AdaptationPrompt | undefined;
+  if (active?.status === 'applied') {
+    const assessment = active.lastAssessment?.action;
+    const content = assessment === 'harmful' || assessment === 'rejected'
+      ? 'This change may not have helped and could be causing new friction. Keep it only if you prefer it, or undo it.'
+      : assessment === 'successful'
+        ? 'This change appears to be helping. Keep it, or undo it while the previous version is still available.'
+        : active.assessmentCount >= MAX_ADAPTATION_ASSESSMENTS
+          ? 'I could not verify that this change helped. Keep it or undo it before I make another proactive adaptation.'
+          : 'I changed the app based on that interaction. Keep this change, or undo it if it was not what you wanted.';
+    prompt = {
+      id: active.id,
+      content,
+      keepLabel: 'Keep change',
+      undoLabel: 'Undo change',
+    };
+  }
+  ui.setAdaptationPrompt(prompt);
+}
+
+async function reloadSavedDocumentWithoutFlush(appId: string): Promise<void> {
+  if (activeId !== appId || runtime.appId !== appId || runtime.state === 'disposed') return;
+  behaviorTracker.clear(appId);
+  runtimeEpoch++;
+  for (const controller of jevControllers) controller.abort(createAgentAbort('runtime-disposed'));
+  jevControllers.clear();
+  reactionBatcher.destroy();
+  reactionConfirmationGates.get(appId)?.clear();
+  syncInteractionPrompt();
+  ui.setConnectionStatus('working');
+  if (connectionTimer) clearTimeout(connectionTimer);
+  connectionTimer = window.setTimeout(() => {
+    runtime.setState('error');
+    ui.setBusy(false);
+    ui.setConnectionStatus('error');
+  }, 10_000);
+  runtime.reload();
 }
 
 async function startPendingInitialBuild(): Promise<void> {
@@ -730,6 +937,10 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   const state: JevState = behaviorTracker.observe(appId, message.state, app.behaviorSummary, app.alivePolicy);
   const alivePolicy = selectAlivePolicyContext(app.alivePolicy, message.state, state.pattern);
   const episode = formBehaviorEpisode(message.state, state.pattern);
+  const activeAdaptation = app.activeAdaptation?.status === 'applied' ? app.activeAdaptation : undefined;
+  const adaptationContext = activeAdaptation
+    ? adaptationOutcomeContext(activeAdaptation, state.pattern, app.alivePolicy?.successSignals)
+    : undefined;
   const controller = new AbortController();
   jevControllers.add(controller);
   const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
@@ -743,9 +954,16 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         ...state,
         ...(alivePolicy ? { alivePolicy } : {}),
         ...(episode.action === 'triage' ? { behaviorEpisode: episode.candidate } : {}),
+        ...(adaptationContext ? { adaptationOutcome: adaptationContext } : {}),
       },
-      ...(episode.action === 'triage'
-        ? { questions: { ...GENERIC_JEV_QUESTION, ...JEV_BEHAVIOR_EPISODE_QUESTIONS } }
+      ...((episode.action === 'triage' || adaptationContext)
+        ? {
+            questions: {
+              ...GENERIC_JEV_QUESTION,
+              ...(episode.action === 'triage' ? JEV_BEHAVIOR_EPISODE_QUESTIONS : {}),
+              ...(adaptationContext ? JEV_ADAPTATION_OUTCOME_QUESTIONS : {}),
+            },
+          }
         : {}),
       signal: controller.signal,
     }, key);
@@ -763,9 +981,15 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const episodeDecision = episode.action === 'triage'
       ? decideBehaviorEpisodeRetention(result)
       : undefined;
+    const adaptationDecision = activeAdaptation
+      ? decideAdaptationOutcome(result)
+      : undefined;
     if (decision.escalated) jevSessionStats.escalations++;
     if (episode.action === 'triage' && episodeDecision?.action === 'retain') {
       await retainBehaviorEpisode(appId, episode.candidate, episodeDecision);
+    }
+    if (activeAdaptation && adaptationDecision) {
+      await recordAdaptationOutcomeForApp(appId, activeAdaptation.id, adaptationDecision);
     }
     await log('info', 'jev', 'Interaction decision', {
       ...compactJevDecisionTelemetry({
@@ -800,11 +1024,30 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
             retentionProbability: episodeDecision?.retentionProbability,
             classificationConfidence: episodeDecision?.classificationConfidence,
           },
+      adaptationOutcome: activeAdaptation && adaptationDecision ? {
+        adaptationId: activeAdaptation.id,
+        questionSetVersion: JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION,
+        assessment: adaptationDecision.action,
+        reason: adaptationDecision.reason,
+        helpedProbability: adaptationDecision.helpedProbability,
+        classificationConfidence: adaptationDecision.classificationConfidence,
+        assessmentCount: activeAdaptation.assessmentCount + 1,
+      } : undefined,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
     respond(message, { type: 'jev.response', probability: result.probability, escalated: decision.escalated });
-    if (decision.escalated) reactionBatcher.add(state);
+    if (decision.escalated) {
+      if (activeAdaptation) {
+        await log('info', 'adaptation', 'Observer escalation suppressed while adaptation outcome is unresolved', {
+          adaptationId: activeAdaptation.id,
+          fingerprint: activeAdaptation.fingerprint,
+          assessment: adaptationDecision?.action,
+        }, appId);
+      } else {
+        reactionBatcher.add(state);
+      }
+    }
   } catch (error) {
     if (!current()) return;
     await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500), session: { ...jevSessionStats } }, appId);
@@ -892,6 +1135,46 @@ async function resumePausedRun(id: string): Promise<void> {
   }
 }
 
+async function resolveAdaptationPrompt(id: string, action: 'keep' | 'undo'): Promise<void> {
+  const app = currentApp();
+  const active = app?.activeAdaptation;
+  if (!app || !active || active.id !== id) {
+    syncAdaptationPrompt();
+    return;
+  }
+
+  await waitForAgentIdle();
+  if (activeId !== app.id) return;
+
+  if (action === 'keep') {
+    await completeAdaptationForApp(app.id, active.id, 'successful', 'explicit-user-keep');
+    await appendHistory(db, {
+      appId: app.id,
+      role: 'assistant',
+      kind: 'chat',
+      content: 'Kept that adaptation.',
+    });
+    await refreshMessages();
+    return;
+  }
+
+  const before = structuredClone(active.beforeDocument);
+  await completeAdaptationForApp(app.id, active.id, 'reverted', 'explicit-user-undo');
+  await db.documents.put({ appId: app.id, ...before, updatedAt: Date.now() });
+  await log('info', 'adaptation', 'Adaptation reverted to pre-change snapshot', {
+    adaptationId: active.id,
+    fingerprint: active.fingerprint,
+  }, app.id);
+  await appendHistory(db, {
+    appId: app.id,
+    role: 'assistant',
+    kind: 'chat',
+    content: 'Undone — I restored the version from before that adaptation.',
+  });
+  await reloadSavedDocumentWithoutFlush(app.id);
+  await refreshMessages();
+}
+
 function syncInteractionPrompt(): void {
   const appId = activeId;
   const confirmation = appId ? reactionConfirmationGates.get(appId)?.current() : undefined;
@@ -951,6 +1234,10 @@ async function resolveInteractionPrompt(id: string, clarification?: string): Pro
     resolution.clarification,
     'interaction',
     formatReactionTelemetry(resolution.confirmation.batch),
+    {
+      interactionKey: resolution.confirmation.key,
+      hypothesis: resolution.clarification,
+    },
   );
 }
 
