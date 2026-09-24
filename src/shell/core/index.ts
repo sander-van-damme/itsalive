@@ -24,6 +24,7 @@ export * from "./initial-build";
 export * from "./jev";
 export * from "./jev-completion";
 export * from "./jev-failure";
+export * from "./jev-routing";
 export * from "./jev-eval";
 export * from "./llm-trace";
 export * from "./model-capabilities";
