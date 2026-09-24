@@ -4,14 +4,23 @@ import type { HistoryEntry, ModelConfig, ModelMessage } from "./types";
 export type TokenCounter = (text: string) => number;
 export const conservativeTokenEstimate: TokenCounter = (text) => Math.ceil(new TextEncoder().encode(text).length / 3);
 
+export interface ContextEvidenceInput {
+  id: string;
+  content: string;
+}
+
 export interface ContextInput {
   model: ModelConfig;
   appPrompt: string;
+  /** Legacy field kept for callers; behavioral evidence is no longer mandatory context. */
   behaviorSummary?: string;
   trigger: string;
   observation?: string;
   environmentObservation?: string;
   history: HistoryEntry[];
+  behaviorEvidence?: ContextEvidenceInput[];
+  availableHistoryCount?: number;
+  availableBehaviorEvidenceCount?: number;
   /** Benchmark/profile override. Production callers default to SYSTEM_PROMPT. */
   systemPrompt?: string;
   countTokens?: TokenCounter;
@@ -22,6 +31,7 @@ export interface ContextTokenBreakdown {
   mandatory: number;
   observation: number;
   environmentObservation: number;
+  evidence: number;
   history: number;
   total: number;
 }
@@ -32,6 +42,9 @@ export interface BuiltContext {
   estimatedInputTokens: number;
   includedHistoryIds: number[];
   omittedHistoryCount: number;
+  includedEvidenceIds: string[];
+  omittedEvidenceCount: number;
+  evidenceTokens: number;
   historyTokens: number;
   historyTokenBudget: number;
   tokenBreakdown: ContextTokenBreakdown;
@@ -46,7 +59,6 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   const budget = input.model.maxContextTokens - input.model.outputHeadroomTokens - headroom;
   const mandatory = [
     section("APP PROMPT", input.appPrompt),
-    ...(input.behaviorSummary?.trim() ? [section("CURATED BEHAVIORAL HISTORY", input.behaviorSummary)] : []),
     section("CURRENT TECHNICAL INTENT", input.trigger),
   ].join("\n\n");
   const systemTokens = count(system);
@@ -84,11 +96,27 @@ export function buildModelContext(input: ContextInput): BuiltContext {
     }
   }
 
-  const candidates = historyCandidates(input.history, input.observation);
-  const historyBudget = Math.min(
+  const discretionaryBudget = Math.min(
     Math.max(0, budget - used),
     Math.max(0, input.model.historyContextTokens),
   );
+  let discretionaryUsed = 0;
+  let evidenceTokens = 0;
+  const includedEvidenceIds: string[] = [];
+  const evidenceMessages: ModelMessage[] = [];
+  for (const evidence of input.behaviorEvidence ?? []) {
+    const content = section("SELECTED BEHAVIORAL EVIDENCE", evidence.content);
+    const cost = count(content) + 4;
+    if (discretionaryUsed + cost > discretionaryBudget || used + cost > budget) continue;
+    evidenceMessages.push({ role: "user", content });
+    includedEvidenceIds.push(evidence.id);
+    evidenceTokens += cost;
+    discretionaryUsed += cost;
+    used += cost;
+  }
+
+  const candidates = historyCandidates(input.history, input.observation);
+  const historyBudget = Math.max(0, discretionaryBudget - discretionaryUsed);
   let historyUsed = 0;
   const selected: HistoryEntry[] = [];
   for (const entry of [...candidates].sort((a, b) => b.timestamp - a.timestamp)) {
@@ -100,17 +128,26 @@ export function buildModelContext(input: ContextInput): BuiltContext {
   }
 
   selected.reverse();
-  messages.splice(0, 0, ...selected.map((entry): ModelMessage => ({
-    role: entry.role === "assistant" || entry.role === "agent" ? "assistant" : "user",
-    content: entry.content,
-  })));
+  messages.splice(0, 0,
+    ...selected.map((entry): ModelMessage => ({
+      role: entry.role === "assistant" || entry.role === "agent" ? "assistant" : "user",
+      content: entry.content,
+    })),
+    ...evidenceMessages,
+  );
+
+  const availableHistoryCount = Math.max(input.history.length, input.availableHistoryCount ?? 0);
+  const availableEvidenceCount = Math.max(input.behaviorEvidence?.length ?? 0, input.availableBehaviorEvidenceCount ?? 0);
 
   return {
     system,
     messages,
     estimatedInputTokens: used,
     includedHistoryIds: selected.flatMap(x => x.id == null ? [] : [x.id]),
-    omittedHistoryCount: input.history.length - selected.length,
+    omittedHistoryCount: Math.max(0, availableHistoryCount - selected.length),
+    includedEvidenceIds,
+    omittedEvidenceCount: Math.max(0, availableEvidenceCount - includedEvidenceIds.length),
+    evidenceTokens,
     historyTokens: historyUsed,
     historyTokenBudget: historyBudget,
     tokenBreakdown: {
@@ -118,6 +155,7 @@ export function buildModelContext(input: ContextInput): BuiltContext {
       mandatory: mandatoryTokens,
       observation: observationTokens,
       environmentObservation: environmentObservationTokens,
+      evidence: evidenceTokens,
       history: historyUsed,
       total: used,
     },
