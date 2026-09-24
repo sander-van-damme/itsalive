@@ -3,13 +3,12 @@ import { installLogging } from "./logs";
 import { installAutosave, restoreAppDocument, serializeAppDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
-import type { ApplicationRuntimeApi, ItsaliveRuntimeApi } from "./globals";
+import type { AgentRuntimeApi, ApplicationRuntimeApi } from "./globals";
 import { createApplicationStore } from "./application-store";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
 import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
-import { COMPONENTS } from "./components";
 import { installAgentDurabilityAudit } from "./durability";
 
 const DONE = Symbol("agent-done");
@@ -48,7 +47,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const bridge = new AppBridge(rootOrigin, appId, options.port);
   const logs = installLogging(bridge);
   const applicationStore = createApplicationStore();
-  const cronCallbacks = new Map<string, () => unknown>();
   const screenshot = async (input: { scale?: number } = {}) => {
     try {
       return options.screenshot ? await options.screenshot(document.documentElement) : await captureScreenshot(input);
@@ -60,50 +58,38 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
 
   const done = (message?: string) => ({ [DONE]: true, message });
-  const cron = (id: string, schedule: string, callback: () => unknown) => {
-    if (!/^[a-zA-Z0-9][a-zA-Z0-9_-]{0,127}$/.test(id)) throw new Error("Invalid cron callback ID");
-    if (typeof callback !== "function" || !schedule.trim()) throw new Error("cron requires a schedule and callback");
-    cronCallbacks.set(id, callback);
-    bridge.post({ type: "cron.register", registration: { callbackId: id, schedule } });
-    return { id, schedule };
+  const generate = async <T = unknown>(prompt: unknown): Promise<T> => {
+    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({
+      type: "llm.request",
+      prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt),
+    }, 120_000);
+    if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
+    if (response.error) throw new Error(response.error.message);
+    return response.result as T;
   };
-  const llm = Object.freeze({ ask: async <T = unknown>(prompt: unknown) => {
-      const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "llm.request", prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt) }, 120_000);
-      if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
-      if (response.error) throw new Error(response.error.message);
-      return response.result as T;
-    } });
-  const agent = Object.freeze({ wake: async (prompt: string) => { bridge.post({ type: "wake", reason: prompt }); } });
-  const history = Object.freeze({ search: async (query: { query: string; limit?: number }) => {
-    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "history.request", query: query.query, limit: query.limit });
-    if (response.type !== "history.response") throw new Error(`Unexpected history response: ${response.type}`);
+  const escalate = (reason: string): void => {
+    if (!reason.trim()) throw new Error("application.escalate requires a reason");
+    bridge.post({ type: "wake", reason });
+  };
+  const memory = async (): Promise<string> => {
+    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "memory.request" }, 30_000);
+    if (response.type !== "memory.response") throw new Error(`Unexpected memory response: ${response.type}`);
     if (response.error) throw new Error(response.error.message);
-    return response.results ?? [];
-  } });
-  const logApi = Object.freeze({ get: async (query: { level?: "debug" | "info" | "warn" | "error"; limit?: number } = {}) => {
-    if (query.level !== undefined && !["debug", "info", "warn", "error"].includes(query.level)) throw new Error("Invalid log level");
-    if (query.limit !== undefined && (!Number.isSafeInteger(query.limit) || query.limit < 1 || query.limit > 200)) {
-      throw new Error("Log limit must be an integer from 1 to 200");
-    }
-    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "logs.request", ...query });
-    if (response.type !== "logs.response") throw new Error(`Unexpected logs response: ${response.type}`);
-    if (response.error) throw new Error(response.error.message);
-    return response.results ?? [];
-  } });
+    return response.memory ?? "";
+  };
 
-  const runtimeApi: ItsaliveRuntimeApi = Object.freeze({
-    apiVersion: 2,
-    llm,
-    history,
-    agent,
-    dom: Object.freeze({ screenshot }),
-    logs: logApi,
-    components: COMPONENTS,
-    cron,
+  const applicationApi: ApplicationRuntimeApi = Object.freeze({
+    store: applicationStore.store,
+    generate,
+    escalate,
+  });
+  const agentApi: AgentRuntimeApi = Object.freeze({
+    memory,
+    screenshot,
     done,
   });
-  installApplicationApi(window, Object.freeze({ store: applicationStore.store }));
-  installRuntimeApi(window, runtimeApi);
+  installApplicationApi(window, applicationApi);
+  installAgentApi(window, agentApi);
   const durability = installAgentDurabilityAudit();
 
   const run = async (code: string) => {
@@ -141,15 +127,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
         else bridge.post({ type: "result", result: bounded(result, options.maxResultBytes ?? 256_000) }, message.requestId);
       } catch (error) {
         logs.add("error", ["Agent execution failed", error], "agent", error instanceof Error ? error.stack : undefined);
-        bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
-      }
-    } else if (message.type === "cron.fire") {
-      const id = message.callbackId;
-      const callback = id && cronCallbacks.get(id);
-      if (!callback) return bridge.post({ type: "execution.error", error: serializeError(new Error(`Unknown cron callback: ${id}`)) }, message.requestId);
-      try { bridge.post({ type: "result", result: bounded(await callback(), options.maxResultBytes ?? 256_000) }, message.requestId); }
-      catch (error) {
-        logs.add("error", [`Cron ${id} failed`, error], "cron", error instanceof Error ? error.stack : undefined);
         bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
       }
     }
@@ -196,15 +173,15 @@ export function installApplicationApi(target: Window, runtimeApi: ApplicationRun
   });
 }
 
-export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {
-  if (Object.prototype.hasOwnProperty.call(target, "itsalive")) {
-    throw new Error("Cannot install itsalive runtime API because window.itsalive already exists.");
+
+export function installAgentApi(target: Window, runtimeApi: AgentRuntimeApi): void {
+  if (Object.prototype.hasOwnProperty.call(target, "agent")) {
+    throw new Error("Cannot install agent runtime API because window.agent already exists.");
   }
-  Object.defineProperty(target, "itsalive", {
+  Object.defineProperty(target, "agent", {
     value: runtimeApi,
     writable: false,
     configurable: false,
     enumerable: false,
   });
 }
-
