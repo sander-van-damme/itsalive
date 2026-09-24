@@ -4,8 +4,9 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   posts: [] as Array<{ payload: Record<string, unknown>; requestId?: string }>,
   restoredWithApi: false,
-  restoredDocument: undefined as { html: string; scripts: unknown[] } | undefined,
-  persistDocument: undefined as ((document: { html: string; scripts: unknown[] }) => void) | undefined,
+  restoredDocument: undefined as { html: string; scripts: unknown[]; store: string } | undefined,
+  persistDocument: undefined as ((document: { html: string; scripts: unknown[]; store: string }) => void) | undefined,
+  scheduleSave: vi.fn(),
   requests: [] as Record<string, unknown>[],
   screenshotError: undefined as Error | undefined,
   listener: undefined as ((event: MessageEvent<unknown>) => void) | undefined,
@@ -26,7 +27,7 @@ vi.mock("../src/runtime/bridge", () => ({
       if (payload.type === "logs.request") return { type: "logs.response", results: [{ timestamp: 1, level: "error", source: "app", message: "boom" }] };
       if (payload.type === "document.request") return {
         type: "document.response",
-        document: { html: "<!doctype html><html><body><main>shell saved</main></body></html>", scripts: [] },
+        document: { html: "<!doctype html><html><body><main>shell saved</main></body></html>", scripts: [], store: "{\"counter\":{\"count\":3}}" },
       };
       throw new Error(`Unexpected request: ${String(payload.type)}`);
     }
@@ -41,14 +42,25 @@ vi.mock("../src/runtime/logs", () => ({
 }));
 
 vi.mock("../src/runtime/persistence", () => ({
-  serializeAppDocument: () => ({ html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [] }),
-  restoreAppDocument: async (document: { html: string; scripts: unknown[] }) => {
-    state.restoredWithApi = window.itsalive?.apiVersion === 2;
+  serializeAppDocument: (store = "{}") => ({ html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [], store }),
+  restoreAppDocument: async (document: { html: string; scripts: unknown[]; store: string }) => {
+    state.restoredWithApi = window.itsalive?.apiVersion === 2
+      && (window.application.store.counter as { count?: number } | undefined)?.count === 3;
     state.restoredDocument = document;
   },
-  installAutosave: (persist: (document: { html: string; scripts: unknown[] }) => void) => {
+  installAutosave: (
+    persist: (document: { html: string; scripts: unknown[]; store: string }) => void,
+    _delay: number,
+    storeSnapshot: () => string,
+  ) => {
     state.persistDocument = persist;
-    return { save: vi.fn(), suspend: vi.fn(), resume: vi.fn(), disconnect: vi.fn() };
+    return {
+      save: vi.fn(),
+      schedule: () => state.scheduleSave(storeSnapshot()),
+      suspend: vi.fn(),
+      resume: vi.fn(),
+      disconnect: vi.fn(),
+    };
   },
 }));
 
@@ -76,8 +88,11 @@ describe("injected app runtime namespace", () => {
     });
   });
 
-  it("installs one immutable, versioned facade without replacing native history", () => {
+  it("installs durable application.store before restoring app scripts", () => {
     expect(window.history).toBe(nativeHistory);
+    expect((window.application.store.counter as { count: number }).count).toBe(3);
+    expect(Object.isFrozen(window.application)).toBe(true);
+    expect(Object.getOwnPropertyDescriptor(window, "application")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(Object.keys(window.itsalive)).toEqual([
       "apiVersion", "llm", "history", "agent", "dom", "logs", "components", "cron", "done",
     ]);
@@ -95,6 +110,7 @@ describe("injected app runtime namespace", () => {
     expect(state.restoredWithApi).toBe(true);
     expect(state.requests[0]).toEqual({ type: "document.request" });
     expect(state.restoredDocument?.html).toContain("shell saved");
+    expect(state.restoredDocument?.store).toBe('{"counter":{"count":3}}');
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
 
@@ -191,22 +207,33 @@ describe("injected app runtime namespace", () => {
     expect(JSON.stringify(second)).not.toContain("first failure");
   });
 
-  it("returns an explicit document snapshot before shell-driven teardown", async () => {
+  it("returns an explicit document snapshot with durable store state before shell-driven teardown", async () => {
+    (window.application.store.counter as { count: number }).count = 9;
     emit({ type: "document.snapshot", requestId: "snapshot" });
     await nextTask();
     expect(state.posts).toContainEqual({
-      payload: { type: "result", result: { document: { html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [] } } },
+      payload: { type: "result", result: { document: { html: "<!doctype html><html><body><main>snapshot</main></body></html>", scripts: [], store: '{"counter":{"count":9}}' } } },
       requestId: "snapshot",
     });
   });
 
   it("sends autosave snapshots to the shell instead of writing runtime storage", () => {
     expect(state.persistDocument).toBeTypeOf("function");
-    state.persistDocument!({ html: "<!doctype html><html><body><main>latest</main></body></html>", scripts: [] });
+    state.persistDocument!({ html: "<!doctype html><html><body><main>latest</main></body></html>", scripts: [], store: '{"counter":{"count":9}}' });
     expect(state.posts).toContainEqual({
-      payload: { type: "document.save", document: { html: "<!doctype html><html><body><main>latest</main></body></html>", scripts: [] } },
+      payload: { type: "document.save", document: { html: "<!doctype html><html><body><main>latest</main></body></html>", scripts: [], store: '{"counter":{"count":9}}' } },
       requestId: undefined,
     });
+  });
+
+  it("schedules autosave for store-only nested mutations", () => {
+    state.scheduleSave.mockClear();
+    const store = window.application.store as Record<string, unknown>;
+    store.tasks = [];
+    (store.tasks as Array<{ done: boolean }>).push({ done: false });
+    (store.tasks as Array<{ done: boolean }>).at(0)!.done = true;
+    delete store.tasks;
+    expect(state.scheduleSave).toHaveBeenCalled();
   });
 
   it("fails clearly instead of overwriting an existing namespace", async () => {

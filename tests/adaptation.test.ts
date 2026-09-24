@@ -33,6 +33,7 @@ function result(helped: number, outcome: string, confidence = 0.9): JevDecisionR
 const beforeDocument = {
   html: "<main><button>Old</button></main>",
   scripts: [{ placement: "body" as const, attributes: {}, content: "window.old = true;" }],
+  store: "{}",
 };
 
 describe("adaptation lifecycle", () => {

@@ -3,7 +3,8 @@ import { installLogging } from "./logs";
 import { installAutosave, restoreAppDocument, serializeAppDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
-import type { ItsaliveRuntimeApi } from "./globals";
+import type { ApplicationRuntimeApi, ItsaliveRuntimeApi } from "./globals";
+import { createApplicationStore } from "./application-store";
 import type { BridgeMessage, ShellToAppPayload } from "../shared";
 import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
@@ -46,6 +47,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const appId = options.appId;
   const bridge = new AppBridge(rootOrigin, appId, options.port);
   const logs = installLogging(bridge);
+  const applicationStore = createApplicationStore();
   const cronCallbacks = new Map<string, () => unknown>();
   const screenshot = async (input: { scale?: number } = {}) => {
     try {
@@ -100,6 +102,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     cron,
     done,
   });
+  installApplicationApi(window, Object.freeze({ store: applicationStore.store }));
   installRuntimeApi(window, runtimeApi);
   const durability = installAgentDurabilityAudit();
 
@@ -113,7 +116,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (!message) return;
     if (bridge.acceptResponse(message)) return;
     if (message.type === "document.snapshot") {
-      const document = serializeAppDocument();
+      const document = serializeAppDocument(applicationStore.snapshot());
       if (appDocumentCharacterSize(document) > MAX_SAVED_DOCUMENT_CHARACTERS) {
         bridge.post({ type: "execution.error", error: serializeError(new Error("Saved document is too large")) }, message.requestId);
       } else {
@@ -156,7 +159,10 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const saved = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "document.request" }, 10_000);
   if (saved.type !== "document.response") throw new Error(`Unexpected document response: ${saved.type}`);
   if (saved.error) throw new Error(saved.error.message);
-  if (saved.document) await restoreAppDocument(saved.document);
+  if (saved.document) {
+    applicationStore.restore(saved.document.store);
+    await restoreAppDocument(saved.document);
+  }
   ensureCanonicalAppRoot();
   const autosave = installAutosave(document => {
     if (appDocumentCharacterSize(document) > MAX_SAVED_DOCUMENT_CHARACTERS) {
@@ -164,7 +170,8 @@ export async function startAppRuntime(options: RuntimeOptions) {
       return;
     }
     bridge.post({ type: "document.save", document });
-  }, options.autosaveDelay);
+  }, options.autosaveDelay, () => applicationStore.snapshot());
+  applicationStore.setOnDirty(autosave.schedule);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => {
@@ -175,6 +182,18 @@ export async function startAppRuntime(options: RuntimeOptions) {
     autosave.disconnect();
     logs.destroy();
   } };
+}
+
+export function installApplicationApi(target: Window, runtimeApi: ApplicationRuntimeApi): void {
+  if (Object.prototype.hasOwnProperty.call(target, "application")) {
+    throw new Error("Cannot install application runtime API because window.application already exists.");
+  }
+  Object.defineProperty(target, "application", {
+    value: runtimeApi,
+    writable: false,
+    configurable: false,
+    enumerable: false,
+  });
 }
 
 export function installRuntimeApi(target: Window, runtimeApi: ItsaliveRuntimeApi): void {

@@ -96,6 +96,7 @@ describe("bridge protocol", () => {
     const document = {
       html: "<!doctype html><html><body><main>ok</main></body></html>",
       scripts: [{ placement: "body" as const, attributes: { "data-app-setup": "" }, content: "window.setup = true;" }],
+      store: '{"counter":{"count":2}}',
     };
     const request = createBridgeMessage(APP_ID, "req_doc_get", { type: "document.request" });
     const save = createBridgeMessage(APP_ID, "req_doc_save", { type: "document.save", document });
@@ -107,7 +108,9 @@ describe("bridge protocol", () => {
     expect(isBridgeMessage({ ...request, extra: true })).toBe(false);
     expect(isBridgeMessage({ ...save, document: { ...document, html: "x".repeat(MAX_SAVED_DOCUMENT_CHARACTERS + 1) } })).toBe(false);
     expect(isBridgeMessage({ ...save, document: { ...document, scripts: [{ placement: "elsewhere", attributes: {}, content: "" }] } })).toBe(false);
-    expect(isBridgeMessage({ ...response, document: { html: 42, scripts: [] } })).toBe(false);
+    expect(isBridgeMessage({ ...response, document: { html: 42, scripts: [], store: "{}" } })).toBe(false);
+    expect(isBridgeMessage({ ...save, document: { ...document, store: "[]" } })).toBe(false);
+    expect(isBridgeMessage({ ...save, document: { ...document, store: "not-json" } })).toBe(false);
   });
 
   it("uses the LLM request and response protocol", () => {

@@ -23,6 +23,7 @@ describe("runtime document persistence client", () => {
     expect(snapshot.html).toContain("current text");
     expect(snapshot.html).not.toContain("bootstrap.js");
     expect(snapshot.html).not.toContain("data-app-setup");
+    expect(snapshot.store).toBe("{}");
     expect(snapshot.scripts).toEqual([
       expect.objectContaining({ placement: "head", attributes: expect.objectContaining({ "data-app-setup": "" }), content: "window.__restoredSetup = true;" }),
     ]);
@@ -100,7 +101,7 @@ describe("shell persistence", () => {
       behaviorSummary: "Prefers fast feedback.",
       behaviorSummaryUpdatedAt: 2,
     });
-    await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", scripts: [], updatedAt: 2 });
+    await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", scripts: [], store: "{}", updatedAt: 2 });
     await db.behaviorEpisodes.put({
       id: "episode-1",
       appId: APP_ID,
@@ -139,7 +140,7 @@ describe("shell persistence", () => {
     const otherId = "650e8400-e29b-41d4-a716-446655440000";
     for (const id of [APP_ID, otherId]) {
       await db.apps.put({ id, name: id, prompt: "Build", createdAt: 1, updatedAt: 1 });
-      await db.documents.put({ appId: id, html: `<main>${id}</main>`, scripts: [], updatedAt: 2 });
+      await db.documents.put({ appId: id, html: `<main>${id}</main>`, scripts: [], store: "{}", updatedAt: 2 });
       await db.behaviorEpisodes.put({
         id: `${id}:episode`,
         appId: id,
@@ -178,7 +179,7 @@ describe("shell persistence", () => {
     const databaseName = `shell-${crypto.randomUUID()}`;
     const firstShell = new ShellDatabase(databaseName);
     await firstShell.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
-    await firstShell.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], updatedAt: 2 });
+    await firstShell.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], store: "{}", updatedAt: 2 });
     await firstShell.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "build something" });
 
     const diagnostics = new DiagnosticLog(firstShell, () => APP_ID);
@@ -204,7 +205,7 @@ describe("app deletion cleanup", () => {
   it("forgets shell state before attempting best-effort origin cleanup", async () => {
     const db = new ShellDatabase(`shell-${crypto.randomUUID()}`);
     await db.apps.put({ id: APP_ID, name: "Test", prompt: "Build", createdAt: 1, updatedAt: 1 });
-    await db.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], updatedAt: 2 });
+    await db.documents.put({ appId: APP_ID, html: "<main>saved</main>", scripts: [], store: "{}", updatedAt: 2 });
 
     const cleanup = vi.fn(async () => {
       expect(await db.apps.get(APP_ID)).toBeUndefined();

@@ -558,7 +558,7 @@ async function handleUserFacingInput(
         hypothesis: adaptationContext.hypothesis,
         technicalGoal: decision.technicalIntent.goal,
         intendedOutcome: decision.technicalIntent.acceptanceCriteria.join(' '),
-        beforeDocument: { html: before.html, scripts: before.scripts },
+        beforeDocument: { html: before.html, scripts: before.scripts, store: before.store },
       });
       const updated: AppRecord = { ...current, activeAdaptation: active, updatedAt: Date.now() };
       await db.apps.put(updated);
@@ -1224,8 +1224,8 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
   switch (message.type) {
     case 'document.request': {
       const saved = await db.documents.get(activeId);
-      const valid = saved && isAppDocumentSnapshot({ html: saved.html, scripts: (saved as { scripts?: unknown }).scripts })
-        ? { html: saved.html, scripts: saved.scripts }
+      const valid = saved && isAppDocumentSnapshot({ html: saved.html, scripts: (saved as { scripts?: unknown }).scripts, store: (saved as { store?: unknown }).store })
+        ? { html: saved.html, scripts: saved.scripts, store: saved.store }
         : undefined;
       if (saved && !valid) {
         await db.documents.delete(activeId);

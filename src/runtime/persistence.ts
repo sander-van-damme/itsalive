@@ -28,13 +28,13 @@ function snapshotScript(script: HTMLScriptElement): AppScriptSnapshot {
   };
 }
 
-export function serializeAppDocument(): AppDocumentSnapshot {
+export function serializeAppDocument(store = "{}"): AppDocumentSnapshot {
   normalizeControls(document);
   const html = document.documentElement.cloneNode(true) as HTMLElement;
   html.querySelectorAll(RUNTIME_SELECTOR).forEach(node => node.remove());
   const scripts = Array.from(html.querySelectorAll<HTMLScriptElement>("script")).map(snapshotScript);
   html.querySelectorAll("script").forEach(script => script.remove());
-  return { html: `<!doctype html>\n${html.outerHTML}`, scripts };
+  return { html: `<!doctype html>\n${html.outerHTML}`, scripts, store };
 }
 
 async function executeScripts(scripts: readonly AppScriptSnapshot[]): Promise<void> {
@@ -86,14 +86,18 @@ export async function restoreAppDocument(snapshot: AppDocumentSnapshot): Promise
   }
 }
 
-export function installAutosave(persist: (snapshot: AppDocumentSnapshot) => void, delay = 750) {
+export function installAutosave(
+  persist: (snapshot: AppDocumentSnapshot) => void,
+  delay = 750,
+  storeSnapshot: () => string = () => "{}",
+) {
   let timer: number | undefined;
   let suspended = false;
 
   const save = () => {
     window.clearTimeout(timer);
     timer = undefined;
-    if (!suspended) persist(serializeAppDocument());
+    if (!suspended) persist(serializeAppDocument(storeSnapshot()));
   };
 
   const observer = new MutationObserver(() => {
@@ -115,6 +119,7 @@ export function installAutosave(persist: (snapshot: AppDocumentSnapshot) => void
 
   return {
     save,
+    schedule: scheduleSave,
     suspend: () => { suspended = true; },
     resume: () => { suspended = false; },
     disconnect: () => {

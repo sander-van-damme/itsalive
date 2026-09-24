@@ -21,6 +21,7 @@ export interface AppScriptSnapshot {
 export interface AppDocumentSnapshot {
   html: string;
   scripts: AppScriptSnapshot[];
+  store: string;
 }
 
 export type BootstrapReadyMessage = {
@@ -110,7 +111,7 @@ const isObject = (value: unknown): value is Record<string, unknown> => value !==
 const hasOnly = (value: Record<string, unknown>, keys: readonly string[]) => Object.keys(value).every(key => keys.includes(key));
 
 export function appDocumentCharacterSize(value: AppDocumentSnapshot): number {
-  let size = value.html.length;
+  let size = value.html.length + value.store.length;
   for (const script of value.scripts) {
     size += script.content.length;
     for (const [name, attributeValue] of Object.entries(script.attributes)) size += name.length + attributeValue.length;
@@ -118,8 +119,18 @@ export function appDocumentCharacterSize(value: AppDocumentSnapshot): number {
   return size;
 }
 
+function isApplicationStoreSnapshot(value: unknown): value is string {
+  if (typeof value !== "string") return false;
+  try {
+    const parsed = JSON.parse(value) as unknown;
+    return Boolean(parsed && typeof parsed === "object" && !Array.isArray(parsed));
+  } catch {
+    return false;
+  }
+}
+
 export function isAppDocumentSnapshot(value: unknown): value is AppDocumentSnapshot {
-  if (!isObject(value) || !hasOnly(value, ["html", "scripts"]) || typeof value.html !== "string" || !Array.isArray(value.scripts) || value.scripts.length > MAX_SAVED_APP_SCRIPTS) return false;
+  if (!isObject(value) || !hasOnly(value, ["html", "scripts", "store"]) || typeof value.html !== "string" || !Array.isArray(value.scripts) || value.scripts.length > MAX_SAVED_APP_SCRIPTS || !isApplicationStoreSnapshot(value.store)) return false;
   for (const script of value.scripts) {
     if (!isObject(script) || !hasOnly(script, ["placement", "attributes", "content"])) return false;
     if (script.placement !== "head" && script.placement !== "body") return false;
