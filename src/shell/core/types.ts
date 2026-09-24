@@ -24,6 +24,7 @@ export interface AppDocumentRecord {
   appId: string;
   html: string;
   scripts: AppScriptSnapshot[];
+  store: string;
   updatedAt: number;
 }
 
