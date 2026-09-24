@@ -1,10 +1,11 @@
 import type { AppDocumentRecord, AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
 import type { BehaviorEpisodeRecord } from "./behavior-episodes";
+import type { AdaptationRecord } from "./adaptations";
 
-const DB_NAME = "itsalive-shell-v5";
+const DB_NAME = "itsalive-shell-v6";
 const DB_VERSION = 1;
 
-type Store = "apps" | "behaviorEpisodes" | "documents" | "history" | "logs" | "schedules";
+type Store = "adaptations" | "apps" | "behaviorEpisodes" | "documents" | "history" | "logs" | "schedules";
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -34,6 +35,8 @@ export class ShellDatabase {
       open.onblocked = () => reject(new Error("Shell database upgrade is blocked by another tab"));
       open.onupgradeneeded = () => {
         const db = open.result;
+        const adaptations = db.createObjectStore("adaptations", { keyPath: "id" });
+        adaptations.createIndex("appId", "appId");
         db.createObjectStore("apps", { keyPath: "id" });
         const behaviorEpisodes = db.createObjectStore("behaviorEpisodes", { keyPath: "id" });
         behaviorEpisodes.createIndex("appId", "appId");
@@ -89,11 +92,11 @@ export class ShellDatabase {
     const db = await this.open();
     // Diagnostics intentionally outlive app deletion so a just-failed test can
     // still be exported after the user removes the app itself.
-    const tx = db.transaction(["apps", "behaviorEpisodes", "documents", "history", "schedules"], "readwrite");
+    const tx = db.transaction(["adaptations", "apps", "behaviorEpisodes", "documents", "history", "schedules"], "readwrite");
     const completed = transactionDone(tx);
     tx.objectStore("apps").delete(id);
     tx.objectStore("documents").delete(id);
-    for (const store of ["behaviorEpisodes", "history", "schedules"] as const) {
+    for (const store of ["adaptations", "behaviorEpisodes", "history", "schedules"] as const) {
       const cursor = tx.objectStore(store).index("appId").openKeyCursor(IDBKeyRange.only(id));
       cursor.onsuccess = () => {
         const row = cursor.result;
@@ -106,6 +109,13 @@ export class ShellDatabase {
     await completed;
   }
 
+  adaptations = {
+    list: () => this.all<AdaptationRecord>("adaptations"),
+    get: (id: string) => this.get<AdaptationRecord>("adaptations", id),
+    forApp: (appId: string) => this.byIndex<AdaptationRecord>("adaptations", "appId", appId),
+    put: (record: AdaptationRecord) => this.put("adaptations", record),
+    delete: (id: string) => this.delete("adaptations", id),
+  };
   apps = {
     list: () => this.all<AppRecord>("apps"),
     get: (id: string) => this.get<AppRecord>("apps", id),
