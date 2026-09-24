@@ -86,7 +86,8 @@ describe("shell persistence", () => {
     const databaseName = `shell-${crypto.randomUUID()}`;
     const db = new ShellDatabase(databaseName);
     const connection = await db.open();
-    expect([...connection.objectStoreNames]).toEqual(["apps", "behaviorEpisodes", "documents", "history", "logs", "schedules"]);
+    expect([...connection.objectStoreNames]).toEqual(["adaptations", "apps", "behaviorEpisodes", "documents", "history", "logs", "schedules"]);
+    expect([...connection.transaction("adaptations").objectStore("adaptations").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("behaviorEpisodes").objectStore("behaviorEpisodes").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("history").objectStore("history").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("logs").objectStore("logs").indexNames]).toEqual(["appId"]);
@@ -101,6 +102,21 @@ describe("shell persistence", () => {
       behaviorSummaryUpdatedAt: 2,
     });
     await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", scripts: [], updatedAt: 2 });
+    await db.adaptations.put({
+      id: "adaptation-1",
+      appId: APP_ID,
+      confirmationId: "confirmation-1",
+      hypothesisKey: "click|button|save",
+      hypothesis: "Make Save clearer",
+      intendedOutcome: "Save succeeds after one click",
+      createdAt: 2,
+      updatedAt: 2,
+      status: "observing",
+      rollbackDocument: { html: "<!doctype html><main>before</main>", scripts: [] },
+      appliedAt: 2,
+      evidenceCount: 0,
+      suppressed: false,
+    });
     await db.behaviorEpisodes.put({
       id: "episode-1",
       appId: APP_ID,
@@ -128,6 +144,7 @@ describe("shell persistence", () => {
       behaviorSummary: "Prefers fast feedback.",
     });
     expect(await reloadedShell.documents.get(APP_ID)).toMatchObject({ html: "<!doctype html><main>saved</main>", scripts: [] });
+    expect(await reloadedShell.adaptations.forApp(APP_ID)).toEqual([expect.objectContaining({ id: "adaptation-1", status: "observing" })]);
     expect(await reloadedShell.behaviorEpisodes.forApp(APP_ID)).toEqual([expect.objectContaining({ id: "episode-1", kind: "unresolved-need" })]);
     expect(await reloadedShell.history.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.logs.forApp(APP_ID)).toHaveLength(1);
@@ -140,6 +157,22 @@ describe("shell persistence", () => {
     for (const id of [APP_ID, otherId]) {
       await db.apps.put({ id, name: id, prompt: "Build", createdAt: 1, updatedAt: 1 });
       await db.documents.put({ appId: id, html: `<main>${id}</main>`, scripts: [], updatedAt: 2 });
+      await db.adaptations.put({
+        id: `${id}:adaptation`,
+        appId: id,
+        confirmationId: `${id}:confirmation`,
+        hypothesisKey: `click|button|${id}`,
+        hypothesis: "Adapt it",
+        intendedOutcome: "Improve it",
+        createdAt: 2,
+        updatedAt: 2,
+        status: "kept",
+        evidenceCount: 1,
+        outcome: "successful",
+        helpedProbability: 0.9,
+        outcomeConfidence: 0.9,
+        suppressed: false,
+      });
       await db.behaviorEpisodes.put({
         id: `${id}:episode`,
         appId: id,
@@ -166,11 +199,13 @@ describe("shell persistence", () => {
 
     expect(await db.apps.get(APP_ID)).toBeUndefined();
     expect(await db.documents.get(APP_ID)).toBeUndefined();
+    expect(await db.adaptations.forApp(APP_ID)).toEqual([]);
     expect(await db.behaviorEpisodes.forApp(APP_ID)).toEqual([]);
     expect(await db.history.forApp(APP_ID)).toEqual([]);
     expect(await db.logs.forApp(APP_ID)).toHaveLength(1);
     expect(await db.schedules.forApp(APP_ID)).toEqual([]);
     expect(await db.documents.get(otherId)).toBeDefined();
+    expect(await db.adaptations.forApp(otherId)).toHaveLength(1);
     expect(await db.behaviorEpisodes.forApp(otherId)).toHaveLength(1);
   });
 
