@@ -904,7 +904,11 @@ async function assessTriggerRoutingWithJev(
       decisionKind: 'trigger-routing',
       questionSetVersion: JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION,
       result,
-      policy: DEFAULT_TRIGGER_ROUTING_POLICY,
+      policy: {
+        minimumRouteConfidence: DEFAULT_TRIGGER_ROUTING_POLICY.minimumRouteConfidence,
+        minimumProfileConfidence: DEFAULT_TRIGGER_ROUTING_POLICY.minimumProfileConfidence,
+        runtimeNoActionConfidence: DEFAULT_TRIGGER_ROUTING_POLICY.runtimeNoActionConfidence,
+      },
       action: decision.route,
     }),
     source: boundedState.source,
