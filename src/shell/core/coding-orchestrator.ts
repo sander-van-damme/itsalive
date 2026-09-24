@@ -149,7 +149,7 @@ const MANAGER_PLAN_SYSTEM = [
   "Plan implementation; do not write DOM mutation code.",
   "",
   "Return JSON only:",
-  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"],\"stores\":[\"sharedStore\"]},\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"idPrefix\":\"component-id-\",\"storeNamespace\":\"componentState\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
+  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"],\"stores\":[\"sharedStore\"]},\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
   "",
   "Rules:",
   "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
@@ -158,8 +158,8 @@ const MANAGER_PLAN_SYSTEM = [
   "- Use one ordered task for a truly atomic change; use 2+ tasks when distinct components/work units exist.",
   "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
   "- Reuse an existing component id from APP OUTLINE when it clearly owns the work; otherwise choose a new stable id.",
-  "- Give each scope a compact DOM idPrefix ending in '-' and a JS-identifier storeNamespace. Reuse the same pair for repeated tasks on the same scope.",
-  "- Different scopes must use different local idPrefix/storeNamespace values. Cross-scope state sharing belongs only in shared.stores.",
+  "- Local DOM/store names are derived deterministically from each scope by the orchestrator and supplied to workers; do not spend manager output on local prefixes/namespaces.",
+  "- Cross-scope state sharing belongs only in shared.stores."
   "- Dependencies may reference only earlier task ids.",
   "- shared.ref is a compact version/reference. Every task must repeat that exact value in sharedContractRef.",
   "- Set parallel=true only when the task can safely overlap other dependency-ready tasks on a different scope.",
@@ -220,7 +220,6 @@ const MANAGER_VERIFY_SYSTEM = [
 
 const SIMPLE_SCOPE = /^#[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const TASK_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
-const ID_PREFIX = /^[A-Za-z][A-Za-z0-9_-]{0,62}-$/;
 const STORE_NAMESPACE = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
 
 export class CodingOrchestrator {
@@ -838,7 +837,6 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
 
   const seen = new Set<string>();
   const namingByScope = new Map<string, { idPrefix: string; storeNamespace: string }>();
-  const prefixOwners = new Map<string, string>();
   const storeOwners = new Map<string, string>();
   const tasks = record.tasks.map((value, index): CodingWorkerTask => {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("Coding manager task " + (index + 1) + " is invalid");
@@ -860,33 +858,16 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
       : shared.ref;
     if (sharedContractRef !== shared.ref) throw new Error("Coding manager task " + id + " references a different shared contract");
     let naming = namingByScope.get(scope);
-    const requestedPrefix = typeof task.idPrefix === "string" && task.idPrefix.trim() ? task.idPrefix.trim() : undefined;
-    const requestedStore = typeof task.storeNamespace === "string" && task.storeNamespace.trim() ? task.storeNamespace.trim() : undefined;
-    if (requestedPrefix && !ID_PREFIX.test(requestedPrefix)) throw new Error("Coding manager task " + id + " has an invalid idPrefix");
-    if (requestedStore && !STORE_NAMESPACE.test(requestedStore)) throw new Error("Coding manager task " + id + " has an invalid storeNamespace");
-
-    if (naming) {
-      if (requestedPrefix && requestedPrefix !== naming.idPrefix) throw new Error("Coding manager tasks sharing " + scope + " must use the same idPrefix");
-      if (requestedStore && requestedStore !== naming.storeNamespace) throw new Error("Coding manager tasks sharing " + scope + " must use the same storeNamespace");
-    } else {
-      const idPrefix = requestedPrefix ?? scope.slice(1) + "-";
-      let storeNamespace = requestedStore;
-      if (!storeNamespace) {
-        const base = scope.slice(1).replace(/-/g, "_");
-        storeNamespace = base;
-        let suffix = 2;
-        while (storeOwners.has(storeNamespace) || shared.stores.includes(storeNamespace)) {
-          storeNamespace = base + "_" + suffix++;
-        }
+    if (!naming) {
+      const idPrefix = scope.slice(1) + "-";
+      const baseStoreNamespace = scope.slice(1).replace(/-/g, "_");
+      let storeNamespace = baseStoreNamespace;
+      let suffix = 2;
+      while (storeOwners.has(storeNamespace) || shared.stores.includes(storeNamespace)) {
+        storeNamespace = baseStoreNamespace + "_" + suffix++;
       }
-      const prefixOwner = prefixOwners.get(idPrefix);
-      if (prefixOwner && prefixOwner !== scope) throw new Error("Coding manager idPrefix " + idPrefix + " is already owned by " + prefixOwner);
-      const storeOwner = storeOwners.get(storeNamespace);
-      if (storeOwner && storeOwner !== scope) throw new Error("Coding manager storeNamespace " + storeNamespace + " is already owned by " + storeOwner);
-      if (shared.stores.includes(storeNamespace)) throw new Error("Coding manager local storeNamespace " + storeNamespace + " is also declared shared");
       naming = { idPrefix, storeNamespace };
       namingByScope.set(scope, naming);
-      prefixOwners.set(idPrefix, scope);
       storeOwners.set(storeNamespace, scope);
     }
 
