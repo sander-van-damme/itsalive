@@ -594,6 +594,7 @@ async function runAgent(
         ui.setBusy(false);
         ui.setConnectionStatus(runtime.state === 'ready' ? 'connected' : runtime.state === 'loading' ? 'working' : 'error');
         syncResumePrompt();
+        syncAdaptationPrompt();
         await refreshMessages();
       }
       void startPendingInitialBuild();
@@ -624,6 +625,117 @@ async function activateAlivePolicyForApp(
   await db.apps.put(updated);
   apps = apps.map(item => item.id === appId ? updated : item);
   await log('info', 'alive-policy', 'Alive policy activated', alivePolicyDiagnostic(policy), appId);
+}
+
+async function markAdaptationAppliedForApp(appId: string, adaptationId: string): Promise<void> {
+  const current = await db.apps.get(appId);
+  if (!current?.activeAdaptation || current.activeAdaptation.id !== adaptationId) return;
+  const activeAdaptation = markAdaptationApplied(current.activeAdaptation);
+  const updated: AppRecord = { ...current, activeAdaptation, updatedAt: Date.now() };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'adaptation', 'Interaction adaptation applied', {
+    adaptationId,
+    fingerprint: activeAdaptation.fingerprint,
+    hypothesis: activeAdaptation.hypothesis,
+    intendedOutcome: activeAdaptation.intendedOutcome,
+  }, appId);
+  if (activeId === appId) syncAdaptationPrompt();
+}
+
+async function completeAdaptationForApp(
+  appId: string,
+  adaptationId: string,
+  outcome: import('./core').AdaptationOutcome,
+  reason: string,
+): Promise<void> {
+  const current = await db.apps.get(appId);
+  const active = current?.activeAdaptation;
+  if (!current || !active || active.id !== adaptationId) return;
+  const entry = finalizeAdaptation(active, outcome, reason);
+  const updated: AppRecord = {
+    ...current,
+    activeAdaptation: undefined,
+    adaptationHistory: appendAdaptationHistory(current.adaptationHistory, entry),
+    updatedAt: Date.now(),
+  };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'adaptation', 'Interaction adaptation finalized', {
+    adaptationId,
+    fingerprint: entry.fingerprint,
+    outcome: entry.outcome,
+    reason: entry.reason,
+    assessments: entry.assessments,
+    hypothesis: entry.hypothesis,
+    intendedOutcome: entry.intendedOutcome,
+  }, appId);
+  if (activeId === appId) syncAdaptationPrompt();
+}
+
+async function recordAdaptationOutcomeForApp(
+  appId: string,
+  adaptationId: string,
+  assessment: import('./core').AdaptationAssessment,
+): Promise<void> {
+  const current = await db.apps.get(appId);
+  const active = current?.activeAdaptation;
+  if (!current || !active || active.id !== adaptationId || active.status !== 'applied') return;
+  const next = recordAdaptationAssessment(active, assessment);
+  const updated: AppRecord = { ...current, activeAdaptation: next, updatedAt: Date.now() };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'adaptation', 'Adaptation outcome assessed', {
+    adaptationId,
+    fingerprint: next.fingerprint,
+    assessment: assessment.action,
+    reason: assessment.reason,
+    helpedProbability: assessment.helpedProbability,
+    classificationConfidence: assessment.classificationConfidence,
+    assessmentCount: next.assessmentCount,
+  }, appId);
+  if (activeId === appId) syncAdaptationPrompt();
+}
+
+function syncAdaptationPrompt(): void {
+  const active = currentApp()?.activeAdaptation;
+  let prompt: AdaptationPrompt | undefined;
+  if (active?.status === 'applied') {
+    const assessment = active.lastAssessment?.action;
+    const content = assessment === 'harmful' || assessment === 'rejected'
+      ? 'This change may not have helped and could be causing new friction. Keep it only if you prefer it, or undo it.'
+      : assessment === 'successful'
+        ? 'This change appears to be helping. Keep it, or undo it while the previous version is still available.'
+        : active.assessmentCount >= MAX_ADAPTATION_ASSESSMENTS
+          ? 'I could not verify that this change helped. Keep it or undo it before I make another proactive adaptation.'
+          : 'I changed the app based on that interaction. Keep this change, or undo it if it was not what you wanted.';
+    prompt = {
+      id: active.id,
+      content,
+      keepLabel: 'Keep change',
+      undoLabel: 'Undo change',
+    };
+  }
+  ui.setAdaptationPrompt(prompt);
+}
+
+async function reloadSavedDocumentWithoutFlush(appId: string): Promise<void> {
+  if (activeId !== appId || runtime.appId !== appId || runtime.state === 'disposed') return;
+  behaviorTracker.clear(appId);
+  runtimeEpoch++;
+  for (const controller of jevControllers) controller.abort(createAgentAbort('runtime-disposed'));
+  jevControllers.clear();
+  reactionBatcher.destroy();
+  reactionConfirmationGates.get(appId)?.clear();
+  syncInteractionPrompt();
+  ui.setConnectionStatus('working');
+  if (connectionTimer) clearTimeout(connectionTimer);
+  connectionTimer = window.setTimeout(() => {
+    runtime.setState('error');
+    ui.setBusy(false);
+    ui.setConnectionStatus('error');
+  }, 10_000);
+  runtime.reload();
 }
 
 async function startPendingInitialBuild(): Promise<void> {
