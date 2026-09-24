@@ -1,6 +1,6 @@
 import './styles.css';
-import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AccessibilityPrompt, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, accessibilitySuggestionFromJev, ambiguousAccessibilityCandidate, deterministicAccessibilitySuggestion, decideAccessibilityFriction, JEV_ACCESSIBILITY_FRICTION_QUESTIONS, JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION, recordAccessibilityDismissal, shouldSuppressAccessibilitySuggestion, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AccessibilitySuggestionCandidate, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -74,6 +74,8 @@ const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 const behaviorTracker = new BehaviorTracker();
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
+interface PendingAccessibilitySuggestion extends AccessibilitySuggestionCandidate { id: string }
+const accessibilitySuggestions = new Map<string, PendingAccessibilitySuggestion>();
 const pausedRuns = new PausedRunStore();
 let jevSessionStats = { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, escalations: 0, coalescedEvents: 0 };
 
@@ -90,6 +92,7 @@ const ui = new ShellUI(root, {
   selectApp: async id => { await selectApp(id); },
   deleteApp: async id => {
     reactionConfirmationGates.delete(id);
+    accessibilitySuggestions.delete(id);
     pausedRuns.clear(id);
     if (activeId === id) {
       if (running) {
@@ -122,6 +125,7 @@ const ui = new ShellUI(root, {
   resumePausedRun: async id => { await resumePausedRun(id); },
   resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
   resolveAdaptationPrompt: async (id, action) => { await resolveAdaptationPrompt(id, action); },
+  resolveAccessibilityPrompt: async (id, action) => { await resolveAccessibilityPrompt(id, action); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -208,6 +212,7 @@ async function refreshApps(select?: string): Promise<void> {
     syncInteractionPrompt();
     syncResumePrompt();
     syncAdaptationPrompt();
+    syncAccessibilityPrompt();
     await refreshMessages();
   }
 }
@@ -233,6 +238,7 @@ async function selectApp(id: string): Promise<void> {
   syncInteractionPrompt();
   syncResumePrompt();
   syncAdaptationPrompt();
+  syncAccessibilityPrompt();
   const runtimeSource = await loadRuntimeSource();
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
