@@ -5,10 +5,14 @@ import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 const model = { provider: "test", model: "test", maxContextTokens: 8_000, outputHeadroomTokens: 200, historyContextTokens: 1_000 };
 
 describe("shell context builder", () => {
-  it("teaches only the namespaced runtime API", () => {
-    for (const current of ["itsalive.done", "itsalive.history", "itsalive.dom.screenshot", "itsalive.llm", "itsalive.components"]) {
+  it("teaches only the application and coding-agent APIs", () => {
+    for (const current of ["agent.done", "agent.screenshot", "application.store", "application.generate", "application.escalate"]) {
       expect(SYSTEM_PROMPT).toContain(current);
     }
+    expect(SYSTEM_PROMPT).not.toContain("itsalive.done");
+    expect(SYSTEM_PROMPT).not.toContain("itsalive.history");
+    expect(SYSTEM_PROMPT).not.toContain("itsalive.logs");
+    expect(SYSTEM_PROMPT).not.toContain("itsalive.components");
     expect(SYSTEM_PROMPT).toContain("native browser IndexedDB");
     expect(SYSTEM_PROMPT).toContain("own browser origin");
   });
@@ -24,7 +28,6 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toContain("Alpine.js as the default layer");
     expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
     expect(SYSTEM_PROMPT).toContain("Chart, d3, THREE");
-    expect(SYSTEM_PROMPT).toContain("alternate examples use keys such as modal/example-01");
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
