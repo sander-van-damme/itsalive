@@ -1,6 +1,6 @@
 import './styles.css';
-import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AccessibilityPrompt, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, accessibilitySuggestionFromJev, ambiguousAccessibilityCandidate, deterministicAccessibilitySuggestion, decideAccessibilityFriction, JEV_ACCESSIBILITY_FRICTION_QUESTIONS, JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION, recordAccessibilityDismissal, shouldSuppressAccessibilitySuggestion, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AccessibilitySuggestionCandidate, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -74,6 +74,8 @@ const environmentalObservations: string[] = [];
 const reactionBatcher = new ReactionBatcher(batch => deliverReactionBatch(batch));
 const behaviorTracker = new BehaviorTracker();
 const reactionConfirmationGates = new Map<string, ReactionConfirmationGate>();
+interface PendingAccessibilitySuggestion extends AccessibilitySuggestionCandidate { id: string }
+const accessibilitySuggestions = new Map<string, PendingAccessibilitySuggestion>();
 const pausedRuns = new PausedRunStore();
 let jevSessionStats = { requests: 0, inputTokens: 0, outputTokens: 0, knownCost: 0, pricedRequests: 0, escalations: 0, coalescedEvents: 0 };
 
@@ -90,6 +92,7 @@ const ui = new ShellUI(root, {
   selectApp: async id => { await selectApp(id); },
   deleteApp: async id => {
     reactionConfirmationGates.delete(id);
+    accessibilitySuggestions.delete(id);
     pausedRuns.clear(id);
     if (activeId === id) {
       if (running) {
@@ -122,6 +125,7 @@ const ui = new ShellUI(root, {
   resumePausedRun: async id => { await resumePausedRun(id); },
   resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
   resolveAdaptationPrompt: async (id, action) => { await resolveAdaptationPrompt(id, action); },
+  resolveAccessibilityPrompt: async (id, action) => { await resolveAccessibilityPrompt(id, action); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -208,6 +212,7 @@ async function refreshApps(select?: string): Promise<void> {
     syncInteractionPrompt();
     syncResumePrompt();
     syncAdaptationPrompt();
+    syncAccessibilityPrompt();
     await refreshMessages();
   }
 }
@@ -233,6 +238,7 @@ async function selectApp(id: string): Promise<void> {
   syncInteractionPrompt();
   syncResumePrompt();
   syncAdaptationPrompt();
+  syncAccessibilityPrompt();
   const runtimeSource = await loadRuntimeSource();
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
@@ -345,6 +351,7 @@ async function handleUserFacingInput(
   const userText = content.trim();
   if (!app || !userText || interpreting) return;
   const appId = app.id;
+  if (source === 'chat' && accessibilitySuggestions.delete(appId)) syncAccessibilityPrompt();
   const intentController = new AbortController();
   activeIntent = intentController;
   interpreting = true;
@@ -739,6 +746,115 @@ async function recordAdaptationOutcomeForApp(
   if (activeId === appId) syncAdaptationPrompt();
 }
 
+function syncAccessibilityPrompt(): void {
+  const appId = activeId;
+  const suggestion = appId ? accessibilitySuggestions.get(appId) : undefined;
+  const blockedByAdaptation = Boolean(currentApp()?.activeAdaptation);
+  const prompt: AccessibilityPrompt | undefined = suggestion && !blockedByAdaptation
+    ? {
+        id: suggestion.id,
+        content: suggestion.content,
+        applyLabel: suggestion.applyLabel,
+        dismissLabel: 'Not now',
+      }
+    : undefined;
+  ui.setAccessibilityPrompt(prompt);
+}
+
+async function maybeOfferAccessibilitySuggestion(
+  appId: string,
+  candidate: AccessibilitySuggestionCandidate,
+): Promise<boolean> {
+  const current = await db.apps.get(appId);
+  if (!current || current.activeAdaptation) return false;
+  const pending = accessibilitySuggestions.get(appId);
+  if (pending) return true;
+  if (shouldSuppressAccessibilitySuggestion(current.accessibilityDismissals, candidate.key)) {
+    await log('info', 'accessibility', 'Accessibility suggestion suppressed by dismissal cooldown', {
+      key: candidate.key,
+      kind: candidate.kind,
+      source: candidate.source,
+    }, appId);
+    return false;
+  }
+  const suggestion: PendingAccessibilitySuggestion = { ...candidate, id: crypto.randomUUID() };
+  accessibilitySuggestions.set(appId, suggestion);
+  await log('info', 'accessibility', 'Accessibility suggestion offered', {
+    suggestionId: suggestion.id,
+    key: suggestion.key,
+    kind: suggestion.kind,
+    source: suggestion.source,
+    evidence: suggestion.evidence,
+  }, appId);
+  if (activeId === appId) syncAccessibilityPrompt();
+  return true;
+}
+
+async function resolveAccessibilityPrompt(
+  id: string,
+  action: 'apply' | 'dismiss',
+): Promise<void> {
+  const app = currentApp();
+  if (!app) return;
+  const suggestion = accessibilitySuggestions.get(app.id);
+  if (!suggestion || suggestion.id !== id) {
+    syncAccessibilityPrompt();
+    return;
+  }
+  accessibilitySuggestions.delete(app.id);
+  syncAccessibilityPrompt();
+
+  if (action === 'dismiss') {
+    const current = await db.apps.get(app.id);
+    if (current) {
+      const updated: AppRecord = {
+        ...current,
+        accessibilityDismissals: recordAccessibilityDismissal(current.accessibilityDismissals, suggestion.key),
+        updatedAt: Date.now(),
+      };
+      await db.apps.put(updated);
+      apps = apps.map(item => item.id === app.id ? updated : item);
+    }
+    await log('info', 'accessibility', 'Accessibility suggestion dismissed', {
+      suggestionId: suggestion.id,
+      key: suggestion.key,
+      kind: suggestion.kind,
+    }, app.id);
+    return;
+  }
+
+  await waitForAgentIdle();
+  if (activeId !== app.id || currentApp()?.activeAdaptation) {
+    await log('info', 'accessibility', 'Accessibility suggestion apply skipped because app state changed', {
+      suggestionId: suggestion.id,
+      key: suggestion.key,
+    }, app.id);
+    return;
+  }
+  await log('info', 'accessibility', 'Accessibility suggestion accepted', {
+    suggestionId: suggestion.id,
+    key: suggestion.key,
+    kind: suggestion.kind,
+    source: suggestion.source,
+  }, app.id);
+  await handleUserFacingInput(
+    suggestion.requestText,
+    'interaction',
+    JSON.stringify({
+      accessibilitySuggestion: {
+        suggestionId: suggestion.id,
+        kind: suggestion.kind,
+        source: suggestion.source,
+        evidence: suggestion.evidence,
+      },
+    }),
+    {
+      interactionKey: suggestion.key,
+      hypothesis: suggestion.hypothesis,
+    },
+  );
+}
+
 function syncAdaptationPrompt(): void {
   const active = currentApp()?.activeAdaptation;
   let prompt: AdaptationPrompt | undefined;
@@ -759,6 +875,7 @@ function syncAdaptationPrompt(): void {
     };
   }
   ui.setAdaptationPrompt(prompt);
+  syncAccessibilityPrompt();
 }
 
 async function reloadSavedDocumentWithoutFlush(appId: string): Promise<void> {
@@ -1070,10 +1187,29 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   const adaptationContext = activeAdaptation
     ? adaptationOutcomeContext(activeAdaptation, state.pattern, app.alivePolicy?.successSignals)
     : undefined;
+  const deterministicAccessibility = !activeAdaptation
+    ? deterministicAccessibilitySuggestion(message.state, state.pattern)
+    : undefined;
+  const ambiguousAccessibility = !activeAdaptation && !deterministicAccessibility
+    ? ambiguousAccessibilityCandidate(message.state, state.pattern)
+    : undefined;
   const controller = new AbortController();
   jevControllers.add(controller);
   const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
+  let accessibilityOffered = false;
   try {
+    if (deterministicAccessibility) {
+      accessibilityOffered = await maybeOfferAccessibilitySuggestion(appId, deterministicAccessibility);
+      await log('info', 'accessibility', 'Deterministic accessibility friction handled without JEV', {
+        key: deterministicAccessibility.key,
+        kind: deterministicAccessibility.kind,
+        offered: accessibilityOffered,
+        evidence: deterministicAccessibility.evidence,
+      }, appId);
+      if (!current()) return;
+      respond(message, { type: 'jev.response', probability: 0, escalated: false });
+      return;
+    }
     const key = credential();
     if (!key) throw new Error('OpenRouter is not configured');
     jevSessionStats.requests++;
@@ -1084,13 +1220,15 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         ...(alivePolicy ? { alivePolicy } : {}),
         ...(episode.action === 'triage' ? { behaviorEpisode: episode.candidate } : {}),
         ...(adaptationContext ? { adaptationOutcome: adaptationContext } : {}),
+        ...(ambiguousAccessibility ? { accessibilityFriction: ambiguousAccessibility } : {}),
       },
-      ...((episode.action === 'triage' || adaptationContext)
+      ...((episode.action === 'triage' || adaptationContext || ambiguousAccessibility)
         ? {
             questions: {
               ...GENERIC_JEV_QUESTION,
               ...(episode.action === 'triage' ? JEV_BEHAVIOR_EPISODE_QUESTIONS : {}),
               ...(adaptationContext ? JEV_ADAPTATION_OUTCOME_QUESTIONS : {}),
+              ...(ambiguousAccessibility ? JEV_ACCESSIBILITY_FRICTION_QUESTIONS : {}),
             },
           }
         : {}),
@@ -1113,7 +1251,17 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const adaptationDecision = activeAdaptation
       ? decideAdaptationOutcome(result)
       : undefined;
-    if (decision.escalated) jevSessionStats.escalations++;
+    const accessibilityDecision = ambiguousAccessibility
+      ? decideAccessibilityFriction(result)
+      : undefined;
+    const jevAccessibilitySuggestion = ambiguousAccessibility && accessibilityDecision
+      ? accessibilitySuggestionFromJev(ambiguousAccessibility, accessibilityDecision)
+      : undefined;
+    if (jevAccessibilitySuggestion) {
+      accessibilityOffered = await maybeOfferAccessibilitySuggestion(appId, jevAccessibilitySuggestion) || accessibilityOffered;
+    }
+    const effectiveEscalation = decision.escalated && !accessibilityOffered;
+    if (effectiveEscalation) jevSessionStats.escalations++;
     if (episode.action === 'triage' && episodeDecision?.action === 'retain') {
       await retainBehaviorEpisode(appId, episode.candidate, episodeDecision);
     }
@@ -1162,11 +1310,22 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         classificationConfidence: adaptationDecision.classificationConfidence,
         assessmentCount: activeAdaptation.assessmentCount + 1,
       } : undefined,
+      accessibilityFriction: ambiguousAccessibility && accessibilityDecision
+        ? {
+            source: 'jev',
+            questionSetVersion: JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION,
+            action: accessibilityDecision.action,
+            kind: accessibilityDecision.kind,
+            probability: accessibilityDecision.probability,
+            confidence: accessibilityDecision.confidence,
+            offered: accessibilityOffered,
+          }
+        : undefined,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
-    respond(message, { type: 'jev.response', probability: result.probability, escalated: decision.escalated });
-    if (decision.escalated) {
+    respond(message, { type: 'jev.response', probability: result.probability, escalated: effectiveEscalation });
+    if (effectiveEscalation) {
       if (activeAdaptation) {
         await log('info', 'adaptation', 'Observer escalation suppressed while adaptation outcome is unresolved', {
           adaptationId: activeAdaptation.id,

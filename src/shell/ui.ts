@@ -8,6 +8,7 @@ export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: stri
 export interface InteractionPrompt { id: string; content: string; intentPlaceholder: string; confirmLabel: string; dismissLabel: string }
 export interface ResumePrompt { id: string; content: string; actionLabel: string }
 export interface AdaptationPrompt { id: string; content: string; keepLabel: string; undoLabel: string }
+export interface AccessibilityPrompt { id: string; content: string; applyLabel: string; dismissLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
 export interface SettingsValue { apiKey: string; historyContextTokens: number }
 export interface UsageBucketValue {
@@ -39,6 +40,7 @@ export interface ShellActions {
   resumePausedRun(id: string): Promise<void>;
   resolveInteractionPrompt(id: string, intent?: string): Promise<void>;
   resolveAdaptationPrompt(id: string, action: 'keep' | 'undo'): Promise<void>;
+  resolveAccessibilityPrompt(id: string, action: 'apply' | 'dismiss'): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
   refreshUsage(): Promise<void>;
@@ -73,6 +75,7 @@ export class ShellUI {
   private interactionPrompt?: InteractionPrompt;
   private resumePrompt?: ResumePrompt;
   private adaptationPrompt?: AdaptationPrompt;
+  private accessibilityPrompt?: AccessibilityPrompt;
   private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
   private modelContextTokens?: number;
   private usage: UsageValue = {
@@ -110,6 +113,7 @@ export class ShellUI {
       this.interactionPrompt = undefined;
       this.resumePrompt = undefined;
       this.adaptationPrompt = undefined;
+      this.accessibilityPrompt = undefined;
       this.appDialog = undefined;
       this.dialogError = '';
     }
@@ -135,6 +139,11 @@ export class ShellUI {
 
   setAdaptationPrompt(prompt: AdaptationPrompt | undefined): void {
     this.adaptationPrompt = prompt;
+    if (this.view === 'workspace') this.renderPanel();
+  }
+
+  setAccessibilityPrompt(prompt: AccessibilityPrompt | undefined): void {
+    this.accessibilityPrompt = prompt;
     if (this.view === 'workspace') this.renderPanel();
   }
 
@@ -429,7 +438,16 @@ export class ShellUI {
           </div>
         </div>`
       : '';
-    const prompts = `${resumePrompt}${adaptationPrompt}${interactionPrompt}`;
+    const accessibilityPrompt = this.accessibilityPrompt && !this.busy && !this.adaptationPrompt
+      ? `<div class="message assistant interaction-prompt" data-accessibility-prompt="${esc(this.accessibilityPrompt.id)}">
+          <span>${esc(this.accessibilityPrompt.content)}</span>
+          <div class="prompt-actions">
+            <button class="action primary" data-accessibility-apply type="button">${esc(this.accessibilityPrompt.applyLabel)}</button>
+            <button class="action" data-accessibility-dismiss type="button">${esc(this.accessibilityPrompt.dismissLabel)}</button>
+          </div>
+        </div>`
+      : '';
+    const prompts = `${resumePrompt}${adaptationPrompt}${accessibilityPrompt}${interactionPrompt}`;
     const messages = this.messages.length || prompts
       ? `${this.messages.map(message => `<div class="message ${message.role}">${esc(message.content)}</div>`).join('')}${prompts}`
       : `<div class="empty-chat"><i data-lucide="wand-sparkles" aria-hidden="true"></i><strong>What should we change?</strong><p>Ask for a feature, design change, fix, or anything else.</p></div>`;
@@ -472,6 +490,14 @@ export class ShellUI {
     };
     panel.querySelector<HTMLButtonElement>('[data-adaptation-keep]')?.addEventListener('click', () => resolveAdaptation('keep'));
     panel.querySelector<HTMLButtonElement>('[data-adaptation-undo]')?.addEventListener('click', () => resolveAdaptation('undo'));
+    const resolveAccessibility = (action: 'apply' | 'dismiss') => {
+      const current = this.accessibilityPrompt;
+      if (!current) return;
+      panel.querySelectorAll<HTMLButtonElement>('[data-accessibility-apply], [data-accessibility-dismiss]').forEach(button => { button.disabled = true; });
+      void this.actions.resolveAccessibilityPrompt(current.id, action);
+    };
+    panel.querySelector<HTMLButtonElement>('[data-accessibility-apply]')?.addEventListener('click', () => resolveAccessibility('apply'));
+    panel.querySelector<HTMLButtonElement>('[data-accessibility-dismiss]')?.addEventListener('click', () => resolveAccessibility('dismiss'));
     panel.querySelector<HTMLButtonElement>('[data-stop]')?.addEventListener('click', event => {
       (event.currentTarget as HTMLButtonElement).disabled = true;
       this.actions.stopAgent();
