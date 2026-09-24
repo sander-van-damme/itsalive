@@ -995,4 +995,154 @@ describe('AgentRunner lifecycle', () => {
     expect(failureAssessor).not.toHaveBeenCalled();
   });
 
+
+  it('filters deterministic technical and behavioral candidates before the coding model request', async () => {
+    const entries: HistoryEntry[] = [
+      { id: 1, appId, timestamp: 1, role: 'observation', kind: 'error', content: 'ReferenceError: timer store missing after restore' },
+      { id: 2, appId, timestamp: 2, role: 'agent', kind: 'javascript', content: 'old unrelated color setup' },
+    ];
+    const db = {
+      history: {
+        add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+        forApp: vi.fn(async () => entries),
+      },
+      behaviorEpisodes: {
+        forApp: vi.fn(async () => [{
+          id: 'episode-1',
+          appId,
+          createdAt: 1,
+          lastSeenAt: 3,
+          kind: 'preference',
+          fingerprint: 'color',
+          signal: 'Prefers bright magenta controls',
+          interactionType: 'click',
+          targetTag: 'button',
+          actionCount: 3,
+          documentChangeCount: 0,
+          frustrationSignal: false,
+          occurrences: 2,
+          retentionProbability: 0.9,
+          classificationConfidence: 0.9,
+        }]),
+      },
+    };
+    const requests: import('../src/shell/core/types').GenerateRequest[] = [];
+    const providers = { generate: vi.fn(async (request: import('../src/shell/core/types').GenerateRequest) => {
+      requests.push(structuredClone(request));
+      return { text: 'return itsalive.done("ready");' };
+    }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      }
+      return { done: true, message: 'ready' };
+    }) };
+    const contextRelevanceAssessor = vi.fn(async (state: import('../src/shell/core/context-relevance').ContextRelevanceState) => {
+      const relevant = state.candidates.find(item => item.content.includes('timer store missing'))!;
+      return {
+        selectedIds: [relevant.id],
+        omittedIds: state.candidates.filter(item => item.id !== relevant.id).map(item => item.id),
+        uncertainIds: [],
+      };
+    });
+    const onContext = vi.fn();
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId,
+      appPrompt: 'A stopwatch',
+      trigger: 'Repair the restored timer',
+      model,
+      contextRelevanceAssessor,
+      onContext,
+      budget: { emergencyTurnCeiling: 1 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
+    expect(contextRelevanceAssessor).toHaveBeenCalledTimes(1);
+    const joined = requests[0]!.messages.map(message => message.content).join('\n');
+    expect(joined).toContain('ReferenceError: timer store missing after restore');
+    expect(joined).not.toContain('Prefers bright magenta controls');
+    expect(joined).not.toContain('old unrelated color setup');
+    expect(onContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextCandidateCount: 3,
+      selectedContextEvidenceCount: 1,
+      omittedContextEvidenceCount: 2,
+      selectedBehaviorEvidenceCount: 0,
+      contextRelevanceFallback: false,
+    }));
+  });
+
+  it('falls back to the complete deterministic shortlist when relevance assessment fails', async () => {
+    const entries: HistoryEntry[] = [
+      { id: 1, appId, timestamp: 1, role: 'observation', kind: 'error', content: 'ReferenceError: timer store missing after restore' },
+    ];
+    const db = {
+      history: {
+        add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+        forApp: vi.fn(async () => entries),
+      },
+      behaviorEpisodes: {
+        forApp: vi.fn(async () => [{
+          id: 'episode-1',
+          appId,
+          createdAt: 1,
+          lastSeenAt: 2,
+          kind: 'preference',
+          fingerprint: 'compact',
+          signal: 'Prefers compact timer controls',
+          interactionType: 'click',
+          targetTag: 'button',
+          actionCount: 3,
+          documentChangeCount: 0,
+          frustrationSignal: false,
+          occurrences: 2,
+          retentionProbability: 0.9,
+          classificationConfidence: 0.9,
+        }]),
+      },
+    };
+    const requests: import('../src/shell/core/types').GenerateRequest[] = [];
+    const providers = { generate: vi.fn(async (request: import('../src/shell/core/types').GenerateRequest) => {
+      requests.push(structuredClone(request));
+      return { text: 'return itsalive.done("ready");' };
+    }) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      }
+      return { done: true, message: 'ready' };
+    }) };
+    const contextRelevanceAssessor = vi.fn(async () => { throw new Error('JEV unavailable'); });
+    const onContext = vi.fn();
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId,
+      appPrompt: 'A stopwatch',
+      trigger: 'Repair the restored timer',
+      model,
+      contextRelevanceAssessor,
+      onContext,
+      budget: { emergencyTurnCeiling: 1 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
+    const joined = requests[0]!.messages.map(message => message.content).join('\n');
+    expect(joined).toContain('ReferenceError: timer store missing after restore');
+    expect(joined).toContain('Prefers compact timer controls');
+    expect(onContext).toHaveBeenCalledWith(expect.objectContaining({
+      contextCandidateCount: 2,
+      selectedContextEvidenceCount: 2,
+      omittedContextEvidenceCount: 0,
+      selectedBehaviorEvidenceCount: 1,
+      contextRelevanceFallback: true,
+    }));
+  });
+
 });
