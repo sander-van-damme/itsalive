@@ -41,7 +41,7 @@ The `window.application` and `window.agent` globals follow the same rule. Their 
 - Coding-context budgeting that always retains the immutable system prompt, app prompt, and current technical intent while excluding raw user/assistant chat from automatic worker history.
 - OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
 - Native DOM inspection through ordinary browser APIs and execution results, plus coding-agent screenshot and curated-memory capabilities.
-- App-to-shell generation requests and explicit escalation to the external coding agent, with canonical capability metadata used for agent help.
+- App-to-shell AI text generation and bounded Jev-backed decisions, plus explicit escalation to the external coding agent, with canonical capability metadata used for agent help.
 - Tailwind's browser runtime, Feather Icons, and preloaded browser libraries for charts, visualization, 3D, diagrams, math, dates, sliders, maps, animation, CSV, fuzzy search, and code highlighting. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning; generated behavior uses ordinary browser JavaScript.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
@@ -92,13 +92,42 @@ Generated application code uses native browser APIs plus a deliberately small sh
 
 ```js
 application.store
-application.generate(prompt)
+application.ai.text(prompt)
+application.ai.choose(question, options, context?)
+application.ai.score(question, levels, context?)
+application.ai.decide(question, context?)
+application.ai.probability(question, context?)
 application.escalate(reason)
 ```
 
 `application.store` is a durable JSON-like object tree persisted atomically with the app document. Ordinary app state can use normal JavaScript property access and initialization such as `application.store.counter ??= { count: 0 }`. Larger, binary, or query-heavy data may still use native IndexedDB directly.
 
-`application.generate(prompt)` returns model-generated content to the running app. `application.escalate(reason)` instead hands a problem to the external coding agent; it is not a content-generation call and does not return the agent's work product.
+`application.ai` keeps provider/model details out of generated apps:
+
+```js
+await application.ai.text("Name this note")
+// -> "Trip ideas"
+
+await application.ai.choose(
+  "Which route?",
+  { billing: "Payments", technical: "Broken feature" },
+  ticket
+)
+// -> "billing" | null
+
+await application.ai.score("Severity?", ["Low", "Medium", "High"], report)
+// -> 1.2 | null
+
+await application.ai.decide("Is this a refund request?", message)
+// -> true | false | null
+
+await application.ai.probability("Is this a refund request?", message)
+// -> 0.93
+```
+
+`text()` uses the configured LLM text-generation path. `choose()`, `score()`, `decide()`, and `probability()` use the shell-owned Jev/Decisions integration. Choice and Score return `null` when the platform judges confidence too low; Decide returns `null` when the probability is neither clearly true nor clearly false. Generated app code should handle `null` conservatively and must not implement its own Jev confidence thresholds. The current thresholds are shell-owned policy and may be tuned without changing the public API.
+
+`application.escalate(reason)` hands a problem to the external coding agent; it is not a content-generation call and does not return the agent's work product.
 
 Coding commands also receive a small `agent` global:
 
@@ -110,7 +139,7 @@ return agent.done(message)
 
 `agent.memory()` exposes curated shell-owned context rather than raw history records. `agent.screenshot()` is best-effort visual verification, while `agent.done()` signals that the current coding task is complete. The naming is intentionally a semantic nudge: persist `application.*` behavior into the app when appropriate; use `agent.*` for coding and inspection.
 
-The shell may internally retain richer histories, behavioral summaries, logs, and diagnostics without making those internal schemas part of the generated-app API. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
+The shell may internally retain richer histories, behavioral summaries, logs, diagnostics, provider response distributions, and model metadata without making those internal schemas part of the generated-app API. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
 
 Deleting an app removes its shell-owned metadata, persistent document/store, behavioral summary, and history and then forgets the immutable UUID. Diagnostic logs may outlive app deletion for export/debugging. App-origin browser data is cleanup hygiene rather than part of deletion correctness. The shell may make a best-effort request to a protected wildcard cleanup endpoint that responds with `Clear-Site-Data: "storage", "cache"`; cleanup failure must not block deletion, and UUIDs are never reused.
 
