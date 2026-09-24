@@ -837,7 +837,7 @@ function parallelExecutor(ensured: Set<string>) {
         return { value: { html: "<div>ready</div>", buildingCount: 0, inert: false, ariaBusy: "false" } };
       }
       if (code.includes("Assigned component scope not found")) {
-        const messageMatch = code.match(/itsalive\.done\("((?:\\.|[^"])*)"\)/);
+        const messageMatch = code.match(/agent\.done\("((?:\\.|[^"])*)"\)/);
         const message = messageMatch ? JSON.parse('"' + messageMatch[1] + '"') : undefined;
         return { done: true, ...(message ? { message } : {}) };
       }
