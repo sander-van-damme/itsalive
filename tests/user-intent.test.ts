@@ -90,7 +90,7 @@ describe("user-facing intent boundary", () => {
     expect(intent.capabilityIds).toContain("ai");
     const block = technicalIntentBlock(intent);
     expect(block).toContain("application.ai.text");
-    expect(block).toContain("Write a short poem about the sea.");
+    expect(block).toContain("text: await application.ai.text('Name this note') -> 'Trip ideas'");
   });
 
   it("selects the same AI capability for bounded decisions", () => {
