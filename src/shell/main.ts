@@ -1224,8 +1224,8 @@ async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): 
   switch (message.type) {
     case 'document.request': {
       const saved = await db.documents.get(activeId);
-      const valid = saved && isAppDocumentSnapshot({ html: saved.html, scripts: (saved as { scripts?: unknown }).scripts })
-        ? { html: saved.html, scripts: saved.scripts }
+      const valid = saved && isAppDocumentSnapshot({ html: saved.html, scripts: (saved as { scripts?: unknown }).scripts, store: (saved as { store?: unknown }).store })
+        ? { html: saved.html, scripts: saved.scripts, store: saved.store }
         : undefined;
       if (saved && !valid) {
         await db.documents.delete(activeId);
