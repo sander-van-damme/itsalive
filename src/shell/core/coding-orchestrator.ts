@@ -1,4 +1,5 @@
 import { AgentRunner, type AgentContextDiagnostic, type AgentProgress, type AppExecutor, type CompletionAssessor, type FailureAssessor, type RunResult } from "./agent-runner";
+import type { ContextRelevanceAssessor } from "./context-relevance";
 import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
@@ -116,6 +117,8 @@ export interface CodingOrchestratorOptions {
   completionAssessor?: CompletionAssessor;
   /** Shell-owned semantic failure routing reused by every scoped worker. */
   failureAssessor?: FailureAssessor;
+  /** Shell-owned bounded evidence relevance filtering reused by every scoped worker. */
+  contextRelevanceAssessor?: ContextRelevanceAssessor;
 }
 
 interface WorkerRunOutcome {
@@ -488,6 +491,7 @@ export class CodingOrchestrator {
         onContext: options.onContext,
         completionAssessor: options.completionAssessor,
         failureAssessor: options.failureAssessor,
+        contextRelevanceAssessor: options.contextRelevanceAssessor,
       });
       turns = result.turns;
       runStatus = result.status;
