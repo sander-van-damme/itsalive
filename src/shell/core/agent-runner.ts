@@ -662,7 +662,7 @@ function budgetStopResult(
   return { status, message, turns };
 }
 
-const TECHNICAL_COMPLETION = /(?:\b(?:AudioContext|DOM|API|JavaScript|Alpine|Tailwind|IndexedDB|localStorage|event listener|browser API|CSS|HTML)\b|prefers-reduced-motion|confirmation toast|aria-[\w-]+|x-[\w-]+)/i;
+const TECHNICAL_COMPLETION = /(?:\b(?:AudioContext|DOM|API|JavaScript|Tailwind|IndexedDB|localStorage|event listener|browser API|CSS|HTML)\b|prefers-reduced-motion|confirmation toast|aria-[\w-]+)/i;
 
 function userFacingCompletionMessage(message: string | undefined): string | undefined {
   const normalized = message?.replace(/\s+/g, ' ').trim();
@@ -824,7 +824,7 @@ async function verifyCompletion(executor: AppExecutor, options: RunOptions, sign
       }
       if ((inspection.value.runtimeOnlyEventListenerCount ?? 0) > 0) {
         const count = inspection.value.runtimeOnlyEventListenerCount ?? 0;
-        return { ok: false, reason: `the app still depends on ${count} runtime-only event listener${count === 1 ? "" : "s"} installed by an agent command; move that behavior into Alpine directives or persisted <script> setup that runs again after restore` };
+        return { ok: false, reason: `the app still depends on ${count} runtime-only event listener${count === 1 ? "" : "s"} installed by an agent command; move that behavior into persisted <script> setup that runs again after restore` };
       }
       const tree = assessCompletionTree(inspection.value.rootHtml);
       if (!tree.ok) return tree;

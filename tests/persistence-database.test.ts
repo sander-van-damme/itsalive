@@ -9,10 +9,10 @@ import { DiagnosticLog, buildDiagnosticExport } from "../src/shell/core/diagnost
 const APP_ID = "550e8400-e29b-41d4-a716-446655440000";
 
 describe("runtime document persistence client", () => {
-  it("separates app setup from markup and hydrates Alpine only after setup is restored", async () => {
+  it("separates app setup from markup and restores scripts only after the complete DOM exists", async () => {
     document.documentElement.lang = "en";
     document.head.innerHTML = '<title>Saved app</title><script data-app-runtime src="/bootstrap.js"></script><script data-app-setup>window.__restoredSetup = true;</script>';
-    document.body.innerHTML = '<main id="itsalive-root" x-data="restoredApp()"><input value="old"><textarea>old</textarea></main>';
+    document.body.innerHTML = '<main id="itsalive-root"><input value="old"><textarea>old</textarea></main>';
     const input = document.querySelector("input")!;
     const textarea = document.querySelector("textarea")!;
     input.value = "current";
@@ -28,27 +28,27 @@ describe("runtime document persistence client", () => {
       expect.objectContaining({ placement: "head", attributes: expect.objectContaining({ "data-app-setup": "" }), content: "window.__restoredSetup = true;" }),
     ]);
 
-    delete (window as unknown as Record<string, unknown>).__restoredSetup;
     document.title = "Changed";
     document.body.replaceChildren();
-    const order: string[] = [];
-    const target = window as unknown as Record<string, unknown>;
-    target.Alpine = {
-      stopObservingMutations: () => order.push("paused"),
-      startObservingMutations: () => order.push("resumed"),
-      initTree: () => order.push(`hydrated:${String(Boolean(document.querySelector("script[data-app-setup]")))}`),
-    };
+
+    const nativeAppend = document.head.append.bind(document.head);
+    let markupReadyWhenSetupWasAppended = false;
+    const append = vi.spyOn(document.head, "append").mockImplementation((...nodes: (Node | string)[]) => {
+      if (nodes.some(node => node instanceof HTMLScriptElement && node.hasAttribute("data-app-setup"))) {
+        markupReadyWhenSetupWasAppended = Boolean(document.getElementById("itsalive-root"));
+      }
+      nativeAppend(...nodes);
+    });
 
     await restoreAppDocument(snapshot);
 
     expect(document.title).toBe("Saved app");
     expect(document.querySelector<HTMLInputElement>("input")?.value).toBe("current");
     expect(document.querySelector<HTMLTextAreaElement>("textarea")?.value).toBe("current text");
-    expect(order).toEqual(["paused", "hydrated:true", "resumed"]);
+    expect(markupReadyWhenSetupWasAppended).toBe(true);
     expect(document.querySelector("script[data-app-setup]")).not.toBeNull();
+    append.mockRestore();
     document.querySelector("script[data-app-setup]")?.remove();
-    delete target.Alpine;
-    delete target.__restoredSetup;
   });
 
   it("debounces document snapshots through the supplied shell persistence callback", async () => {

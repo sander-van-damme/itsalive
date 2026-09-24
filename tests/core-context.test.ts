@@ -25,8 +25,10 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toContain("Commands later in the same response cannot use the return value of an earlier command");
     expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
     expect(SYSTEM_PROMPT).toContain("Tailwind CSS as the default styling language");
-    expect(SYSTEM_PROMPT).toContain("Alpine.js as the default layer");
+    expect(SYSTEM_PROMPT).toContain("ordinary browser JavaScript for behavior");
     expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
+    expect(SYSTEM_PROMPT).toContain("Classic <script> elements share a global lexical environment");
+    expect(SYSTEM_PROMPT).not.toContain("Alpine");
     expect(SYSTEM_PROMPT).toContain("Chart, d3, THREE");
     expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);

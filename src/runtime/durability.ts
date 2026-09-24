@@ -31,7 +31,7 @@ function isRelevantTarget(target: EventTarget, root: HTMLElement | null): boolea
  *
  * Listeners created while a persisted <script> is executing are intentionally
  * excluded because that setup code will run again when the saved document is
- * restored. Alpine listeners are normally installed outside the direct agent
+ * restored. Persisted setup-script listeners are normally installed outside the direct agent
  * execution stack and therefore remain outside this audit as well.
  */
 export function installAgentDurabilityAudit() {

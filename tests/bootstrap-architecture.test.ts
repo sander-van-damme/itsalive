@@ -25,7 +25,6 @@ describe("wildcard bootstrap architecture", () => {
     const runtimeFiles = readdirSync(resolve(root, "src/runtime"));
     expect(runtimeFiles).toEqual(expect.arrayContaining([
       "assets.ts",
-      "components.ts",
       "interactions.ts",
       "runtime.ts",
       "screenshot.ts",

@@ -6,17 +6,6 @@ interface RuntimeAsset {
 
 const RUNTIME_ASSETS: readonly RuntimeAsset[] = [
   { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/tailwindcss-browser/4.3.3/index.global.min.js", integrity: "sha512-hULGJIctuLmo0B/LLdCfni+smSwvSag6ZyCEVnJuX5lDBuxZMhCLZQ3kgN+d0ZP4Uu/VMYDKksb7m+7YpOhwfg==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-sort/3.17.3/cdn.min.js", integrity: "sha512-uY4wLl0tvCNfl5SLwOY/sushVBCUtJLtK9pw9pB6Gbu9fV16mHlVhauwwBA/dv32T2JwiG0icWx5Z+RvmQGSUw==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-resize/3.17.3/cdn.min.js", integrity: "sha512-SeW5ctFnzlXy/1ZB75HEICF1CeO84mZhWlVdn6QHl/LfoZUkViXLETo04/ySjnvfwe2w/17wrKZVc2ijr5aB/A==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-morph/3.17.3/cdn.min.js", integrity: "sha512-rj+yRPWcuEuCRry73vqv/wk4BcxVOXxFNyZ76GisS23P+hPEkPCt8Zb7LwNTgTfMpUz/TUmj8Hs5bcZzb3vulA==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-ui/3.17.3/cdn.min.js", integrity: "sha512-F/rfKRPHlD8dOiLxv6ovtPEk/C4+8EL8EYp3J4KGFm8/MXaFmE67hf5atgPuccxsYPxnMrAGLMgfZyyL+6G2PQ==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-intersect/3.17.2/cdn.min.js", integrity: "sha512-sZJz3DGrEU2O2M4iMTS7wVrX9uPrOXQ8UdKqLZF3u61C3DACrp9wKLhAFnykQt7qV52Urttqe/3F/zDEED+lbA==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-anchor/3.17.3/cdn.min.js", integrity: "sha512-Sn0qqEbNCepyhkZ4JbSQMgj/paiX4VI3sM5AklX+Vd2oMnq6tUWJqAEZuSiBmAAEQlfeiLScnOOD9vkyJQGaow==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-mask/3.17.3/cdn.min.js", integrity: "sha512-Osj3mR6rOpAXNSsrbWGv6CDudNivg9Pt2v7847ofLrSVBsQqubOhTyeQCxDDUgV4DuWd4Uty23bMLx1T0F1XNA==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-persist/3.17.3/cdn.min.js", integrity: "sha512-0EftA6q2HbGRokc4OR5aOgw13FRGT7fqBuU+Z7maaW9irbjmjFKgoAEZRhhphloMrFWxyTbqEkBZbFrBo3QprQ==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-collapse/3.17.3/cdn.min.js", integrity: "sha512-Y/6mIZ4JIMaAGktcpAWCxuCO/CcSFIgGOU+freooFqSZ58tFsxW4JwKVShQpuisBNnr6ffzkPkZc5Q5RE/BfUg==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs-focus/3.17.2/cdn.min.js", integrity: "sha512-YtmblhbPJNYA+7QBux7uG4YqchgsLoYPrN4enqsglXG6Ig/NS+tanv7a5w8w+u/E8banb7f0aFrcDFrgnpFtDg==" },
-  { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/alpinejs/3.17.3/cdn.min.js", integrity: "sha512-OlSWja52cphuvz1/smY1YEiNqbBZ7AqU+w7xqX3e/iIpQNgTzTrc8JdivanN43cnoJEkyqnJ76azC48MOAzgXw==" },
   { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/feather-icons/4.29.2/feather.min.js", integrity: "sha512-zMm7+ZQ8AZr1r3W8Z8lDATkH05QG5Gm2xc6MlsCdBz9l6oE8Y7IXByMgSm/rdRQrhuHt99HAYfMljBOEZ68q5A==" },
   { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.5.1/chart.umd.min.js", integrity: "sha512-WoViKhKD4qI2WruSZqv9+kvM4WfFhUMQCLN4QlDTt5aU56fLQy2gYoxWIqlEnXqJy/+Ac5q/hk1oWfqnMDhwMA==" },
   { kind: "script", url: "https://cdnjs.cloudflare.com/ajax/libs/d3/7.9.0/d3.min.js", integrity: "sha512-vc58qvvBdrDR4etbxMdlTt4GBQk1qjvyORR2nrsPsFPyrs+/u5c3+1Ct6upOgdZoIl7eq6k3a1UPDSNAQi/32A==" },
@@ -39,7 +28,6 @@ const RUNTIME_ASSETS: readonly RuntimeAsset[] = [
 ] as const;
 
 export const BUILDING_STYLE = `
-[x-cloak] { display: none !important; }
 :is(#itsalive-root[data-itsalive-building], #itsalive-root [data-itsalive-building]) {
   position: relative;
   isolation: isolate;

@@ -46,10 +46,10 @@ APP BOUNDARY
 Keep all visible UI inside the existing #itsalive-root. Do not replace that root or touch shell/runtime-owned elements. Treat the app as a persistent drawing board, not a repository.
 
 DURABILITY
-Persist behavior in app-authored setup or Alpine state/directives; transient listeners, closures, timers, and object references may disappear on restore. Setup must be idempotent. Create state/setup before dependent reactive markup when practical.
+Persist durable state in application.store and behavior in app-authored setup scripts; transient listeners, closures, timers, and object references disappear on restore. Setup must be idempotent and independent classic scripts should scope top-level let/const bindings with a block or IIFE.
 
 IMPLEMENTATION
-Prefer semantic HTML, Tailwind, Alpine for ordinary local interaction, and native DOM APIs for focused inspection/mutation. Make targeted changes instead of regenerating the whole document. Keep responsive behavior and existing user data unless the task says otherwise.
+Prefer semantic HTML, Tailwind, vanilla JavaScript, and native DOM APIs. Make targeted changes instead of regenerating the whole document. Keep responsive behavior and existing user data unless the task says otherwise.
 
 PROGRESS
 For substantial unfinished regions use data-itsalive-building + inert + aria-busy. Remove them only when the visible controls work. Verify the requested acceptance criteria before done().
@@ -65,9 +65,9 @@ No prose/fences. Commands self-contained AsyncFunction calls. Inspect at end of 
 
 One app. Existing #itsalive-root = only visible root. Never replace root/touch shell runtime. Persistent drawing board.
 
-Durability: transient listeners/closures/timers die on restore. Use Alpine/app setup; idempotent. Setup/state before dependent bindings when practical.
+Durability: transient listeners/closures/timers die on restore. Use application.store + persisted app setup; idempotent. Scope independent classic-script bindings with block/IIFE.
 
-Build: semantic HTML; Tailwind; Alpine for local UI; native DOM for focused inspect/edit. Targeted edits, preserve unrelated UI/data, responsive.
+Build: semantic HTML; Tailwind; vanilla JS + native DOM. Targeted edits, preserve unrelated UI/data, responsive.
 
 Unfinished substantial region: data-itsalive-building + inert + aria-busy. Remove only when working. Technical intent authoritative. Raw chat absent. Use only supplied platform APIs.`;
 
@@ -131,7 +131,7 @@ export const PROMPT_BENCHMARK_SCENARIOS: readonly PromptBenchmarkScenario[] = Ob
     history: technicalHistory(
       "Created semantic page scaffold with exercise, fretboard, and progress regions.",
       "Observed all three regions; fretboard still has no exercise state.",
-      "Added shared Alpine exercise state and wired the exercise controls.",
+      "Added shared durable exercise state and wired the exercise controls.",
       "Observed progress region rendering but missing completion update.",
     ),
   },
@@ -145,7 +145,7 @@ export const PROMPT_BENCHMARK_SCENARIOS: readonly PromptBenchmarkScenario[] = Ob
       "CONSTRAINTS",
       "- Preserve elapsed time and existing laps.",
     ].join("\n"),
-    observation: "ReferenceError: stopwatchApp is not defined while Alpine evaluates x-data.",
+    observation: "ReferenceError: stopwatchApp is not defined while restored setup initializes.",
     history: technicalHistory(
       "return document.querySelector('#itsalive-root');",
       "The root contains stopwatch bindings but setup state is missing.",
@@ -164,7 +164,7 @@ export const PROMPT_BENCHMARK_SCENARIOS: readonly PromptBenchmarkScenario[] = Ob
       "- Preserve the current visual hierarchy.",
     ].join("\n"),
     history: technicalHistory(
-      "Existing app has book cards and a shared Alpine store.",
+      "Existing app has book cards and a shared application store.",
       "Latest verification confirms note editing and progress controls work.",
     ),
   },
