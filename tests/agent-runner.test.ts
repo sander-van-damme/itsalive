@@ -91,8 +91,8 @@ describe('AgentRunner lifecycle', () => {
         selectedHistoryTokens: expect.any(Number),
         estimatedInputTokens: expect.any(Number),
         includedHistoryCount: 1,
-        // The persisted user trigger is intentionally filtered out of coding history.
-        omittedHistoryCount: 1,
+        // Only deterministic technical candidates participate in relevance accounting.
+        omittedHistoryCount: 0,
         sources: {
           system: expect.any(Number),
           mandatory: expect.any(Number),
@@ -107,7 +107,7 @@ describe('AgentRunner lifecycle', () => {
       maxContextTokens: model.maxContextTokens,
       configuredHistoryTokens: model.historyContextTokens,
       includedHistoryCount: 1,
-      omittedHistoryCount: 1,
+      omittedHistoryCount: 0,
     });
   });
 
