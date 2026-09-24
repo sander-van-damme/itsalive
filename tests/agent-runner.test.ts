@@ -131,7 +131,7 @@ describe('AgentRunner lifecycle', () => {
         onText(first.slice('/* itsalive:com'.length));
         await firstExecuted;
         events.push('emit:second');
-        onText('/* itsalive:command */\nreturn itsalive.');
+        onText('/* itsalive:command */\nreturn agent.');
         onText('done("ready");\n/* itsalive:end */');
         return { text: first + second };
       }),
