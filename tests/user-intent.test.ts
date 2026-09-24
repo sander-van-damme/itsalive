@@ -98,6 +98,6 @@ describe("user-facing intent boundary", () => {
     const selected = platformCapabilityHelp(["generate"]);
     expect(index).toContain("await application.generate(prompt)");
     expect(selected).toContain("await application.generate(prompt)");
-    expect(selected).toContain("generated or transformed content");
+    expect(selected).toContain("Generate or transform content");
   });
 });
