@@ -1,5 +1,6 @@
 import { AgentRunner, type AgentContextDiagnostic, type AgentProgress, type AppExecutor, type CompletionAssessor, type FailureAssessor, type RunResult } from "./agent-runner";
 import type { ContextRelevanceAssessor } from "./context-relevance";
+import { normalizeAlivePolicyProposal, type AlivePolicy, type AlivePolicyProposal } from "./alive-policy";
 import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
@@ -38,6 +39,7 @@ export interface CodingWorkerTask {
 export interface CodingManagerPlan {
   shared: CodingManagerSharedContracts;
   tasks: CodingWorkerTask[];
+  alivePolicy?: AlivePolicyProposal;
 }
 
 export interface ManagerVerification {
@@ -119,6 +121,10 @@ export interface CodingOrchestratorOptions {
   failureAssessor?: FailureAssessor;
   /** Shell-owned bounded evidence relevance filtering reused by every scoped worker. */
   contextRelevanceAssessor?: ContextRelevanceAssessor;
+  /** Current shell-owned app policy supplied to the manager for controlled revision. */
+  alivePolicy?: AlivePolicy;
+  /** Called only after successful integration verification. */
+  onAlivePolicyProposal?: (proposal: AlivePolicyProposal) => Promise<void>;
 }
 
 interface WorkerRunOutcome {
@@ -135,7 +141,7 @@ const MANAGER_PLAN_SYSTEM = [
   "Plan implementation; do not write DOM mutation code.",
   "",
   "Return JSON only:",
-  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
+  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"]},\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
   "",
   "Rules:",
   "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
@@ -151,7 +157,11 @@ const MANAGER_PLAN_SYSTEM = [
   "- component-worker is the default. Use repair-worker only when the task is primarily diagnosis/repair.",
   "- capabilityIds may contain only platform capability ids relevant to that worker.",
   "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
-  "- The manager owns decomposition, shared contracts, ordering and final integration verification."
+  "- The manager owns decomposition, shared contracts, ordering and final integration verification.",
+  "- alivePolicy is declarative app-specific context, never executable code and never permission for silent mutation.",
+  "- Use stable ids/exact semantic target hints for app-specific meaningful/repeatable interactions; do not encode generic shell heuristics.",
+  "- safeReactions must describe only reversible suggestions/highlights/existing actions. User confirmation and shell invariants remain authoritative.",
+  "- Preserve or refine CURRENT ALIVE POLICY when it still matches the resulting app; update it when structural/semantic targets change."
 ].join("\n");
 
 const WORKER_SYSTEM = [
@@ -400,6 +410,10 @@ export class CodingOrchestrator {
       const verification = parseManagerVerification(verified.text);
       const hasBlockedWorker = handoffs.some(handoff => handoff.status !== "done");
       if (verification.ok && !hasBlockedWorker) {
+        if (plan.alivePolicy && options.onAlivePolicyProposal) {
+          try { await options.onAlivePolicyProposal(plan.alivePolicy); }
+          catch (error) { console.warn("Alive policy proposal was not activated", error); }
+        }
         return {
           status: "done",
           message: verification.summary || "Done — it’s ready.",
@@ -686,6 +700,7 @@ function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown):
   return [
     "APP PURPOSE\n" + options.appPrompt.trim(),
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
+    "CURRENT ALIVE POLICY\n" + JSON.stringify(options.alivePolicy ?? null),
     "APP OUTLINE\n" + JSON.stringify(outline),
   ].join("\n\n");
 }
@@ -816,7 +831,8 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
       ...(budget ? { budget } : {}),
     };
   });
-  return { shared, tasks };
+  const alivePolicy = normalizeAlivePolicyProposal(record.alivePolicy);
+  return { shared, tasks, ...(alivePolicy ? { alivePolicy } : {}) };
 }
 
 export function parseManagerVerification(raw: string): ManagerVerification {
