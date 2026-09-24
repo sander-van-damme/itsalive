@@ -9,7 +9,7 @@ function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
-    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
+    undoAdaptation: vi.fn().mockResolvedValue(undefined), resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     refreshUsage: vi.fn().mockResolvedValue(undefined), renameApp: vi.fn().mockResolvedValue(undefined),
     checkDiagnostics: vi.fn().mockResolvedValue(12), exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
@@ -283,6 +283,23 @@ describe('ShellUI workspace', () => {
     document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
     expect(document.querySelector('[data-shell-dialog]')).toBeNull();
     await vi.waitFor(() => expect(document.activeElement).toBe(document.querySelector('[data-app-menu]')));
+  });
+
+  it('offers a direct undo action for a reversible adaptation', async () => {
+    const { ui, callbacks } = mounted();
+    ui.setAdaptationPrompt({
+      id: 'adaptation-1',
+      content: 'I applied the confirmed adaptation. You can undo it if it did not help.',
+      undoLabel: 'Undo adaptation',
+    });
+
+    const prompt = document.querySelector('[data-adaptation-prompt="adaptation-1"]');
+    expect(prompt?.textContent).toContain('confirmed adaptation');
+    const undo = document.querySelector<HTMLButtonElement>('[data-adaptation-undo]')!;
+    expect(undo.textContent).toContain('Undo adaptation');
+    undo.click();
+
+    await vi.waitFor(() => expect(callbacks.undoAdaptation).toHaveBeenCalledWith('adaptation-1'));
   });
 
   it('requires clarification text before submitting interaction feedback', () => {
