@@ -3,14 +3,15 @@ import { createIcons, icons } from 'lucide';
 declare const __ITSALIVE_COMMIT__: string;
 const BUILD_COMMIT = typeof __ITSALIVE_COMMIT__ === 'string' && __ITSALIVE_COMMIT__.trim() ? __ITSALIVE_COMMIT__.trim() : 'development';
 
-export interface AppSummary { id: string; name: string }
+export interface AppSummary { id: string; name: string; crossAppPreferencesIsolated?: boolean }
+export interface PortablePreferenceView { id: string; label: string; source: string; enabled: boolean }
 export interface ChatLine { role: 'user' | 'assistant' | 'system'; content: string }
 export interface InteractionPrompt { id: string; content: string; intentPlaceholder: string; confirmLabel: string; dismissLabel: string }
 export interface ResumePrompt { id: string; content: string; actionLabel: string }
 export interface AdaptationPrompt { id: string; content: string; keepLabel: string; undoLabel: string }
 export interface AccessibilityPrompt { id: string; content: string; applyLabel: string; dismissLabel: string }
 export const DEFAULT_HISTORY_CONTEXT_TOKENS = 12_000;
-export interface SettingsValue { apiKey: string; historyContextTokens: number }
+export interface SettingsValue { apiKey: string; historyContextTokens: number; crossAppPreferencesEnabled: boolean }
 export interface UsageBucketValue {
   requests: number;
   inputTokens: number;
@@ -41,6 +42,8 @@ export interface ShellActions {
   resolveInteractionPrompt(id: string, intent?: string): Promise<void>;
   resolveAdaptationPrompt(id: string, action: 'keep' | 'undo'): Promise<void>;
   resolveAccessibilityPrompt(id: string, action: 'apply' | 'dismiss'): Promise<void>;
+  togglePortablePreference(id: string, enabled: boolean): Promise<void>;
+  setActiveAppCrossAppIsolation(isolated: boolean): Promise<void>;
   renameApp(name: string): Promise<void>;
   saveSettings(value: SettingsValue): Promise<void>;
   refreshUsage(): Promise<void>;
@@ -76,7 +79,8 @@ export class ShellUI {
   private resumePrompt?: ResumePrompt;
   private adaptationPrompt?: AdaptationPrompt;
   private accessibilityPrompt?: AccessibilityPrompt;
-  private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
+  private settings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS, crossAppPreferencesEnabled: false };
+  private portablePreferences: PortablePreferenceView[] = [];
   private modelContextTokens?: number;
   private usage: UsageValue = {
     llm: { requests: 0, inputTokens: 0, outputTokens: 0, costComplete: true },
@@ -148,6 +152,11 @@ export class ShellUI {
   }
 
   setSettings(settings: Partial<SettingsValue>): void { this.settings = { ...this.settings, ...settings }; }
+
+  setPortablePreferences(preferences: PortablePreferenceView[]): void {
+    this.portablePreferences = preferences.map(item => ({ ...item }));
+    if (this.view === 'settings') this.renderRail();
+  }
   setModelContextCapacity(tokens: number | undefined): void {
     this.modelContextTokens = tokens;
     const node = this.mount.querySelector<HTMLElement>('[data-model-context]');
@@ -560,6 +569,18 @@ export class ShellUI {
           <p>Use this while testing to vary how much prior shell history can be sent on each agent turn.</p>
           <div class="field"><label for="historyContextTokens">History budget (tokens)</label><input id="historyContextTokens" type="number" min="0" step="1000" required value="${this.settings.historyContextTokens}"></div>
           <p class="security-note">This budget applies only to prior history. The system prompt, app prompt, current request and latest observations are handled separately. The live model context capacity remains the hard safety ceiling.</p>
+        </section>
+        <section class="settings-section" aria-labelledby="portable-preferences-heading">
+          <h2 id="portable-preferences-heading">Cross-app preferences <span class="beta-badge">Experiment</span></h2>
+          <p>Off by default. When enabled, only a small allowlist of portable UI preferences may be reused across apps. Raw app history is never transferred.</p>
+          <label class="field checkbox-field" for="crossAppPreferencesEnabled"><input id="crossAppPreferencesEnabled" type="checkbox" ${this.settings.crossAppPreferencesEnabled ? 'checked' : ''}> Use portable preferences across apps</label>
+          ${this.active ? `<label class="field checkbox-field" for="crossAppIsolation"><input id="crossAppIsolation" data-cross-app-isolation type="checkbox" ${this.active.crossAppPreferencesIsolated ? 'checked' : ''}> Keep ${esc(this.active.name)} isolated from cross-app preferences</label>` : ''}
+          <div data-portable-preference-list>
+            ${this.portablePreferences.length
+              ? this.portablePreferences.map(item => `<div class="preference-row" data-portable-preference="${esc(item.id)}"><div><strong>${esc(item.label)}</strong><p class="security-note">${esc(item.source)}</p></div><button class="action" data-toggle-portable-preference="${esc(item.id)}" data-enabled="${item.enabled}" type="button">${item.enabled ? 'Disable' : 'Enable'}</button></div>`).join('')
+              : '<p class="security-note">No portable preferences have been learned yet.</p>'}
+          </div>
+          <p class="security-note">Only reduced motion, layout density, keyboard-first interaction, explanation detail, and proactive-suggestion preferences are eligible.</p>
           <button class="action primary full-width" type="submit">Save</button><div class="settings-result" data-result role="status"></div>
         </section>
         <section class="settings-section build-info"><h2>Build</h2><p>Commit <code data-build-commit>${esc(BUILD_COMMIT)}</code></p></section>
@@ -575,6 +596,16 @@ export class ShellUI {
     panel.querySelector<HTMLButtonElement>('[data-close-settings]')!.onclick = () => { this.view = this.active ? 'workspace' : 'launcher'; this.renderRail(); };
     panel.querySelector<HTMLButtonElement>('[data-check-diagnostics]')!.onclick = () => void this.handleCheckDiagnostics(panel);
     panel.querySelector<HTMLButtonElement>('[data-export]')!.onclick = () => void this.handleExportLogs(panel);
+    panel.querySelector<HTMLInputElement>('[data-cross-app-isolation]')?.addEventListener('change', event => {
+      void this.actions.setActiveAppCrossAppIsolation((event.currentTarget as HTMLInputElement).checked);
+    });
+    panel.querySelectorAll<HTMLButtonElement>('[data-toggle-portable-preference]').forEach(button => {
+      button.addEventListener('click', () => {
+        const id = button.dataset.togglePortablePreference;
+        if (!id) return;
+        void this.actions.togglePortablePreference(id, button.dataset.enabled !== 'true');
+      });
+    });
     panel.querySelector<HTMLFormElement>('[data-settings-form]')!.onsubmit = event => { event.preventDefault(); void this.handleSaveSettings(panel); };
   }
 
@@ -618,6 +649,7 @@ export class ShellUI {
     const value: SettingsValue = {
       apiKey: panel.querySelector<HTMLInputElement>('#apiKey')!.value.trim(),
       historyContextTokens: Number.isFinite(historyContextTokens) ? Math.max(0, Math.floor(historyContextTokens)) : DEFAULT_HISTORY_CONTEXT_TOKENS,
+      crossAppPreferencesEnabled: Boolean(panel.querySelector<HTMLInputElement>('#crossAppPreferencesEnabled')?.checked),
     };
     try {
       await this.actions.saveSettings(value);
