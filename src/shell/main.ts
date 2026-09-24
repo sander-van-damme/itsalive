@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, technicalIntentBlock, type AgentProfileId, type AppRecord, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -459,6 +459,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       },
       completionAssessor: (state, signal) => assessCompletionWithJev(app.id, state, signal),
       failureAssessor: (state, signal) => assessFailureWithJev(app.id, state, signal),
+      contextRelevanceAssessor: (state, signal) => assessContextRelevanceWithJev(app.id, state, signal),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
       workerTurns: result.workerTurns,
@@ -604,6 +605,42 @@ async function assessFailureWithJev(
     repairBand: decision.repairBand,
   }, appId);
   return { action: decision.action, reason: decision.reason, failureClass: decision.failureClass };
+}
+
+async function assessContextRelevanceWithJev(
+  appId: string,
+  state: import('./core').ContextRelevanceState,
+  signal: AbortSignal,
+): Promise<import('./core').ContextRelevanceDecision> {
+  if (!state.candidates.length) return { selectedIds: [], omittedIds: [], uncertainIds: [] };
+  const key = credential();
+  if (!key) throw new Error('OpenRouter is not configured');
+  const result = await new OpenRouterJevAdapter().evaluate({
+    state,
+    questions: contextRelevanceQuestions(state.candidates),
+    signal,
+  }, key);
+  sessionUsage.recordJevDecision(result.usage);
+  syncUsage();
+  const decision = decideContextRelevance(result, state.candidates);
+  await log('info', 'jev', 'Context relevance decision', {
+    ...compactJevDecisionTelemetry({
+      decisionKind: 'context-relevance',
+      questionSetVersion: JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION,
+      result,
+      policy: DEFAULT_CONTEXT_RELEVANCE_POLICY,
+      action: 'filter',
+    }),
+    candidateCount: state.candidates.length,
+    technicalCandidates: state.candidates.filter(item => item.source === 'technical-history').length,
+    behavioralCandidates: state.candidates.filter(item => item.source === 'behavior-episode').length,
+    selectedCount: decision.selectedIds.length,
+    omittedCount: decision.omittedIds.length,
+    uncertainCount: decision.uncertainIds.length,
+    selectedIds: decision.selectedIds,
+    omittedIds: decision.omittedIds,
+  }, appId);
+  return decision;
 }
 
 async function handleRuntimeMessage(message: BridgeMessage<AppToShellPayload>): Promise<void> {
