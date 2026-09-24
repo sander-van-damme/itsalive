@@ -16,6 +16,7 @@ describe("coding manager and scoped workers", () => {
       shared: {
         design: ["Use one compact card language."],
         state: ["Shared timer state uses application.store."],
+        stores: ["sharedTimer"],
       },
       tasks: [
         {
@@ -26,6 +27,8 @@ describe("coding manager and scoped workers", () => {
           dependencies: [],
           capabilityIds: [],
           profile: "component-worker",
+          idPrefix: "timer-controls-",
+          storeNamespace: "timerControls",
         },
         {
           id: "laps",
@@ -35,15 +38,21 @@ describe("coding manager and scoped workers", () => {
           dependencies: ["controls"],
           capabilityIds: [],
           profile: "component-worker",
+          idPrefix: "lap-list-",
+          storeNamespace: "lapList",
         },
       ],
     }));
     expect(plan.tasks).toHaveLength(2);
     expect(plan.shared.ref).toBe("shared-v1");
+    expect(plan.shared.stores).toEqual(["sharedTimer"]);
+    expect(plan.tasks[0]).toMatchObject({ idPrefix: "timer-controls-", storeNamespace: "timerControls" });
     expect(plan.tasks[1]).toMatchObject({
       scope: "#lap-list",
       dependencies: ["controls"],
       sharedContractRef: "shared-v1",
+      idPrefix: "lap-list-",
+      storeNamespace: "lapList",
       parallel: false,
     });
 
@@ -68,6 +77,14 @@ describe("coding manager and scoped workers", () => {
         },
       ],
     }))).toThrow(/not earlier/);
+
+    expect(() => parseCodingManagerPlan(JSON.stringify({
+      shared: { design: [], state: [], stores: [] },
+      tasks: [
+        { id: "left", goal: "Left", scope: "#left", acceptanceCriteria: [], dependencies: [], capabilityIds: [], storeNamespace: "same" },
+        { id: "right", goal: "Right", scope: "#right", acceptanceCriteria: [], dependencies: [], capabilityIds: [], storeNamespace: "same" },
+      ],
+    }))).toThrow(/already owned/);
   });
 
   it("parses manager integration verification separately from worker results", () => {
@@ -258,7 +275,11 @@ describe("coding manager and scoped workers", () => {
     const secondContext = workerRequests[1]!.messages.map(message => message.content).join("\n");
 
     expect(firstContext).toContain("ASSIGNED SCOPE\n#timer-controls");
+    expect(firstContext).toContain("DOM ID PREFIX\ntimer-controls-");
+    expect(firstContext).toContain("STORE NAMESPACE\ntimer_controls");
     expect(secondContext).toContain("ASSIGNED SCOPE\n#lap-list");
+    expect(secondContext).toContain("DOM ID PREFIX\nlap-list-");
+    expect(secondContext).toContain("STORE NAMESPACE\nlap_list");
     expect(secondContext).toContain("Timer controls built");
     expect(secondContext).not.toContain("SECRET_WORKER_A_TRANSCRIPT");
     expect(secondContext).not.toContain("const workerSecret");
@@ -303,22 +324,22 @@ describe("coding manager and scoped workers", () => {
     const bothStartedPromise = new Promise<void>(resolve => { bothStarted = resolve; });
 
     const plan = {
-      shared: { ref: "shared-v2", design: ["Same card language"], state: ["Read shared state; do not rewrite schema"] },
+      shared: { ref: "shared-v2", design: ["Same card language"], state: ["Read shared state; do not rewrite schema"], stores: ["sharedApp"] },
       tasks: [
         {
           id: "a", goal: "Build A", scope: "#component-a", acceptanceCriteria: ["A ready"],
           dependencies: [], capabilityIds: [], profile: "component-worker",
-          sharedContractRef: "shared-v2", parallel: true,
+          sharedContractRef: "shared-v2", idPrefix: "a-", storeNamespace: "componentA", parallel: true,
         },
         {
           id: "b", goal: "Build B", scope: "#component-b", acceptanceCriteria: ["B ready"],
           dependencies: [], capabilityIds: [], profile: "component-worker",
-          sharedContractRef: "shared-v2", parallel: true,
+          sharedContractRef: "shared-v2", idPrefix: "b-", storeNamespace: "componentB", parallel: true,
         },
         {
           id: "c", goal: "Integrate C", scope: "#component-c", acceptanceCriteria: ["C ready"],
           dependencies: ["a", "b"], capabilityIds: [], profile: "component-worker",
-          sharedContractRef: "shared-v2", parallel: true,
+          sharedContractRef: "shared-v2", idPrefix: "c-", storeNamespace: "componentC", parallel: true,
         },
       ],
     };
@@ -391,6 +412,16 @@ describe("coding manager and scoped workers", () => {
     expect(Math.max(a.startedAt, b.startedAt)).toBeLessThanOrEqual(Math.min(a.endedAt, b.endedAt));
     expect(c.startedAt).toBeGreaterThanOrEqual(Math.max(a.endedAt, b.endedAt));
 
+    const aRequest = requests.find(request => request.trace?.scope === "#component-a")!;
+    const bRequest = requests.find(request => request.trace?.scope === "#component-b")!;
+    const aContext = aRequest.messages.map(message => message.content).join("\n");
+    const bContext = bRequest.messages.map(message => message.content).join("\n");
+    expect(aContext).toContain("DOM ID PREFIX\na-");
+    expect(aContext).toContain("STORE NAMESPACE\ncomponentA");
+    expect(aContext).toContain("SHARED STORE NAMESPACES\n- sharedApp");
+    expect(bContext).toContain("DOM ID PREFIX\nb-");
+    expect(bContext).toContain("STORE NAMESPACE\ncomponentB");
+    expect(bContext).toContain("SHARED STORE NAMESPACES\n- sharedApp");
     const cRequest = requests.find(request => request.trace?.scope === "#component-c")!;
     const cContext = cRequest.messages.map(message => message.content).join("\n");
     expect(cContext).toContain("A built");
