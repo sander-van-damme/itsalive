@@ -231,7 +231,7 @@ describe("injected app runtime namespace", () => {
     const store = window.application.store as Record<string, unknown>;
     store.tasks = [];
     (store.tasks as Array<{ done: boolean }>).push({ done: false });
-    (store.tasks as Array<{ done: boolean }>)[0].done = true;
+    (store.tasks as Array<{ done: boolean }>).at(0)!.done = true;
     delete store.tasks;
     expect(state.scheduleSave).toHaveBeenCalled();
   });
