@@ -556,6 +556,103 @@ describe("coding manager and scoped workers", () => {
     expect(result.handoffs).toHaveLength(2);
   });
 
+
+  it("propagates clarification-needed from a worker without final verification", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [] },
+      tasks: [
+        {
+          id: "ambiguous",
+          goal: "Implement the ambiguous control",
+          scope: "#ambiguous",
+          acceptanceCriteria: ["Behavior matches user intent"],
+          dependencies: [],
+          capabilityIds: [],
+          profile: "component-worker",
+          sharedContractRef: "shared-v1",
+          parallel: false,
+        },
+        {
+          id: "dependent",
+          goal: "Build dependent output",
+          scope: "#dependent",
+          acceptanceCriteria: ["Dependent output works"],
+          dependencies: ["ambiguous"],
+          capabilityIds: [],
+          profile: "component-worker",
+          sharedContractRef: "shared-v1",
+          parallel: false,
+        },
+      ],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          throw new Error("final verification must not run after clarification routing");
+        }
+        return { text: "return component.missingMethod();", usage: { cost: 0 } };
+      }),
+    };
+    const ensured = new Set<string>();
+    const executor = {
+      execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+        if (code.includes("const selectors = ") && code.includes("const overlaps = []")) return { value: [] };
+        if (code.includes("childCount: root.children.length")) {
+          return {
+            value: {
+              exists: true,
+              childCount: ensured.size,
+              children: [...ensured].map(id => ({ tag: "section", id, component: id, building: false, textPreview: id })),
+            },
+          };
+        }
+        if (code.includes('component.setAttribute("data-itsalive-build-owner"') || code.includes('component.removeAttribute("data-itsalive-build-owner"')) {
+          const match = code.match(/document\.getElementById\("([^"]+)"\)/);
+          if (match) ensured.add(match[1]!);
+          return { value: { ok: true } };
+        }
+        if (code.includes("Assigned component scope not found")) {
+          return { error: { message: "ambiguous runtime behavior cannot be inferred" } };
+        }
+        throw new Error("Unexpected executor command: " + code.slice(0, 160));
+      }),
+    };
+    const failureAssessor = vi.fn(async () => ({
+      action: "clarify" as const,
+      reason: "user-clarification-needed",
+      failureClass: "user_clarification",
+    }));
+
+    vi.spyOn(console, "groupCollapsed").mockImplementation(() => undefined);
+    vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, executor).run({
+      appId,
+      appPrompt: "An app with an ambiguous interaction.",
+      technicalIntent: "Implement the requested interaction.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+      failureAssessor,
+    });
+
+    expect(result).toMatchObject({
+      status: "clarification-needed",
+      workerTurns: 1,
+      handoffs: [
+        expect.objectContaining({ status: "blocked", scope: "#ambiguous" }),
+        expect.objectContaining({ status: "blocked", scope: "#dependent" }),
+      ],
+    });
+    expect(failureAssessor).toHaveBeenCalledTimes(1);
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+    expect(providers.generate.mock.calls.some(([request]) => request.purpose === "coding manager integration verification")).toBe(false);
+  });
+
 function managerTrace() {
   return {
     runId: "manager-run",
