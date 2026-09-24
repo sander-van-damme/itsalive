@@ -9,7 +9,7 @@ function actions(): ShellActions {
   return {
     createApp: vi.fn().mockResolvedValue(undefined), selectApp: vi.fn().mockResolvedValue(undefined), deleteApp: vi.fn().mockResolvedValue(undefined),
     sendMessage: vi.fn().mockResolvedValue(undefined), stopAgent: vi.fn(), resumePausedRun: vi.fn().mockResolvedValue(undefined),
-    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), resolveAdaptationPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
+    resolveInteractionPrompt: vi.fn().mockResolvedValue(undefined), resolveAdaptationPrompt: vi.fn().mockResolvedValue(undefined), resolveAccessibilityPrompt: vi.fn().mockResolvedValue(undefined), saveSettings: vi.fn().mockResolvedValue(undefined),
     refreshUsage: vi.fn().mockResolvedValue(undefined), renameApp: vi.fn().mockResolvedValue(undefined),
     checkDiagnostics: vi.fn().mockResolvedValue(12), exportLogs: vi.fn().mockResolvedValue(undefined), reloadApp: vi.fn(),
   };
@@ -26,6 +26,49 @@ describe('ShellUI workspace', () => {
     if (selected) ui.mountFrame(frame);
     return { ui, frame, callbacks };
   }
+
+  it('offers a concrete accessibility adjustment with Apply and Not now', async () => {
+    const { ui, callbacks } = mounted();
+    ui.setAccessibilityPrompt({
+      id: 'a11y-1',
+      content: 'Keyboard activation on “Save” is not producing a result. Make it keyboard-accessible?',
+      applyLabel: 'Improve keyboard access',
+      dismissLabel: 'Not now',
+    });
+
+    expect(document.querySelector('[data-accessibility-prompt]')?.textContent).toContain('keyboard-accessible');
+    document.querySelector<HTMLButtonElement>('[data-accessibility-apply]')!.click();
+    await vi.waitFor(() => expect(callbacks.resolveAccessibilityPrompt).toHaveBeenCalledWith('a11y-1', 'apply'));
+
+    ui.setAccessibilityPrompt({
+      id: 'a11y-2',
+      content: 'Add clearer success/error feedback?',
+      applyLabel: 'Improve feedback',
+      dismissLabel: 'Not now',
+    });
+    document.querySelector<HTMLButtonElement>('[data-accessibility-dismiss]')!.click();
+    await vi.waitFor(() => expect(callbacks.resolveAccessibilityPrompt).toHaveBeenCalledWith('a11y-2', 'dismiss'));
+  });
+
+  it('does not stack an accessibility proposal above an unresolved reversible adaptation', () => {
+    const { ui } = mounted();
+    ui.setAccessibilityPrompt({
+      id: 'a11y-1',
+      content: 'Improve keyboard access?',
+      applyLabel: 'Improve keyboard access',
+      dismissLabel: 'Not now',
+    });
+    expect(document.querySelector('[data-accessibility-prompt]')).not.toBeNull();
+
+    ui.setAdaptationPrompt({
+      id: 'adapt-1',
+      content: 'Keep this change?',
+      keepLabel: 'Keep change',
+      undoLabel: 'Undo change',
+    });
+    expect(document.querySelector('[data-adaptation-prompt]')).not.toBeNull();
+    expect(document.querySelector('[data-accessibility-prompt]')).toBeNull();
+  });
 
   it('shows deterministic Keep and Undo actions for a reversible adaptation', async () => {
     const { ui, callbacks } = mounted();
