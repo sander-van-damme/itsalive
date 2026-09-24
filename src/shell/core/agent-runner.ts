@@ -662,7 +662,7 @@ function budgetStopResult(
   return { status, message, turns };
 }
 
-const TECHNICAL_COMPLETION = /(?:\b(?:AudioContext|DOM|API|JavaScript|Tailwind|IndexedDB|localStorage|event listener|browser API|CSS|HTML)\b|prefers-reduced-motion|confirmation toast|aria-[\w-]+ )/i;
+const TECHNICAL_COMPLETION = /(?:\b(?:AudioContext|DOM|API|JavaScript|Tailwind|IndexedDB|localStorage|event listener|browser API|CSS|HTML)\b|prefers-reduced-motion|confirmation toast|aria-[\w-]+)/i;
 
 function userFacingCompletionMessage(message: string | undefined): string | undefined {
   const normalized = message?.replace(/\s+/g, ' ').trim();
