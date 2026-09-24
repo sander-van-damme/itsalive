@@ -6,7 +6,7 @@ The registry lives in `src/shell/core/agent-profiles.ts`.
 
 ## Why profiles exist
 
-Different LLM jobs have different needs. A user-facing intent classifier should not inherit a coding transcript. A component worker should not receive the manager's entire history. A runtime `itsalive.llm.ask()` call should be tiny. Model and compute choices should therefore follow the role rather than a global model configuration.
+Different LLM jobs have different needs. A user-facing intent classifier should not inherit a coding transcript. A component worker should not receive the manager's entire history. A runtime `application.generate()` call should be tiny. Model and compute choices should therefore follow the role rather than a global model configuration.
 
 Provider-specific request options are constructed inside the profile layer. Orchestration code asks for a profile and receives a neutral `ModelConfig`; it does not know how OpenRouter represents reasoning effort.
 
