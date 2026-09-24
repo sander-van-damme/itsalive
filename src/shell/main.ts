@@ -1,6 +1,6 @@
 import './styles.css';
 import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type UserInputSource } from './core';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -357,6 +357,19 @@ async function handleUserFacingInput(
   try {
     const profile = await resolvedProfile('user-intent');
     const model = profile.modelConfig;
+    const routingPromise = assessTriggerRoutingWithJev(appId, {
+      source: 'user-input',
+      inputSource: source,
+      text: userText,
+      appPurpose: app.prompt,
+      hasTelemetry: Boolean(telemetrySummary?.trim()),
+    }, intentController.signal).catch(async error => {
+      await log('warn', 'routing', 'JEV user-input routing unavailable; using intent-model fallback', {
+        source,
+        error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500),
+      }, appId);
+      return undefined;
+    });
     const intentRequest = buildUserIntentRequest({
       appPrompt: app.prompt,
       behaviorSummary: app.behaviorSummary,
@@ -366,6 +379,7 @@ async function handleUserFacingInput(
     }, model, intentController.signal);
     intentRequest.trace = createLlmTraceIdentity(profile.role, profile.id, { scope: appId });
     const generated = await registry.generate(intentRequest, credential());
+    const routing = await routingPromise;
     syncUsage();
     const decision = parseUserIntentDecision(generated.text, {
       appPrompt: app.prompt,
@@ -383,6 +397,16 @@ async function handleUserFacingInput(
         goal: decision.technicalIntent.goal,
         capabilityIds: decision.technicalIntent.capabilityIds,
       } : {}),
+      ...(routing ? {
+        jevRoute: routing.route,
+        jevRouteConfidence: routing.routeConfidence,
+        jevProfileRoute: routing.profileRoute,
+        jevProfileConfidence: routing.profileConfidence,
+        preferredWorkerProfile: routing.preferredWorkerProfile,
+        routingAgreement: routingMisrouteClass(routing.route, decision) === 'agreement',
+        routingMisrouteClass: routingMisrouteClass(routing.route, decision),
+        intentModelCalled: true,
+      } : { intentModelCalled: true }),
     }, appId);
     if (activeId !== appId) return;
 
@@ -464,7 +488,7 @@ async function handleUserFacingInput(
         }
         await flushActiveDocument();
         await markAdaptationAppliedForApp(appId, active.id);
-      });
+      }, routingHint(routing));
       const afterRun = await db.apps.get(appId);
       if (!started || afterRun?.activeAdaptation?.id === active.id && afterRun.activeAdaptation.status === 'pending') {
         await completeAdaptationForApp(appId, active.id, 'failed', started ? 'coding-run-ended-without-completion' : 'coding-run-not-started');
@@ -473,7 +497,7 @@ async function handleUserFacingInput(
     }
 
     ui.setAgentProgress('Planning your change…');
-    await runAgent(technicalIntentBlock(decision.technicalIntent));
+    await runAgent(technicalIntentBlock(decision.technicalIntent), false, undefined, routingHint(routing));
   } catch (error) {
     if (intentController.signal.aborted) {
       await log('info', 'intent', 'User intent interpretation stopped', { source }, appId);
@@ -508,10 +532,24 @@ function runtimeSignalIntent(goal: string, telemetrySummary: string): TechnicalI
   };
 }
 
+interface CodingRoutingHint {
+  triggerRoute?: string;
+  preferredWorkerProfile?: "component-worker" | "repair-worker";
+}
+
+function routingHint(routing: TriggerRoutingDecision | undefined): CodingRoutingHint | undefined {
+  if (!routing?.confident) return undefined;
+  return {
+    triggerRoute: routing.route,
+    ...(routing.preferredWorkerProfile ? { preferredWorkerProfile: routing.preferredWorkerProfile } : {}),
+  };
+}
+
 async function runAgent(
   trigger: string,
   isInitialBuild = false,
   onResult?: (result: CodingOrchestratorResult) => void | Promise<void>,
+  routeHint?: CodingRoutingHint,
 ): Promise<boolean> {
   const app = currentApp();
   if (!app || running) return false;
@@ -534,6 +572,8 @@ async function runAgent(
       technicalIntent: trigger,
       trace,
       profile: agentProfileDiagnostic(profile),
+      triggerRoute: routeHint?.triggerRoute,
+      preferredWorkerProfile: routeHint?.preferredWorkerProfile,
     }, app.id);
     const orchestrator = new CodingOrchestrator(db, registry, executor);
     const result = await orchestrator.run({
@@ -555,6 +595,8 @@ async function runAgent(
       failureAssessor: (state, signal) => assessFailureWithJev(app.id, state, signal),
       contextRelevanceAssessor: (state, signal) => assessContextRelevanceWithJev(app.id, state, signal),
       alivePolicy: app.alivePolicy,
+      triggerRoute: routeHint?.triggerRoute,
+      preferredWorkerProfile: routeHint?.preferredWorkerProfile,
       onAlivePolicyProposal: proposal => activateAlivePolicyForApp(app.id, proposal),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
