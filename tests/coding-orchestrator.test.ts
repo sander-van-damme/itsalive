@@ -15,7 +15,7 @@ describe("coding manager and scoped workers", () => {
     const plan = parseCodingManagerPlan(JSON.stringify({
       shared: {
         design: ["Use one compact card language."],
-        state: ["Shared timer state is Alpine-owned."],
+        state: ["Shared timer state uses application.store."],
       },
       tasks: [
         {
