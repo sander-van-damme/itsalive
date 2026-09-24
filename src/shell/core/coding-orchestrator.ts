@@ -159,7 +159,7 @@ const MANAGER_PLAN_SYSTEM = [
   "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
   "- Reuse an existing component id from APP OUTLINE when it clearly owns the work; otherwise choose a new stable id.",
   "- Local DOM/store names are derived deterministically from each scope by the orchestrator and supplied to workers; do not spend manager output on local prefixes/namespaces.",
-  "- Cross-scope state sharing belongs only in shared.stores."
+  "- Cross-scope state sharing belongs only in shared.stores.",
   "- Dependencies may reference only earlier task ids.",
   "- shared.ref is a compact version/reference. Every task must repeat that exact value in sharedContractRef.",
   "- Set parallel=true only when the task can safely overlap other dependency-ready tasks on a different scope.",
