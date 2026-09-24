@@ -87,17 +87,17 @@ describe("user-facing intent boundary", () => {
 
   it("surfaces native LLM help for an open-ended poem generator without the full manual", () => {
     const intent = initialBuildTechnicalIntent("A button that generates a new poem on click");
-    expect(intent.capabilityIds).toContain("generate");
+    expect(intent.capabilityIds).toContain("ai");
     const block = technicalIntentBlock(intent);
-    expect(block).toContain("application.generate");
+    expect(block).toContain("application.ai.text");
     expect(block).toContain("Write a short poem about the sea.");
   });
 
   it("uses one canonical capability definition for both compact index and selected help", () => {
     const index = platformCapabilityIndex();
-    const selected = platformCapabilityHelp(["generate"]);
-    expect(index).toContain("await application.generate(prompt)");
-    expect(selected).toContain("await application.generate(prompt)");
-    expect(selected).toContain("Generate or transform content");
+    const selected = platformCapabilityHelp(["ai"]);
+    expect(index).toContain("await application.ai.text(prompt)");
+    expect(selected).toContain("await application.ai.text(prompt)");
+    expect(selected).toContain("Use shell-owned AI");
   });
 });
