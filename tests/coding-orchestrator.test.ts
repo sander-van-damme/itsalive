@@ -224,6 +224,11 @@ describe("coding manager and scoped workers", () => {
       managerTrace,
       triggerRoute: "debug",
       preferredWorkerProfile: "repair-worker",
+      portablePreferences: [{
+        id: "pref-keyboard",
+        label: "Keyboard-first interaction",
+        context: "Prefer keyboard-efficient interaction and visible focus while preserving pointer access.",
+      }],
     });
 
     expect(result).toMatchObject({
@@ -241,6 +246,11 @@ describe("coding manager and scoped workers", () => {
     expect(managerContext).toContain("ROUTING HINT");
     expect(managerContext).toContain('"route":"debug"');
     expect(managerContext).toContain('"preferredWorkerProfile":"repair-worker"');
+    expect(managerContext).toContain("PORTABLE SHELL PREFERENCES");
+    expect(managerContext).toContain("Keyboard-first interaction");
+    expect(managerContext).toContain("visible focus");
+    expect(managerContext).not.toContain("Budget Pal");
+    expect(managerContext).not.toContain("raw history");
 
     const workerRequests = requests.filter(request => request.purpose === "agent turn 1");
     expect(workerRequests).toHaveLength(2);

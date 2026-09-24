@@ -31,6 +31,7 @@ export * from "./llm-trace";
 export * from "./model-capabilities";
 export * from "./openrouter-account";
 export * from "./providers";
+export * from "./portable-preferences";
 export * from "./prompt-benchmark";
 export * from "./reactions";
 export * from "./run-budget";

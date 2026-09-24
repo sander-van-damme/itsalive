@@ -202,6 +202,13 @@ button:disabled { cursor: not-allowed; opacity: .45; }
 .settings-result.failure { color: var(--danger); }
 .settings-result.pending { color: var(--muted); }
 .security-note, .diagnostics p, .build-info p { color: var(--muted); font-size: 12px; line-height: 1.55; }
+.checkbox-field { grid-template-columns: auto 1fr; align-items: center; gap: 9px; color: var(--text); font-size: 13px; }
+.checkbox-field input { width: 17px; height: 17px; padding: 0; }
+.beta-badge { display: inline-block; margin-left: 5px; padding: 2px 5px; border: 1px solid var(--border); border-radius: 999px; color: var(--muted); font-size: 9px; font-weight: 700; vertical-align: 1px; }
+.preference-row { display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 9px 0; border-top: 1px solid var(--border); }
+.preference-row:first-child { border-top: 0; }
+.preference-row strong { display: block; font-size: 12px; }
+.preference-row p { margin: 3px 0 0; }
 .diagnostics p { margin: -7px 0 13px; }
 .build-info p { margin: 0; }
 .build-info code { color: var(--text); overflow-wrap: anywhere; }

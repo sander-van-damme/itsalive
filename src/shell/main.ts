@@ -1,6 +1,6 @@
 import './styles.css';
-import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AccessibilityPrompt, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type ResumePrompt, type SettingsValue } from './ui';
-import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, accessibilitySuggestionFromJev, ambiguousAccessibilityCandidate, deterministicAccessibilitySuggestion, decideAccessibilityFriction, JEV_ACCESSIBILITY_FRICTION_QUESTIONS, JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION, recordAccessibilityDismissal, shouldSuppressAccessibilitySuggestion, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, type AgentProfileId, type AccessibilitySuggestionCandidate, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
+import { DEFAULT_HISTORY_CONTEXT_TOKENS, ShellUI, type AccessibilityPrompt, type AdaptationPrompt, type AppSummary, type ChatLine, type InteractionPrompt, type PortablePreferenceView, type ResumePrompt, type SettingsValue } from './ui';
+import { BehaviorTracker, CodingOrchestrator, OpenRouterJevAdapter, accessibilitySuggestionFromJev, ambiguousAccessibilityCandidate, deterministicAccessibilitySuggestion, decideAccessibilityFriction, JEV_ACCESSIBILITY_FRICTION_QUESTIONS, JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION, recordAccessibilityDismissal, shouldSuppressAccessibilitySuggestion, activateAlivePolicy, alivePolicyDiagnostic, adaptationFingerprint, adaptationOutcomeContext, appendAdaptationHistory, createActiveAdaptation, decideAdaptationOutcome, finalizeAdaptation, JEV_ADAPTATION_OUTCOME_QUESTIONS, JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION, markAdaptationApplied, MAX_ADAPTATION_ASSESSMENTS, recordAdaptationAssessment, shouldSuppressAdaptation, DiagnosticLog, InitialBuildIntent, LlmTraceTracker, MAX_BEHAVIOR_SUMMARY_CHARACTERS, PausedRunStore, ReactionBatcher, ReactionConfirmationGate, RuntimeSession, SessionUsageTracker, ShellDatabase, agentProfile, agentProfileDiagnostic, appendHistory, behaviorEpisodeRetentionPlan, behaviorSummaryFromEpisodes, buildDiagnosticExport, buildUserIntentRequest, createAgentAbort, createDefaultRegistry, createLlmTraceIdentity, fetchOpenRouterContextCapacity, fetchOpenRouterKeyInfo, decideJevEscalation, compactJevDecisionTelemetry, contextRelevanceQuestions, decideContextRelevance, JEV_CONTEXT_RELEVANCE_QUESTION_SET_VERSION, DEFAULT_CONTEXT_RELEVANCE_POLICY, deleteApp, formatReactionTelemetry, formBehaviorEpisode, initialBuildTechnicalIntent, interactionConfirmationMessage, JEV_COMPLETION_QUESTIONS, JEV_COMPLETION_QUESTION_SET_VERSION, DEFAULT_JEV_COMPLETION_POLICY, decideJevCompletion, GENERIC_JEV_QUESTION, JEV_BEHAVIOR_EPISODE_QUESTIONS, JEV_BEHAVIOR_EPISODE_QUESTION_SET_VERSION, decideBehaviorEpisodeRetention, mergeBehaviorEpisode, JEV_FAILURE_QUESTIONS, JEV_FAILURE_QUESTION_SET_VERSION, DEFAULT_JEV_FAILURE_POLICY, decideJevFailure, JEV_TRIGGER_ROUTING_QUESTIONS, JEV_TRIGGER_ROUTING_QUESTION_SET_VERSION, DEFAULT_TRIGGER_ROUTING_POLICY, decideTriggerRouting, shouldSkipRuntimeWake, routingMisrouteClass, JEV_ESCALATION_THRESHOLD, JEV_INTERACTION_QUESTION_SET_VERSION, JEV_PATTERN_SIGNAL_FLOOR, nextCronRun, normalizeAgentRunFailure, parseUserIntentDecision, persistNewApp, queryRuntimeLogs, renameAppRecord, resolveAgentProfile, searchHistory, selectAlivePolicyContext, technicalIntentBlock, decidePortablePreference, eligiblePortablePreferenceCandidate, JEV_PORTABLE_PREFERENCE_QUESTIONS, JEV_PORTABLE_PREFERENCE_QUESTION_SET_VERSION, mergePortablePreference, parsePortablePreferences, portablePreferenceLabel, removePortablePreferenceProvenance, selectPortablePreferencesForApp, setPortablePreferenceEnabled, type AgentProfileId, type AccessibilitySuggestionCandidate, type AppRecord, type CodingOrchestratorResult, type Credential, type ExternalAgentAbortKind, type LlmTraceIdentity, type LogEntry, type ReactionBatch, type ResolvedAgentProfile, type PortablePreferenceCandidate, type PortablePreferenceRecord, type SessionUsageState, type TechnicalIntent, type TriggerRoutingDecision, type UserInputSource } from './core';
 import { loadRuntimeSource } from './runtime-source';
 import { codingLifecycleLabel } from './progress';
 import { ROOT_DOMAIN, appIdFromShellUrl, appOrigin, isAppDocumentSnapshot, serializeError, shellUrlForApp, type AppToShellPayload, type BridgeMessage, type InteractionObservation, type JevState } from '../shared';
@@ -14,6 +14,23 @@ let runtimeEpoch = 0;
 const jevControllers = new Set<AbortController>();
 const diagnostics = new DiagnosticLog(db, () => activeId);
 diagnostics.installConsoleCapture();
+
+const PORTABLE_PREFERENCES_STORAGE_KEY = 'itsalive.portable-preferences-v1';
+
+function loadPortablePreferences(): PortablePreferenceRecord[] {
+  try {
+    const storedPreferences = localStorage.getItem(PORTABLE_PREFERENCES_STORAGE_KEY);
+    return storedPreferences ? parsePortablePreferences(JSON.parse(storedPreferences)) : [];
+  } catch (error) {
+    console.warn('[itsalive] Ignoring invalid portable preference storage', error);
+    localStorage.removeItem(PORTABLE_PREFERENCES_STORAGE_KEY);
+    return [];
+  }
+}
+
+function persistPortablePreferences(): void {
+  localStorage.setItem(PORTABLE_PREFERENCES_STORAGE_KEY, JSON.stringify(portablePreferences));
+}
 
 const SESSION_USAGE_STORAGE_KEY = 'itsalive.session-usage-v2';
 function loadSessionUsageState(): Partial<SessionUsageState> | undefined {
@@ -38,6 +55,7 @@ const registry = createDefaultRegistry(
   event => llmTraceTracker.record(event),
 );
 let apps: AppRecord[] = [];
+let portablePreferences = loadPortablePreferences();
 let running = false;
 let activeRun: AbortController | undefined;
 let activeRunFinished: Promise<void> | undefined;
@@ -49,7 +67,11 @@ const initialBuild = new InitialBuildIntent();
 
 const PRIMARY_PROFILE_ID: AgentProfileId = 'coding-manager';
 
-const defaultSettings: SettingsValue = { apiKey: '', historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS };
+const defaultSettings: SettingsValue = {
+  apiKey: '',
+  historyContextTokens: DEFAULT_HISTORY_CONTEXT_TOKENS,
+  crossAppPreferencesEnabled: false,
+};
 const modelContextTokens = new Map<string, number>();
 const stored = localStorage.getItem('itsalive.settings');
 let settings: SettingsValue = defaultSettings;
@@ -58,12 +80,20 @@ if (stored) {
     const parsed = JSON.parse(stored) as unknown;
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) throw new Error('Settings must be an object');
     const record = parsed as Record<string, unknown>;
-    if (Object.keys(record).length !== 2
+    const allowed = new Set(['apiKey', 'historyContextTokens', 'crossAppPreferencesEnabled']);
+    if (Object.keys(record).some(key => !allowed.has(key))
       || typeof record.apiKey !== 'string'
       || typeof record.historyContextTokens !== 'number'
       || !Number.isFinite(record.historyContextTokens)
-      || record.historyContextTokens < 0) throw new Error('Settings schema does not match this beta build');
-    settings = { apiKey: record.apiKey, historyContextTokens: Math.floor(record.historyContextTokens) };
+      || record.historyContextTokens < 0
+      || (record.crossAppPreferencesEnabled !== undefined && typeof record.crossAppPreferencesEnabled !== 'boolean')) {
+      throw new Error('Settings schema does not match this beta build');
+    }
+    settings = {
+      apiKey: record.apiKey,
+      historyContextTokens: Math.floor(record.historyContextTokens),
+      crossAppPreferencesEnabled: record.crossAppPreferencesEnabled === true,
+    };
   } catch (error) {
     console.warn('[itsalive] Ignoring incompatible saved settings', error);
     localStorage.removeItem('itsalive.settings');
@@ -104,6 +134,9 @@ const ui = new ShellUI(root, {
       disposeFrame();
     }
     await deleteApp(db, id, undefined, error => console.warn(`[itsalive] Could not clear origin storage for ${id}; continuing deletion`, error));
+    portablePreferences = removePortablePreferenceProvenance(portablePreferences, id);
+    persistPortablePreferences();
+    syncPortablePreferencesUi();
     initialBuild.clear(id);
     await refreshApps(apps.find(a => a.id !== id)?.id);
   },
@@ -126,6 +159,27 @@ const ui = new ShellUI(root, {
   resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
   resolveAdaptationPrompt: async (id, action) => { await resolveAdaptationPrompt(id, action); },
   resolveAccessibilityPrompt: async (id, action) => { await resolveAccessibilityPrompt(id, action); },
+  togglePortablePreference: async (id, enabled) => {
+    portablePreferences = setPortablePreferenceEnabled(portablePreferences, id, enabled);
+    persistPortablePreferences();
+    syncPortablePreferencesUi();
+    await log('info', 'portable-preference', enabled ? 'Portable preference enabled' : 'Portable preference disabled', {
+      preferenceId: id,
+      enabled,
+    });
+  },
+  setActiveAppCrossAppIsolation: async isolated => {
+    const app = currentApp();
+    if (!app) return;
+    const updated: AppRecord = { ...app, crossAppPreferencesIsolated: isolated, updatedAt: Date.now() };
+    await db.apps.put(updated);
+    apps = apps.map(item => item.id === app.id ? updated : item);
+    ui.setApps(apps as AppSummary[], app.id);
+    syncPortablePreferencesUi();
+    await log('info', 'portable-preference', isolated ? 'App isolated from cross-app preferences' : 'App cross-app preference isolation disabled', {
+      isolated,
+    }, app.id);
+  },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -139,6 +193,7 @@ const ui = new ShellUI(root, {
     localStorage.setItem('itsalive.settings', JSON.stringify(candidate));
     ui.setSettings(candidate);
     ui.setModelContextCapacity(primaryModelContextCapacity());
+    syncPortablePreferencesUi();
     syncUsage();
   },
   refreshUsage: async () => { await refreshOpenRouterUsage(); },
@@ -186,6 +241,7 @@ const runtime = new RuntimeSession(
   },
 );
 ui.setSettings(settings);
+syncPortablePreferencesUi();
 syncUsage();
 if (settings.apiKey) {
   const startupKey = { value: settings.apiKey };
@@ -209,6 +265,7 @@ async function refreshApps(select?: string): Promise<void> {
   if (select) await selectApp(select); else {
     if (activeId && !apps.some(a => a.id === activeId)) activeId = undefined;
     ui.setApps(apps as AppSummary[], activeId);
+    syncPortablePreferencesUi();
     syncInteractionPrompt();
     syncResumePrompt();
     syncAdaptationPrompt();
@@ -235,6 +292,7 @@ async function selectApp(id: string): Promise<void> {
   disposeFrame();
   ui.setConnectionStatus('working');
   ui.setApps(apps as AppSummary[], id);
+  syncPortablePreferencesUi();
   syncInteractionPrompt();
   syncResumePrompt();
   syncAdaptationPrompt();
@@ -323,6 +381,21 @@ async function loadModelContextCapacity(model: string, key: Credential): Promise
 function syncUsage(): void {
   persistSessionUsage();
   ui.setUsage(sessionUsage.snapshot());
+}
+
+function syncPortablePreferencesUi(): void {
+  const views: PortablePreferenceView[] = portablePreferences.map(preference => {
+    const sourceNames = [...new Set(preference.provenance.map(source =>
+      apps.find(app => app.id === source.appId)?.name ?? 'Deleted app'
+    ))];
+    return {
+      id: preference.id,
+      label: portablePreferenceLabel(preference.value),
+      source: sourceNames.length ? 'Learned from ' + sourceNames.join(', ') : 'Source unavailable',
+      enabled: preference.enabled,
+    };
+  });
+  ui.setPortablePreferences(views);
 }
 
 async function refreshOpenRouterUsage(): Promise<void> {
@@ -423,6 +496,16 @@ async function handleUserFacingInput(
         : 'I understand. I won’t change the app unless you ask for a specific change.');
       await appendHistory(db, { appId, role: 'assistant', kind: 'chat', content: reply });
       await refreshMessages();
+      if (source === 'chat' && decision.kind === 'preference' && settings.crossAppPreferencesEnabled) {
+        void maybePromotePortablePreference({
+          source: 'explicit-input',
+          sourceAppId: appId,
+          sourceRef: 'intent:' + crypto.randomUUID(),
+          observedAt: Date.now(),
+          evidence: userText,
+          occurrences: 1,
+        }).catch(error => console.warn('[itsalive] Portable preference evaluation failed', error));
+      }
       return;
     }
 
@@ -574,6 +657,12 @@ async function runAgent(
   let trace: LlmTraceIdentity | undefined;
   try {
     const profile = await resolvedProfile('coding-manager');
+    const appliedPortablePreferences = selectPortablePreferencesForApp(
+      portablePreferences,
+      app.id,
+      settings.crossAppPreferencesEnabled,
+      Boolean(app.crossAppPreferencesIsolated),
+    );
     trace = createLlmTraceIdentity(profile.role, profile.id, { scope: app.id });
     await log('info', `agent:${app.id}`, 'Agent run started', {
       technicalIntent: trigger,
@@ -581,6 +670,14 @@ async function runAgent(
       profile: agentProfileDiagnostic(profile),
       triggerRoute: routeHint?.triggerRoute,
       preferredWorkerProfile: routeHint?.preferredWorkerProfile,
+      portablePreferenceExperimentEnabled: settings.crossAppPreferencesEnabled,
+      crossAppPreferencesIsolated: Boolean(app.crossAppPreferencesIsolated),
+      appliedPortablePreferences: appliedPortablePreferences.map(item => ({
+        id: item.id,
+        category: item.category,
+        value: item.value,
+        sourceAppCount: item.sourceAppIds.length,
+      })),
     }, app.id);
     const orchestrator = new CodingOrchestrator(db, registry, executor);
     const result = await orchestrator.run({
@@ -604,6 +701,11 @@ async function runAgent(
       alivePolicy: app.alivePolicy,
       triggerRoute: routeHint?.triggerRoute,
       preferredWorkerProfile: routeHint?.preferredWorkerProfile,
+      portablePreferences: appliedPortablePreferences.map(item => ({
+        id: item.id,
+        label: item.label,
+        context: item.context,
+      })),
       onAlivePolicyProposal: proposal => activateAlivePolicyForApp(app.id, proposal),
     });
     await log('info', `agent:${app.id}`, `Agent run finished: ${result.status}`, {
@@ -1379,8 +1481,73 @@ async function retainBehaviorEpisode(
     retentionProbability: record.retentionProbability,
     classificationConfidence: record.classificationConfidence,
   }, appId);
+  if (record.kind === 'preference' && settings.crossAppPreferencesEnabled) {
+    void maybePromotePortablePreference({
+      source: 'behavior-episode',
+      sourceAppId: appId,
+      sourceRef: record.id,
+      observedAt: record.lastSeenAt,
+      evidence: record.signal,
+      occurrences: record.occurrences,
+    }).catch(error => console.warn('[itsalive] Portable behavior preference evaluation failed', error));
+  }
 }
 
+
+async function maybePromotePortablePreference(candidate: PortablePreferenceCandidate): Promise<void> {
+  if (!settings.crossAppPreferencesEnabled || !eligiblePortablePreferenceCandidate(candidate)) return;
+  const sourceApp = await db.apps.get(candidate.sourceAppId);
+  if (!sourceApp || sourceApp.crossAppPreferencesIsolated) return;
+  if (portablePreferences.some(item =>
+    item.provenance.some(source => source.appId === candidate.sourceAppId && source.ref === candidate.sourceRef)
+  )) return;
+
+  const key = credential();
+  if (!key) return;
+  const result = await new OpenRouterJevAdapter().evaluate({
+    state: {
+      source: candidate.source,
+      evidence: candidate.evidence.replace(/\s+/g, ' ').trim().slice(0, 1_200),
+      occurrences: Math.max(1, Math.floor(candidate.occurrences)),
+    },
+    questions: JEV_PORTABLE_PREFERENCE_QUESTIONS,
+  }, key);
+  sessionUsage.recordJevDecision(result.usage);
+  syncUsage();
+  const decision = decidePortablePreference(result);
+  await log('info', 'portable-preference', 'Portable preference candidate evaluated', {
+    questionSetVersion: JEV_PORTABLE_PREFERENCE_QUESTION_SET_VERSION,
+    source: candidate.source,
+    sourceAppId: candidate.sourceAppId,
+    sourceRef: candidate.sourceRef,
+    occurrences: candidate.occurrences,
+    action: decision.action,
+    reason: decision.reason,
+    value: decision.value,
+    category: decision.category,
+    portabilityProbability: decision.portabilityProbability,
+    classificationConfidence: decision.classificationConfidence,
+  }, candidate.sourceAppId);
+  if (decision.action !== 'promote') return;
+
+  portablePreferences = mergePortablePreference(
+    portablePreferences,
+    candidate,
+    decision,
+    crypto.randomUUID(),
+  );
+  persistPortablePreferences();
+  syncPortablePreferencesUi();
+  const promoted = portablePreferences.find(item =>
+    item.value === decision.value && item.category === decision.category
+  );
+  await log('info', 'portable-preference', 'Portable preference promoted to shell-level preference', {
+    preferenceId: promoted?.id,
+    category: decision.category,
+    value: decision.value,
+    provenanceCount: promoted?.provenance.length ?? 0,
+  }, candidate.sourceAppId);
+}
 
 function reactionConfirmationGate(appId: string): ReactionConfirmationGate {
   let gate = reactionConfirmationGates.get(appId);
@@ -1580,7 +1747,11 @@ async function testModelConnection(candidate: SettingsValue): Promise<SettingsVa
   }
   modelContextTokens.set(primaryModel, capacity);
   sessionUsage.setKeyInfo(keyInfo);
-  return { apiKey, historyContextTokens };
+  return {
+    apiKey,
+    historyContextTokens,
+    crossAppPreferencesEnabled: candidate.crossAppPreferencesEnabled === true,
+  };
 }
 
 void refreshApps(appIdFromShellUrl(location.href)).catch(error => ui.showError(error instanceof Error ? error.message : String(error)));
