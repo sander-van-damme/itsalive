@@ -123,6 +123,9 @@ export interface CodingOrchestratorOptions {
   contextRelevanceAssessor?: ContextRelevanceAssessor;
   /** Current shell-owned app policy supplied to the manager for controlled revision. */
   alivePolicy?: AlivePolicy;
+  /** Bounded JEV routing hint. The manager still owns decomposition and final worker choice. */
+  preferredWorkerProfile?: "component-worker" | "repair-worker";
+  triggerRoute?: string;
   /** Called only after successful integration verification. */
   onAlivePolicyProposal?: (proposal: AlivePolicyProposal) => Promise<void>;
 }
@@ -155,6 +158,7 @@ const MANAGER_PLAN_SYSTEM = [
   "- Use parallel=false for manager-ordered/shared-state-sensitive work.",
   "- Worker budget overrides may only tighten maxDurationMs/maxCostUsd; profile defaults remain the ceiling.",
   "- component-worker is the default. Use repair-worker only when the task is primarily diagnosis/repair.",
+  "- A ROUTING HINT is advisory bounded classification, not technical intent. If preferredWorkerProfile=repair-worker and the task is genuinely diagnosis/repair, prefer repair-worker; never distort the task merely to match the hint.",
   "- capabilityIds may contain only platform capability ids relevant to that worker.",
   "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
   "- The manager owns decomposition, shared contracts, ordering and final integration verification.",
@@ -701,8 +705,14 @@ function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown):
     "APP PURPOSE\n" + options.appPrompt.trim(),
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
     "CURRENT ALIVE POLICY\n" + JSON.stringify(options.alivePolicy ?? null),
+    options.triggerRoute || options.preferredWorkerProfile
+      ? "ROUTING HINT\n" + JSON.stringify({
+          route: options.triggerRoute ?? null,
+          preferredWorkerProfile: options.preferredWorkerProfile ?? null,
+        })
+      : "",
     "APP OUTLINE\n" + JSON.stringify(outline),
-  ].join("\n\n");
+  ].filter(Boolean).join("\n\n");
 }
 
 function managerVerificationInput(
