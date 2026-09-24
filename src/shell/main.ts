@@ -1310,24 +1310,17 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         classificationConfidence: adaptationDecision.classificationConfidence,
         assessmentCount: activeAdaptation.assessmentCount + 1,
       } : undefined,
-      accessibilityFriction: deterministicAccessibility
+      accessibilityFriction: ambiguousAccessibility && accessibilityDecision
         ? {
-            source: 'deterministic',
-            kind: deterministicAccessibility.kind,
+            source: 'jev',
+            questionSetVersion: JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION,
+            action: accessibilityDecision.action,
+            kind: accessibilityDecision.kind,
+            probability: accessibilityDecision.probability,
+            confidence: accessibilityDecision.confidence,
             offered: accessibilityOffered,
-            evidence: deterministicAccessibility.evidence,
           }
-        : ambiguousAccessibility && accessibilityDecision
-          ? {
-              source: 'jev',
-              questionSetVersion: JEV_ACCESSIBILITY_FRICTION_QUESTION_SET_VERSION,
-              action: accessibilityDecision.action,
-              kind: accessibilityDecision.kind,
-              probability: accessibilityDecision.probability,
-              confidence: accessibilityDecision.confidence,
-              offered: accessibilityOffered,
-            }
-          : undefined,
+        : undefined,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
