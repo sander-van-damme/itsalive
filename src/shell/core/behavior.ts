@@ -1,20 +1,12 @@
 import type { InteractionObservation, InteractionPattern, InteractionSnapshot, JevState } from "../../shared";
 
 const RECENT_LIMIT = 12;
-const MAX_REWRITE_QUEUE = 40;
 const RAPID_REPEAT_AVERAGE_MS = 450;
 const FRUSTRATION_ACTION_COUNT = 5;
-export const DEFAULT_BEHAVIOR_REWRITE_INTERVAL = 12;
 export const MAX_BEHAVIOR_SUMMARY_CHARACTERS = 8_000;
-
-export interface BehavioralSample {
-  interaction: InteractionSnapshot;
-  pattern?: InteractionPattern;
-}
 
 interface AppBehaviorState {
   recent: InteractionSnapshot[];
-  rewriteQueue: BehavioralSample[];
 }
 
 function targetHint(interaction: InteractionSnapshot): string {
@@ -55,20 +47,12 @@ export function interpretInteractionPattern(observation: InteractionObservation)
 export class BehaviorTracker {
   private readonly apps = new Map<string, AppBehaviorState>();
 
-  constructor(private readonly rewriteInterval = DEFAULT_BEHAVIOR_REWRITE_INTERVAL) {}
-
   observe(appId: string, observation: InteractionObservation, historySummary?: string): JevState {
     const state = this.state(appId);
     state.recent.push(observation.interaction);
     if (state.recent.length > RECENT_LIMIT) state.recent.shift();
 
     const pattern = interpretInteractionPattern(observation);
-    state.rewriteQueue.push({
-      interaction: observation.interaction,
-      ...(pattern ? { pattern } : {}),
-    });
-    if (state.rewriteQueue.length > MAX_REWRITE_QUEUE) state.rewriteQueue.splice(0, state.rewriteQueue.length - MAX_REWRITE_QUEUE);
-
     return {
       interaction: observation.interaction,
       recentInteractions: [...state.recent],
@@ -78,22 +62,6 @@ export class BehaviorTracker {
     };
   }
 
-  hasRewriteBatch(appId: string): boolean {
-    return (this.apps.get(appId)?.rewriteQueue.length ?? 0) >= this.rewriteInterval;
-  }
-
-  takeRewriteBatch(appId: string): BehavioralSample[] | undefined {
-    const state = this.apps.get(appId);
-    if (!state || state.rewriteQueue.length < this.rewriteInterval) return undefined;
-    return state.rewriteQueue.splice(0);
-  }
-
-  restoreRewriteBatch(appId: string, batch: BehavioralSample[]): void {
-    if (!batch.length) return;
-    const state = this.state(appId);
-    state.rewriteQueue = [...batch, ...state.rewriteQueue].slice(-MAX_REWRITE_QUEUE);
-  }
-
   clear(appId: string): void {
     this.apps.delete(appId);
   }
@@ -101,19 +69,9 @@ export class BehaviorTracker {
   private state(appId: string): AppBehaviorState {
     let state = this.apps.get(appId);
     if (!state) {
-      state = { recent: [], rewriteQueue: [] };
+      state = { recent: [] };
       this.apps.set(appId, state);
     }
     return state;
   }
-}
-
-export function behaviorRewritePrompt(existing: string | undefined, batch: BehavioralSample[]): string {
-  return `Rewrite the behavioral history as one concise curated summary. Preserve durable preferences, recurring patterns, meaningful outcomes, and unresolved needs. Omit secrets and implementation noise. Do not reproduce event records or timestamps verbatim. Return only the rewritten summary.
-
-Existing curated history:
-${existing?.trim() || "(none)"}
-
-New ephemeral interactions:
-${JSON.stringify(batch)}`;
 }

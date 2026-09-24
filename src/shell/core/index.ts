@@ -6,6 +6,7 @@ export * from "./app-metadata";
 export * from "./app-creation";
 export * from "./app-deletion";
 export * from "./behavior";
+export * from "./behavior-episodes";
 export * from "./capabilities";
 export * from "./bridge-executor";
 export * from "./runtime-logs";

@@ -1,9 +1,10 @@
 import type { AppDocumentRecord, AppRecord, HistoryEntry, LogEntry, ScheduleRecord } from "./types";
+import type { BehaviorEpisodeRecord } from "./behavior-episodes";
 
-const DB_NAME = "itsalive-shell-v4";
+const DB_NAME = "itsalive-shell-v5";
 const DB_VERSION = 1;
 
-type Store = "apps" | "documents" | "history" | "logs" | "schedules";
+type Store = "apps" | "behaviorEpisodes" | "documents" | "history" | "logs" | "schedules";
 
 function request<T>(value: IDBRequest<T>): Promise<T> {
   return new Promise((resolve, reject) => {
@@ -34,6 +35,8 @@ export class ShellDatabase {
       open.onupgradeneeded = () => {
         const db = open.result;
         db.createObjectStore("apps", { keyPath: "id" });
+        const behaviorEpisodes = db.createObjectStore("behaviorEpisodes", { keyPath: "id" });
+        behaviorEpisodes.createIndex("appId", "appId");
         db.createObjectStore("documents", { keyPath: "appId" });
         const history = db.createObjectStore("history", { keyPath: "id", autoIncrement: true });
         history.createIndex("appId", "appId");
@@ -86,11 +89,11 @@ export class ShellDatabase {
     const db = await this.open();
     // Diagnostics intentionally outlive app deletion so a just-failed test can
     // still be exported after the user removes the app itself.
-    const tx = db.transaction(["apps", "documents", "history", "schedules"], "readwrite");
+    const tx = db.transaction(["apps", "behaviorEpisodes", "documents", "history", "schedules"], "readwrite");
     const completed = transactionDone(tx);
     tx.objectStore("apps").delete(id);
     tx.objectStore("documents").delete(id);
-    for (const store of ["history", "schedules"] as const) {
+    for (const store of ["behaviorEpisodes", "history", "schedules"] as const) {
       const cursor = tx.objectStore(store).index("appId").openKeyCursor(IDBKeyRange.only(id));
       cursor.onsuccess = () => {
         const row = cursor.result;
@@ -108,6 +111,12 @@ export class ShellDatabase {
     get: (id: string) => this.get<AppRecord>("apps", id),
     put: (app: AppRecord) => this.put("apps", app),
     delete: (id: string) => this.deleteApp(id),
+  };
+  behaviorEpisodes = {
+    list: () => this.all<BehaviorEpisodeRecord>("behaviorEpisodes"),
+    forApp: (appId: string) => this.byIndex<BehaviorEpisodeRecord>("behaviorEpisodes", "appId", appId),
+    put: (episode: BehaviorEpisodeRecord) => this.put("behaviorEpisodes", episode),
+    delete: (id: string) => this.delete("behaviorEpisodes", id),
   };
   documents = {
     get: (appId: string) => this.get<AppDocumentRecord>("documents", appId),

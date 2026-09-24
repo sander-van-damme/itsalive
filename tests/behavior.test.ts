@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   BehaviorTracker,
-  behaviorRewritePrompt,
   interpretInteractionPattern,
 } from "../src/shell/core/behavior";
 import type { InteractionObservation } from "../src/shared";
@@ -22,15 +21,16 @@ function observation(seq: number, overrides: Partial<InteractionObservation> = {
   };
 }
 
-describe("shell behavioral history policy", () => {
-  it("assembles recent interaction context and persisted summary in the shell", () => {
-    const tracker = new BehaviorTracker(12);
-    const first = tracker.observe(appId, observation(1), "Prefers fast feedback.");
-    const second = tracker.observe(appId, observation(2), "Prefers fast feedback.");
+describe("shell behavioral session policy", () => {
+  it("assembles bounded recent interaction context and a durable external summary", () => {
+    const tracker = new BehaviorTracker();
+    for (let seq = 1; seq <= 14; seq++) tracker.observe(appId, observation(seq), "Prefers fast feedback.");
+    const state = tracker.observe(appId, observation(15), "Prefers fast feedback.");
 
-    expect(first.historySummary).toBe("Prefers fast feedback.");
-    expect(second.recentInteractions.map(item => item.seq)).toEqual([1, 2]);
-    expect(second.document).toContain("Check answer");
+    expect(state.historySummary).toBe("Prefers fast feedback.");
+    expect(state.recentInteractions).toHaveLength(12);
+    expect(state.recentInteractions.map(item => item.seq)).toEqual([4,5,6,7,8,9,10,11,12,13,14,15]);
+    expect(state.document).toContain("Check answer");
   });
 
   it("classifies rapid unchanged repeats as frustration in the shell", () => {
@@ -71,33 +71,12 @@ describe("shell behavioral history policy", () => {
     });
   });
 
-  it("batches ephemeral samples for rewrite without persisting raw events", () => {
-    const tracker = new BehaviorTracker(3);
-    tracker.observe(appId, observation(1));
-    tracker.observe(appId, observation(2));
-    expect(tracker.takeRewriteBatch(appId)).toBeUndefined();
-    tracker.observe(appId, observation(3));
-    const batch = tracker.takeRewriteBatch(appId);
-    expect(batch).toHaveLength(3);
-    expect(behaviorRewritePrompt("Existing preference", batch!)).toContain("Existing preference");
-    expect(behaviorRewritePrompt("Existing preference", batch!)).toContain("New ephemeral interactions");
-  });
-
-  it("restores a failed rewrite batch for a later shell retry", () => {
-    const tracker = new BehaviorTracker(2);
-    tracker.observe(appId, observation(1));
-    tracker.observe(appId, observation(2));
-    const batch = tracker.takeRewriteBatch(appId)!;
-    tracker.restoreRewriteBatch(appId, batch);
-    expect(tracker.takeRewriteBatch(appId)).toHaveLength(2);
-  });
-
-  it("clears only ephemeral context while durable summaries remain external", () => {
-    const tracker = new BehaviorTracker(2);
-    tracker.observe(appId, observation(1), "Durable summary");
+  it("clears only session evidence while durable summaries remain external", () => {
+    const tracker = new BehaviorTracker();
+    tracker.observe(appId, observation(1), "Durable selected evidence");
     tracker.clear(appId);
-    const fresh = tracker.observe(appId, observation(2), "Durable summary");
+    const fresh = tracker.observe(appId, observation(2), "Durable selected evidence");
     expect(fresh.recentInteractions.map(item => item.seq)).toEqual([2]);
-    expect(fresh.historySummary).toBe("Durable summary");
+    expect(fresh.historySummary).toBe("Durable selected evidence");
   });
 });

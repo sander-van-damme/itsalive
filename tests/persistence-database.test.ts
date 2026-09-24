@@ -86,7 +86,8 @@ describe("shell persistence", () => {
     const databaseName = `shell-${crypto.randomUUID()}`;
     const db = new ShellDatabase(databaseName);
     const connection = await db.open();
-    expect([...connection.objectStoreNames]).toEqual(["apps", "documents", "history", "logs", "schedules"]);
+    expect([...connection.objectStoreNames]).toEqual(["apps", "behaviorEpisodes", "documents", "history", "logs", "schedules"]);
+    expect([...connection.transaction("behaviorEpisodes").objectStore("behaviorEpisodes").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("history").objectStore("history").indexNames]).toEqual(["appId"]);
     expect([...connection.transaction("logs").objectStore("logs").indexNames]).toEqual(["appId"]);
 
@@ -100,6 +101,23 @@ describe("shell persistence", () => {
       behaviorSummaryUpdatedAt: 2,
     });
     await db.documents.put({ appId: APP_ID, html: "<!doctype html><main>saved</main>", scripts: [], updatedAt: 2 });
+    await db.behaviorEpisodes.put({
+      id: "episode-1",
+      appId: APP_ID,
+      createdAt: 2,
+      lastSeenAt: 2,
+      kind: "unresolved-need",
+      fingerprint: "click|button|check",
+      signal: "Repeated unchanged interaction.",
+      interactionType: "click",
+      targetTag: "button",
+      actionCount: 5,
+      documentChangeCount: 0,
+      frustrationSignal: true,
+      occurrences: 1,
+      retentionProbability: 0.9,
+      classificationConfidence: 0.9,
+    });
     await db.history.add({ appId: APP_ID, timestamp: 3, role: "user", kind: "chat", content: "hello" });
     await db.logs.add({ appId: APP_ID, timestamp: 4, level: "info", source: "test", message: "saved" });
     await db.schedules.put({ id: `${APP_ID}:daily`, appId: APP_ID, expression: "0 8 * * *", registeredAt: 5, nextRun: 6 });
@@ -110,6 +128,7 @@ describe("shell persistence", () => {
       behaviorSummary: "Prefers fast feedback.",
     });
     expect(await reloadedShell.documents.get(APP_ID)).toMatchObject({ html: "<!doctype html><main>saved</main>", scripts: [] });
+    expect(await reloadedShell.behaviorEpisodes.forApp(APP_ID)).toEqual([expect.objectContaining({ id: "episode-1", kind: "unresolved-need" })]);
     expect(await reloadedShell.history.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.logs.forApp(APP_ID)).toHaveLength(1);
     expect(await reloadedShell.schedules.forApp(APP_ID)).toHaveLength(1);
@@ -121,6 +140,23 @@ describe("shell persistence", () => {
     for (const id of [APP_ID, otherId]) {
       await db.apps.put({ id, name: id, prompt: "Build", createdAt: 1, updatedAt: 1 });
       await db.documents.put({ appId: id, html: `<main>${id}</main>`, scripts: [], updatedAt: 2 });
+      await db.behaviorEpisodes.put({
+        id: `${id}:episode`,
+        appId: id,
+        createdAt: 2,
+        lastSeenAt: 2,
+        kind: "session-evidence",
+        fingerprint: `click|button|${id}`,
+        signal: "Selected evidence",
+        interactionType: "click",
+        targetTag: "button",
+        actionCount: 3,
+        documentChangeCount: 0,
+        frustrationSignal: false,
+        occurrences: 1,
+        retentionProbability: 0.8,
+        classificationConfidence: 0.8,
+      });
       await db.history.add({ appId: id, timestamp: 3, role: "user", kind: "chat", content: id });
       await db.logs.add({ appId: id, timestamp: 4, level: "info", source: "test", message: id });
       await db.schedules.put({ id: `${id}:daily`, appId: id, expression: "0 8 * * *", registeredAt: 5 });
@@ -130,10 +166,12 @@ describe("shell persistence", () => {
 
     expect(await db.apps.get(APP_ID)).toBeUndefined();
     expect(await db.documents.get(APP_ID)).toBeUndefined();
+    expect(await db.behaviorEpisodes.forApp(APP_ID)).toEqual([]);
     expect(await db.history.forApp(APP_ID)).toEqual([]);
     expect(await db.logs.forApp(APP_ID)).toHaveLength(1);
     expect(await db.schedules.forApp(APP_ID)).toEqual([]);
     expect(await db.documents.get(otherId)).toBeDefined();
+    expect(await db.behaviorEpisodes.forApp(otherId)).toHaveLength(1);
   });
 
   it("keeps recorded diagnostics readable after shell reload and app deletion", async () => {
