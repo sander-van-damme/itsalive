@@ -120,12 +120,12 @@ describe("coding manager and scoped workers", () => {
         workerRequest++;
         if (workerRequest === 1) {
           return {
-            text: 'const workerSecret = "SECRET_WORKER_A_TRANSCRIPT"; return itsalive.done("worker-a");',
+            text: 'const workerSecret = "SECRET_WORKER_A_TRANSCRIPT"; return agent.done("worker-a");',
             usage: { cost: 0.001 },
           };
         }
         return {
-          text: 'return itsalive.done("worker-b");',
+          text: 'return agent.done("worker-b");',
           usage: { cost: 0.001 },
         };
       }),
@@ -336,19 +336,19 @@ describe("coding manager and scoped workers", () => {
           if (started.includes("b")) bothStarted();
           await gateA;
           finished.push("a");
-          return { text: 'return itsalive.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"A built\\"],\\"verified\\":[\\"A ready\\"]}");', usage: { cost: 0.002 } };
+          return { text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"A built\\"],\\"verified\\":[\\"A ready\\"]}");', usage: { cost: 0.002 } };
         }
         if (scope === "#component-b") {
           started.push("b");
           if (started.includes("a")) bothStarted();
           await gateB;
           finished.push("b");
-          return { text: 'return itsalive.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"B built\\"],\\"verified\\":[\\"B ready\\"]}");', usage: { cost: 0.002 } };
+          return { text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"B built\\"],\\"verified\\":[\\"B ready\\"]}");', usage: { cost: 0.002 } };
         }
         if (scope === "#component-c") {
           expect(finished.sort()).toEqual(["a", "b"]);
           started.push("c");
-          return { text: 'return itsalive.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"C built\\"],\\"verified\\":[\\"C ready\\"]}");', usage: { cost: 0.002 } };
+          return { text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"C built\\"],\\"verified\\":[\\"C ready\\"]}");', usage: { cost: 0.002 } };
         }
         throw new Error("Unexpected generation request");
       }),
@@ -426,10 +426,10 @@ describe("coding manager and scoped workers", () => {
         if (taskText.includes("TASK ID\nfirst")) {
           starts.push("first");
           await firstGate;
-          return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
+          return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
         }
         starts.push("second");
-        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
+        return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),
     };
     const orchestrator = new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set()));
@@ -473,7 +473,7 @@ describe("coding manager and scoped workers", () => {
           return { text: '{"ok":false,"summary":"One component failed.","unresolved":["bad"]}', usage: { cost: 0 } };
         }
         if (request.trace?.scope === "#bad") throw new Error("worker B exploded");
-        return { text: 'return itsalive.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"good survived\\"]}");', usage: { cost: 0 } };
+        return { text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"good survived\\"]}");', usage: { cost: 0 } };
       }),
     };
 
@@ -555,7 +555,7 @@ describe("coding manager and scoped workers", () => {
         if (request.purpose === "coding manager integration verification") {
           throw new Error("verification should not run after shared budget exhaustion");
         }
-        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0.003 } };
+        return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0.003 } };
       }),
     };
     const manager = profile("coding-manager");
@@ -729,7 +729,7 @@ describe("coding manager and scoped workers", () => {
         if (request.purpose === "coding manager integration verification") {
           return { text: '{"ok":true,"summary":"ready","unresolved":[]}', usage: { cost: 0 } };
         }
-        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
+        return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),
     };
     const onAlivePolicyProposal = vi.fn(async () => undefined);
@@ -773,7 +773,7 @@ describe("coding manager and scoped workers", () => {
         if (request.purpose === "coding manager integration verification") {
           return { text: '{"ok":false,"summary":"not ready","unresolved":["missing integration"]}', usage: { cost: 0 } };
         }
-        return { text: 'return itsalive.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
+        return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),
     };
     const onAlivePolicyProposal = vi.fn(async () => undefined);
