@@ -48,6 +48,7 @@ describe("agent prompt/context benchmark contract", () => {
           + row.mandatoryTokens
           + row.observationTokens
           + row.environmentObservationTokens
+          + row.evidenceTokens
           + row.historyTokens,
         );
       }
