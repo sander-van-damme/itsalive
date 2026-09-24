@@ -2,12 +2,6 @@ import type { AppDocumentSnapshot, AppScriptSnapshot } from "../shared";
 
 const RUNTIME_SELECTOR = "[data-app-runtime]";
 
-type AlpineRuntime = {
-  stopObservingMutations?: () => void;
-  startObservingMutations?: () => void;
-  initTree?: (root: Element) => void;
-};
-
 function normalizeControls(root: ParentNode) {
   root.querySelectorAll<HTMLInputElement>("input").forEach(input => {
     if (input.type === "checkbox" || input.type === "radio") input.toggleAttribute("checked", input.checked);
@@ -52,38 +46,19 @@ async function executeScripts(scripts: readonly AppScriptSnapshot[]): Promise<vo
   }
 }
 
-function hydrateAlpine(alpine: AlpineRuntime | undefined): void {
-  if (!alpine?.initTree) return;
-  const roots = Array.from(document.querySelectorAll<HTMLElement>("[x-data]"))
-    .filter(element => !element.parentElement?.closest("[x-data]"));
-  for (const root of roots) {
-    if (!(root as HTMLElement & { _x_dataStack?: unknown })._x_dataStack) alpine.initTree(root);
-  }
-}
-
 export async function restoreAppDocument(snapshot: AppDocumentSnapshot): Promise<void> {
   const restored = new DOMParser().parseFromString(snapshot.html, "text/html");
   if (restored.querySelector("script")) throw new Error("Persisted app markup must not contain script elements");
 
-  const alpine = (window as unknown as { Alpine?: AlpineRuntime }).Alpine;
-  const canPauseAlpine = Boolean(alpine?.stopObservingMutations && alpine?.startObservingMutations);
-  if (canPauseAlpine) alpine!.stopObservingMutations!();
+  document.title = restored.title;
+  document.documentElement.lang = restored.documentElement.lang;
+  document.head.querySelectorAll(":scope > :not([data-app-runtime])").forEach(node => node.remove());
+  Array.from(restored.head.children).forEach(node => document.head.append(node.cloneNode(true)));
+  document.body.replaceChildren(...Array.from(restored.body.childNodes).map(node => node.cloneNode(true)));
 
-  try {
-    document.title = restored.title;
-    document.documentElement.lang = restored.documentElement.lang;
-    document.head.querySelectorAll(":scope > :not([data-app-runtime])").forEach(node => node.remove());
-    Array.from(restored.head.children).forEach(node => document.head.append(node.cloneNode(true)));
-    document.body.replaceChildren(...Array.from(restored.body.childNodes).map(node => node.cloneNode(true)));
-
-    // App-authored setup is restored only after the complete markup exists, while
-    // Alpine's mutation observer is paused. Definitions/setup therefore become
-    // available before we explicitly hydrate any still-uninitialized Alpine roots.
-    await executeScripts(snapshot.scripts);
-    hydrateAlpine(alpine);
-  } finally {
-    if (canPauseAlpine) alpine!.startObservingMutations!();
-  }
+  // App-authored scripts run only after the complete restored markup exists.
+  // Their callbacks/closures are reconstructed from source; durable data lives in application.store.
+  await executeScripts(snapshot.scripts);
 }
 
 export function installAutosave(
