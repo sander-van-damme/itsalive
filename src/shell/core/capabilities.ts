@@ -8,19 +8,25 @@ export const PLATFORM_CAPABILITIES = [
     example: "return agent.done('Ready to use.');",
   },
   {
-    id: "generate",
-    signature: "await application.generate(prompt)",
-    purpose: "Generate or transform content for the running app and return the model output to the caller.",
-    whenToUse: "Use when app behavior genuinely needs generated, rewritten, summarized, translated, classified, or answered content.",
-    whenNotToUse: "Do not use for deterministic calculations, fixed copy, or behavior the browser can implement directly.",
-    example: "const poem = await application.generate('Write a short poem about the sea.');",
+    id: "ai",
+    signature: "application.ai.text / choose / score / decide / probability",
+    purpose: "Use shell-owned AI for generated text or simple bounded decisions without exposing provider/Jev details.",
+    whenToUse: "Use text for generated content; choose for one bounded option; score for an ordered scale; decide for conservative yes/no/null; probability only when the numeric probability itself is useful.",
+    whenNotToUse: "Do not use AI for deterministic browser logic. Do not implement your own confidence threshold; choose/score/decide already return null when uncertain.",
+    example: [
+      "text: await application.ai.text('Name this note') -> 'Trip ideas'",
+      "choose: await application.ai.choose('Route?', { billing: 'Payments', technical: 'Broken feature' }, ticket) -> 'billing' | null",
+      "score: await application.ai.score('Severity?', ['Low', 'Medium', 'High'], report) -> 1.2 | null",
+      "decide: await application.ai.decide('Refund request?', message) -> true | false | null",
+      "probability: await application.ai.probability('Refund request?', message) -> 0.93",
+    ].join("\n"),
   },
   {
     id: "escalate",
     signature: "application.escalate(reason)",
     purpose: "Hand control to the external coding agent when the running app needs the app itself inspected or changed.",
     whenToUse: "Use sparingly when the app cannot solve the problem locally and a coding-agent run is genuinely required.",
-    whenNotToUse: "Do not use when you need generated text back in the current script; use application.generate instead.",
+    whenNotToUse: "Do not use when you need generated text or a bounded decision back in the current script; use application.ai instead.",
     example: "application.escalate('The imported schema changed. Inspect the app and adapt it.');",
   },
   {
@@ -81,7 +87,7 @@ export function inferPlatformCapabilities(text: string): PlatformCapabilityId[] 
   const ids: PlatformCapabilityId[] = [];
   const add = (id: PlatformCapabilityId, matches: boolean) => { if (matches && !ids.includes(id)) ids.push(id); };
 
-  add("generate", /\b(poem|story|haiku|lyrics?|generate (?:text|copy|content|an? answer)|write (?:text|copy|a |an )|rewrite|summari[sz]e|translate|open[- ]ended|ai[- ]generated|llm)\b/.test(lower));
+  add("ai", /\b(poem|story|haiku|lyrics?|generate (?:text|copy|content|an? answer)|write (?:text|copy|a |an )|rewrite|summari[sz]e|translate|open[- ]ended|ai[- ]generated|llm|classif|choose|decision|score|probability)\b/.test(lower));
   add("memory", /\b(memory|history|earlier conversation|previous conversation|remember|past interaction)\b/.test(lower));
   add("screenshot", /\b(screenshot|visual verification|verify (?:the )?layout|rendering)\b/.test(lower));
   add("escalate", /\b(escalat|wake (?:the )?agent|follow[- ]up agent|agent follow[- ]up|adapt the app|change the app itself)\b/.test(lower));
