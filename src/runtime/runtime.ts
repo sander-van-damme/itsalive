@@ -59,9 +59,11 @@ export async function startAppRuntime(options: RuntimeOptions) {
 
   const done = (message?: string) => ({ [DONE]: true, message });
   const text = async (prompt: unknown): Promise<string> => {
+    const promptText = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+    if (typeof promptText !== "string") throw new TypeError("application.ai.text prompt must be text or JSON-serializable");
     const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({
       type: "llm.request",
-      prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt),
+      prompt: promptText,
     }, 120_000);
     if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
     if (response.error) throw new Error(response.error.message);
