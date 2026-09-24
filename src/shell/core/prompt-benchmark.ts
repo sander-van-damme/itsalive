@@ -31,6 +31,7 @@ export interface PromptBenchmarkMeasurement {
   mandatoryTokens: number;
   observationTokens: number;
   environmentObservationTokens: number;
+  evidenceTokens: number;
   historyTokens: number;
   includedHistoryCount: number;
   omittedHistoryCount: number;
@@ -228,6 +229,7 @@ function measurement(
     mandatoryTokens: context.tokenBreakdown.mandatory,
     observationTokens: context.tokenBreakdown.observation,
     environmentObservationTokens: context.tokenBreakdown.environmentObservation,
+    evidenceTokens: context.tokenBreakdown.evidence,
     historyTokens: context.tokenBreakdown.history,
     includedHistoryCount: context.includedHistoryIds.length,
     omittedHistoryCount: context.omittedHistoryCount,
