@@ -937,6 +937,10 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
   const state: JevState = behaviorTracker.observe(appId, message.state, app.behaviorSummary, app.alivePolicy);
   const alivePolicy = selectAlivePolicyContext(app.alivePolicy, message.state, state.pattern);
   const episode = formBehaviorEpisode(message.state, state.pattern);
+  const activeAdaptation = app.activeAdaptation?.status === 'applied' ? app.activeAdaptation : undefined;
+  const adaptationContext = activeAdaptation
+    ? adaptationOutcomeContext(activeAdaptation, state.pattern, app.alivePolicy?.successSignals)
+    : undefined;
   const controller = new AbortController();
   jevControllers.add(controller);
   const current = () => Boolean(appId && activeId === appId && runtimeEpoch === epoch && runtime.appId === appId && !controller.signal.aborted);
@@ -950,9 +954,16 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
         ...state,
         ...(alivePolicy ? { alivePolicy } : {}),
         ...(episode.action === 'triage' ? { behaviorEpisode: episode.candidate } : {}),
+        ...(adaptationContext ? { adaptationOutcome: adaptationContext } : {}),
       },
-      ...(episode.action === 'triage'
-        ? { questions: { ...GENERIC_JEV_QUESTION, ...JEV_BEHAVIOR_EPISODE_QUESTIONS } }
+      ...((episode.action === 'triage' || adaptationContext)
+        ? {
+            questions: {
+              ...GENERIC_JEV_QUESTION,
+              ...(episode.action === 'triage' ? JEV_BEHAVIOR_EPISODE_QUESTIONS : {}),
+              ...(adaptationContext ? JEV_ADAPTATION_OUTCOME_QUESTIONS : {}),
+            },
+          }
         : {}),
       signal: controller.signal,
     }, key);
@@ -970,9 +981,15 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
     const episodeDecision = episode.action === 'triage'
       ? decideBehaviorEpisodeRetention(result)
       : undefined;
+    const adaptationDecision = activeAdaptation
+      ? decideAdaptationOutcome(result)
+      : undefined;
     if (decision.escalated) jevSessionStats.escalations++;
     if (episode.action === 'triage' && episodeDecision?.action === 'retain') {
       await retainBehaviorEpisode(appId, episode.candidate, episodeDecision);
+    }
+    if (activeAdaptation && adaptationDecision) {
+      await recordAdaptationOutcomeForApp(appId, activeAdaptation.id, adaptationDecision);
     }
     await log('info', 'jev', 'Interaction decision', {
       ...compactJevDecisionTelemetry({
@@ -1007,11 +1024,30 @@ async function handleJevRequest(message: BridgeMessage & { type: 'jev.request'; 
             retentionProbability: episodeDecision?.retentionProbability,
             classificationConfidence: episodeDecision?.classificationConfidence,
           },
+      adaptationOutcome: activeAdaptation && adaptationDecision ? {
+        adaptationId: activeAdaptation.id,
+        questionSetVersion: JEV_ADAPTATION_OUTCOME_QUESTION_SET_VERSION,
+        assessment: adaptationDecision.action,
+        reason: adaptationDecision.reason,
+        helpedProbability: adaptationDecision.helpedProbability,
+        classificationConfidence: adaptationDecision.classificationConfidence,
+        assessmentCount: activeAdaptation.assessmentCount + 1,
+      } : undefined,
       session: { ...jevSessionStats },
     }, appId);
     if (!current()) return;
     respond(message, { type: 'jev.response', probability: result.probability, escalated: decision.escalated });
-    if (decision.escalated) reactionBatcher.add(state);
+    if (decision.escalated) {
+      if (activeAdaptation) {
+        await log('info', 'adaptation', 'Observer escalation suppressed while adaptation outcome is unresolved', {
+          adaptationId: activeAdaptation.id,
+          fingerprint: activeAdaptation.fingerprint,
+          assessment: adaptationDecision?.action,
+        }, appId);
+      } else {
+        reactionBatcher.add(state);
+      }
+    }
   } catch (error) {
     if (!current()) return;
     await log('warn', 'jev', 'Observation failed; interaction remains available', { durationMs: Math.round(performance.now() - startedAt), error: error instanceof Error ? error.message.slice(0, 500) : String(error).slice(0, 500), session: { ...jevSessionStats } }, appId);
