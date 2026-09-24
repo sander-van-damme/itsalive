@@ -13,6 +13,7 @@ export * from "./runtime-logs";
 export * from "./runtime-session";
 export * from "./coding-orchestrator";
 export * from "./context";
+export * from "./context-relevance";
 export * from "./database";
 export * from "./diagnostics";
 export * from "./diagnostic-log";
