@@ -4,7 +4,7 @@ import { beforeAll, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   posts: [] as Array<{ payload: Record<string, unknown>; requestId?: string }>,
   restoredWithApi: false,
-  restoredDocument: undefined as { html: string; scripts: unknown[] } | undefined,
+  restoredDocument: undefined as { html: string; scripts: unknown[]; store: string } | undefined,
   persistDocument: undefined as ((document: { html: string; scripts: unknown[]; store: string }) => void) | undefined,
   scheduleSave: vi.fn(),
   requests: [] as Record<string, unknown>[],
