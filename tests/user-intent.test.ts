@@ -93,11 +93,20 @@ describe("user-facing intent boundary", () => {
     expect(block).toContain("Write a short poem about the sea.");
   });
 
+  it("selects the same AI capability for bounded decisions", () => {
+    const intent = initialBuildTechnicalIntent("Classify each support ticket as billing or technical and show the chosen route.");
+    expect(intent.capabilityIds).toContain("ai");
+  });
+
   it("uses one canonical capability definition for both compact index and selected help", () => {
     const index = platformCapabilityIndex();
     const selected = platformCapabilityHelp(["ai"]);
-    expect(index).toContain("await application.ai.text(prompt)");
-    expect(selected).toContain("await application.ai.text(prompt)");
-    expect(selected).toContain("Use shell-owned AI");
+    expect(index).toContain("application.ai.text / choose / score / decide / probability");
+    expect(selected).toContain("text: await application.ai.text('Name this note') -> 'Trip ideas'");
+    expect(selected).toContain("choose: await application.ai.choose");
+    expect(selected).toContain("score: await application.ai.score");
+    expect(selected).toContain("decide: await application.ai.decide");
+    expect(selected).toContain("probability: await application.ai.probability");
+    expect(selected).toContain("Do not implement your own confidence threshold");
   });
 });
