@@ -29,17 +29,23 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
   });
 
-  it("includes the shell-owned behavioral summary as mandatory context", () => {
+  it("includes behavioral evidence only when it was selected for the current task", () => {
     const result = buildModelContext({
       model,
       appPrompt: "A violin coach",
-      behaviorSummary: "The user prefers concise feedback around 90 bpm.",
-      trigger: "Help me",
+      behaviorSummary: "Old mandatory summary that should no longer be injected.",
+      behaviorEvidence: [{ id: "behavior:1", content: "[preference] Prefers concise feedback around 90 bpm." }],
+      availableBehaviorEvidenceCount: 2,
+      trigger: "Tune feedback for the next exercise",
       history: [],
     });
     const joined = result.messages.map(message => message.content).join("\n");
-    expect(joined).toContain("CURATED BEHAVIORAL HISTORY");
-    expect(joined).toContain("prefers concise feedback");
+    expect(joined).not.toContain("CURATED BEHAVIORAL HISTORY");
+    expect(joined).not.toContain("Old mandatory summary");
+    expect(joined).toContain("SELECTED BEHAVIORAL EVIDENCE");
+    expect(joined).toContain("Prefers concise feedback");
+    expect(result.includedEvidenceIds).toEqual(["behavior:1"]);
+    expect(result.omittedEvidenceCount).toBe(1);
   });
 
   it("always includes immutable app context and the current technical intent", () => {
