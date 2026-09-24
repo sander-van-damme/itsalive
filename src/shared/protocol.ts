@@ -6,11 +6,14 @@ export const BOOTSTRAP_PROTOCOL = "itsalive-bootstrap" as const;
 export const BOOTSTRAP_VERSION = 1 as const;
 export const RUNTIME_BOOTSTRAP_KEY = "__itsaliveShellRuntimeInitV1" as const;
 export const BRIDGE_PROTOCOL = "itsalive" as const;
-export const BRIDGE_VERSION = 6 as const;
+export const BRIDGE_VERSION = 7 as const;
 /** Shared character limit for the semantic HTML projection carried by Jev requests. */
 export const MAX_SEMANTIC_DOCUMENT_CHARACTERS = 100_000;
 export const MAX_SAVED_DOCUMENT_CHARACTERS = 5_000_000;
 export const MAX_SAVED_APP_SCRIPTS = 256;
+export const MAX_APPLICATION_AI_QUESTION_CHARACTERS = 4_000;
+export const MAX_APPLICATION_AI_CONTEXT_CHARACTERS = 100_000;
+export const MAX_APPLICATION_AI_CRITERION_CHARACTERS = 1_000;
 
 export interface AppScriptSnapshot {
   placement: "head" | "body";
@@ -70,11 +73,21 @@ export interface InteractionPattern extends InteractionPatternSample {
 export interface InteractionObservation { interaction: InteractionSnapshot; pattern?: InteractionPatternSample; document: string; }
 export interface JevState { interaction: InteractionSnapshot; recentInteractions: InteractionSnapshot[]; pattern?: InteractionPattern; historySummary?: string; document: string; }
 
+export type ApplicationAiDecisionKind = "choose" | "score" | "decide" | "probability";
+export type ApplicationAiDecisionResult = string | number | boolean | null;
+
+export type ApplicationAiDecisionRequest =
+  | { kind: "choose"; question: string; contextJson?: string; options: Record<string, string> }
+  | { kind: "score"; question: string; contextJson?: string; levels: string[] }
+  | { kind: "decide"; question: string; contextJson?: string }
+  | { kind: "probability"; question: string; contextJson?: string };
+
 export type ShellToAppPayload =
   | { type: "execute"; code: string }
   | { type: "document.snapshot" }
   | { type: "document.response"; document?: AppDocumentSnapshot; error?: SerializedError }
   | { type: "llm.response"; result?: unknown; error?: SerializedError }
+  | { type: "ai.decision.response"; result?: ApplicationAiDecisionResult; error?: SerializedError }
   | { type: "memory.response"; memory?: string; error?: SerializedError }
   | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError };
 
@@ -85,6 +98,7 @@ export type AppToShellPayload =
   | { type: "execution.error"; error: SerializedError }
   | { type: "wake"; reason?: string }
   | { type: "llm.request"; prompt: string }
+  | { type: "ai.decision.request"; decision: ApplicationAiDecisionRequest }
   | { type: "memory.request" }
   | { type: "jev.request"; state: InteractionObservation }
   | { type: "log"; record: LogRecord }
@@ -98,8 +112,8 @@ export type BridgeMessage<P extends BridgePayload = BridgePayload> = P & {
   requestId: string;
 };
 
-const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "document.response", "llm.response", "memory.response", "jev.response"]);
-const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.request", "document.save", "wake", "llm.request", "memory.request", "jev.request", "log", "status"]);
+const SHELL_TYPES = new Set<ShellToAppPayload["type"]>(["execute", "document.snapshot", "document.response", "llm.response", "ai.decision.response", "memory.response", "jev.response"]);
+const APP_TYPES = new Set<AppToShellPayload["type"]>(["result", "execution.error", "document.request", "document.save", "wake", "llm.request", "ai.decision.request", "memory.request", "jev.request", "log", "status"]);
 const ALL_TYPES = new Set<string>([...SHELL_TYPES, ...APP_TYPES]);
 
 const isObject = (value: unknown): value is Record<string, unknown> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -122,6 +136,36 @@ function isApplicationStoreSnapshot(value: unknown): value is string {
   } catch {
     return false;
   }
+}
+
+export function isApplicationAiDecisionRequest(value: unknown): value is ApplicationAiDecisionRequest {
+  if (!isObject(value) || typeof value.kind !== "string" || typeof value.question !== "string") return false;
+  if (!value.question.trim() || value.question.length > MAX_APPLICATION_AI_QUESTION_CHARACTERS) return false;
+  if (value.contextJson !== undefined) {
+    if (typeof value.contextJson !== "string" || value.contextJson.length > MAX_APPLICATION_AI_CONTEXT_CHARACTERS) return false;
+    try { JSON.parse(value.contextJson); } catch { return false; }
+  }
+
+  if (value.kind === "choose") {
+    if (!hasOnly(value, ["kind", "question", "contextJson", "options"]) || !isObject(value.options)) return false;
+    const entries = Object.entries(value.options);
+    return entries.length >= 2 && entries.length <= 255 && entries.every(([key, description]) =>
+      key.length >= 1 && key.length <= 100
+      && typeof description === "string" && description.trim().length >= 1
+      && description.length <= MAX_APPLICATION_AI_CRITERION_CHARACTERS);
+  }
+
+  if (value.kind === "score") {
+    if (!hasOnly(value, ["kind", "question", "contextJson", "levels"]) || !Array.isArray(value.levels)) return false;
+    return value.levels.length >= 2 && value.levels.length <= 10
+      && value.levels.every(level => typeof level === "string" && level.trim().length >= 1 && level.length <= MAX_APPLICATION_AI_CRITERION_CHARACTERS);
+  }
+
+  if (value.kind === "decide" || value.kind === "probability") {
+    return hasOnly(value, ["kind", "question", "contextJson"]);
+  }
+
+  return false;
 }
 
 export function isAppDocumentSnapshot(value: unknown): value is AppDocumentSnapshot {
@@ -192,6 +236,11 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
     case "document.response": return (value.document === undefined || isAppDocumentSnapshot(value.document))
       && (value.error === undefined || isSerializedError(value.error));
     case "llm.request": return typeof value.prompt === "string" && value.options === undefined;
+    case "ai.decision.request": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId", "decision"])
+      && isApplicationAiDecisionRequest(value.decision);
+    case "ai.decision.response": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId", "result", "error"])
+      && (value.result === undefined || value.result === null || typeof value.result === "string" || typeof value.result === "boolean" || typeof value.result === "number" && Number.isFinite(value.result))
+      && (value.error === undefined || isSerializedError(value.error));
     case "memory.request": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId"]);
     case "memory.response": return (value.memory === undefined || typeof value.memory === "string" && value.memory.length <= MAX_SEMANTIC_DOCUMENT_CHARACTERS)
       && (value.error === undefined || isSerializedError(value.error));

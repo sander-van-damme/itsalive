@@ -23,6 +23,15 @@ vi.mock("../src/runtime/bridge", () => ({
     async request(payload: Record<string, unknown>) {
       state.requests.push(payload);
       if (payload.type === "llm.request") return { type: "llm.response", result: "answer" };
+      if (payload.type === "ai.decision.request") {
+        const decision = payload.decision as { kind?: string };
+        const result = decision.kind === "choose" ? "billing"
+          : decision.kind === "score" ? 1.2
+            : decision.kind === "decide" ? null
+              : decision.kind === "probability" ? .93
+                : undefined;
+        return { type: "ai.decision.response", result };
+      }
       if (payload.type === "memory.request") return { type: "memory.response", memory: "Prefers fast feedback." };
       if (payload.type === "document.request") return {
         type: "document.response",
@@ -91,7 +100,9 @@ describe("injected app runtime namespaces", () => {
   it("installs application and agent before restoring app scripts", () => {
     expect(window.history).toBe(nativeHistory);
     expect((window.application.store.counter as { count: number }).count).toBe(3);
-    expect(Object.keys(window.application)).toEqual(["store", "generate", "escalate"]);
+    expect(Object.keys(window.application)).toEqual(["store", "ai", "escalate"]);
+    expect(Object.keys(window.application.ai)).toEqual(["text", "choose", "score", "decide", "probability"]);
+    expect(Object.isFrozen(window.application.ai)).toBe(true);
     expect(Object.keys(window.agent)).toEqual(["memory", "screenshot", "done"]);
     expect(Object.isFrozen(window.application)).toBe(true);
     expect(Object.isFrozen(window.agent)).toBe(true);
@@ -105,9 +116,44 @@ describe("injected app runtime namespaces", () => {
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
   });
 
-  it("supports generation, escalation, curated memory, screenshot, and completion", async () => {
-    expect(await window.application.generate("question")).toBe("answer");
+  it("supports simple application AI values, escalation, curated memory, screenshot, and completion", async () => {
+    expect(await window.application.ai.text("question")).toBe("answer");
     expect(state.requests.find(request => request.type === "llm.request")).toEqual({ type: "llm.request", prompt: "question" });
+
+    expect(await window.application.ai.choose(
+      "Which route?",
+      { billing: "Payments", technical: "Broken feature" },
+      { subject: "refund" },
+    )).toBe("billing");
+    expect(await window.application.ai.score("Severity?", ["Low", "Medium", "High"], { broken: true })).toBe(1.2);
+    expect(await window.application.ai.decide("Refund request?", "please refund")).toBeNull();
+    expect(await window.application.ai.probability("Refund request?", "please refund")).toBe(.93);
+
+    expect(state.requests).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        type: "ai.decision.request",
+        decision: {
+          kind: "choose",
+          question: "Which route?",
+          options: { billing: "Payments", technical: "Broken feature" },
+          contextJson: '{"subject":"refund"}',
+        },
+      }),
+      expect.objectContaining({
+        type: "ai.decision.request",
+        decision: {
+          kind: "score",
+          question: "Severity?",
+          levels: ["Low", "Medium", "High"],
+          contextJson: '{"broken":true}',
+        },
+      }),
+    ]));
+
+    await expect(window.application.ai.choose("?", { only: "one" })).rejects.toThrow("Invalid application.ai decision request");
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    await expect(window.application.ai.decide("Circular?", circular)).rejects.toThrow("JSON-serializable");
 
     window.application.escalate("continue");
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);

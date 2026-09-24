@@ -3,10 +3,10 @@ import { installLogging } from "./logs";
 import { installAutosave, restoreAppDocument, serializeAppDocument } from "./persistence";
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
-import type { AgentRuntimeApi, ApplicationRuntimeApi } from "./globals";
+import type { AgentRuntimeApi, ApplicationAiApi, ApplicationRuntimeApi } from "./globals";
 import { createApplicationStore } from "./application-store";
-import type { BridgeMessage, ShellToAppPayload } from "../shared";
-import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, serializeError } from "../shared";
+import type { ApplicationAiDecisionRequest, ApplicationAiDecisionResult, BridgeMessage, ShellToAppPayload } from "../shared";
+import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, isApplicationAiDecisionRequest, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 import { installAgentDurabilityAudit } from "./durability";
@@ -58,15 +58,60 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
 
   const done = (message?: string) => ({ [DONE]: true, message });
-  const generate = async <T = unknown>(prompt: unknown): Promise<T> => {
+  const text = async (prompt: unknown): Promise<string> => {
+    const promptText = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
+    if (typeof promptText !== "string") throw new TypeError("application.ai.text prompt must be text or JSON-serializable");
     const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({
       type: "llm.request",
-      prompt: typeof prompt === "string" ? prompt : JSON.stringify(prompt),
+      prompt: promptText,
     }, 120_000);
     if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
     if (response.error) throw new Error(response.error.message);
-    return response.result as T;
+    if (typeof response.result !== "string") throw new Error("application.ai.text returned a non-text result");
+    return response.result;
   };
+  const contextJson = (context: unknown): string | undefined => {
+    if (context === undefined) return undefined;
+    let serialized: string | undefined;
+    try { serialized = JSON.stringify(context); }
+    catch { throw new TypeError("application.ai context must be JSON-serializable"); }
+    if (serialized === undefined) throw new TypeError("application.ai context must be JSON-serializable");
+    return serialized;
+  };
+  const requestDecision = async (decision: ApplicationAiDecisionRequest): Promise<ApplicationAiDecisionResult> => {
+    if (!isApplicationAiDecisionRequest(decision)) throw new TypeError("Invalid application.ai decision request");
+    const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({
+      type: "ai.decision.request",
+      decision,
+    }, 30_000);
+    if (response.type !== "ai.decision.response") throw new Error(`Unexpected application.ai decision response: ${response.type}`);
+    if (response.error) throw new Error(response.error.message);
+    if (!("result" in response)) throw new Error("application.ai decision returned no result");
+    return response.result ?? null;
+  };
+  const ai: Readonly<ApplicationAiApi> = Object.freeze({
+    text,
+    choose: async (question: string, options: Record<string, string>, context?: unknown) => {
+      const result = await requestDecision({ kind: "choose", question, options, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
+      if (result !== null && typeof result !== "string") throw new Error("application.ai.choose returned an invalid result");
+      return result;
+    },
+    score: async (question: string, levels: string[], context?: unknown) => {
+      const result = await requestDecision({ kind: "score", question, levels, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
+      if (result !== null && typeof result !== "number") throw new Error("application.ai.score returned an invalid result");
+      return result;
+    },
+    decide: async (question: string, context?: unknown) => {
+      const result = await requestDecision({ kind: "decide", question, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
+      if (result !== null && typeof result !== "boolean") throw new Error("application.ai.decide returned an invalid result");
+      return result;
+    },
+    probability: async (question: string, context?: unknown) => {
+      const result = await requestDecision({ kind: "probability", question, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
+      if (typeof result !== "number" || result < 0 || result > 1) throw new Error("application.ai.probability returned an invalid result");
+      return result;
+    },
+  });
   const escalate = (reason: string): void => {
     if (!reason.trim()) throw new Error("application.escalate requires a reason");
     bridge.post({ type: "wake", reason });
@@ -80,7 +125,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
 
   const applicationApi: ApplicationRuntimeApi = Object.freeze({
     store: applicationStore.store,
-    generate,
+    ai,
     escalate,
   });
   const agentApi: AgentRuntimeApi = Object.freeze({

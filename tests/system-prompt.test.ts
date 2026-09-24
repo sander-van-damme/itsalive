@@ -22,9 +22,13 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).not.toContain('itsalive-history');
   });
 
-  it('documents coding-agent memory and screenshot APIs', () => {
+  it('documents coding-agent and simple application AI semantics', () => {
     expect(SYSTEM_PROMPT).toContain("agent.screenshot()");
     expect(SYSTEM_PROMPT).toContain("application.store");
+    expect(SYSTEM_PROMPT).toContain("application.ai.choose(question, options, context?) returns one option key or null");
+    expect(SYSTEM_PROMPT).toContain("application.ai.score(question, levels, context?) returns a numeric score or null");
+    expect(SYSTEM_PROMPT).toContain("application.ai.decide(question, context?) returns true, false, or null");
+    expect(SYSTEM_PROMPT).toContain("Never add your own Jev/confidence threshold");
   });
 
   it('defines the canonical generated-app root as an invariant', () => {

@@ -6,7 +6,7 @@ const model = { provider: "test", model: "test", maxContextTokens: 8_000, output
 
 describe("shell context builder", () => {
   it("teaches only the application and coding-agent APIs", () => {
-    for (const current of ["agent.done", "agent.screenshot", "application.store", "application.generate", "application.escalate"]) {
+    for (const current of ["agent.done", "agent.screenshot", "application.store", "application.ai.text", "application.ai.choose", "application.ai.score", "application.ai.decide", "application.ai.probability", "application.escalate"]) {
       expect(SYSTEM_PROMPT).toContain(current);
     }
     expect(SYSTEM_PROMPT).not.toContain("itsalive.done");

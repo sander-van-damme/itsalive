@@ -79,8 +79,8 @@ describe("bootstrap protocol", () => {
 });
 
 describe("bridge protocol", () => {
-  it("uses bridge version 6 and recognizes messages by direction", () => {
-    expect(BRIDGE_VERSION).toBe(6);
+  it("uses bridge version 7 and recognizes messages by direction", () => {
+    expect(BRIDGE_VERSION).toBe(7);
     const requestId = createRequestId();
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
@@ -122,6 +122,39 @@ describe("bridge protocol", () => {
   });
 
 
+  it("validates bounded application AI decision requests and simple responses", () => {
+    const choose = createBridgeMessage(APP_ID, "req_ai_choose", {
+      type: "ai.decision.request",
+      decision: {
+        kind: "choose",
+        question: "Which route?",
+        options: { billing: "Payments", technical: "Broken feature" },
+        contextJson: '{"ticket":"refund"}',
+      },
+    });
+    const response = createBridgeMessage(APP_ID, "req_ai_choose", { type: "ai.decision.response", result: "billing" });
+    expect(isAppToShellMessage(choose)).toBe(true);
+    expect(isShellToAppMessage(response)).toBe(true);
+
+    expect(isBridgeMessage({
+      ...choose,
+      decision: { kind: "choose", question: "Which?", options: { only: "one" } },
+    })).toBe(false);
+    expect(isBridgeMessage({
+      ...choose,
+      decision: { kind: "score", question: "Severity?", levels: ["only one"] },
+    })).toBe(false);
+    expect(isBridgeMessage({
+      ...choose,
+      decision: { kind: "decide", question: "Refund?", contextJson: "not-json" },
+    })).toBe(false);
+    expect(isBridgeMessage({
+      ...choose,
+      decision: { kind: "probability", question: "x".repeat(4_001) },
+    })).toBe(false);
+    expect(isBridgeMessage({ ...response, result: Number.NaN })).toBe(false);
+  });
+
   it("validates curated memory requests and responses", () => {
     const request = createBridgeMessage(APP_ID, "req_memory", { type: "memory.request" });
     const response = createBridgeMessage(APP_ID, "req_memory", { type: "memory.response", memory: "Prefers compact layouts." });
@@ -132,7 +165,7 @@ describe("bridge protocol", () => {
   });
 
   it("bounds every Jev bridge field and rejects unexpected payload data", () => {
-    const envelope = { protocol: "itsalive", version: 6, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
+    const envelope = { protocol: "itsalive", version: 7, appId: APP_ID, requestId: "req_jev_bounds", type: "jev.request" };
     const interaction = { seq: 1, at: "2026-01-01T00:00:00Z", type: "click", target: { tag: "button", state: { role: "button" } }, actualTarget: { tag: "button" }, key: "Enter" };
     const valid = { ...envelope, state: { interaction, document: "<main>ok</main>" } };
     expect(isBridgeMessage(valid)).toBe(true);
