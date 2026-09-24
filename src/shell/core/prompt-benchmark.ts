@@ -176,7 +176,7 @@ export const PROMPT_BENCHMARK_SCENARIOS: readonly PromptBenchmarkScenario[] = Ob
       "GOAL",
       "Use the native runtime LLM capability to generate a fresh poem after each click.",
       "RELEVANT PLATFORM CAPABILITIES",
-      "generate — await application.generate(prompt)",
+      "ai — application.ai.text / choose / score / decide / probability",
     ].join("\n"),
     history: [],
   },
