@@ -330,7 +330,17 @@ async function refreshOpenRouterUsage(): Promise<void> {
   }
 }
 
-async function handleUserFacingInput(content: string, source: UserInputSource, telemetrySummary?: string): Promise<void> {
+interface InteractionAdaptationContext {
+  interactionKey: string;
+  hypothesis: string;
+}
+
+async function handleUserFacingInput(
+  content: string,
+  source: UserInputSource,
+  telemetrySummary?: string,
+  adaptationContext?: InteractionAdaptationContext,
+): Promise<void> {
   const app = currentApp();
   const userText = content.trim();
   if (!app || !userText || interpreting) return;
@@ -385,6 +395,83 @@ async function handleUserFacingInput(content: string, source: UserInputSource, t
       return;
     }
 
+    const latestApp = await db.apps.get(appId) ?? app;
+    if (latestApp.activeAdaptation) {
+      if (source === 'interaction') {
+        await appendHistory(db, {
+          appId,
+          role: 'assistant',
+          kind: 'chat',
+          content: 'There is already a reversible adaptation waiting for a Keep or Undo decision. I won’t stack another automatic adaptation on top of it.',
+        });
+        syncAdaptationPrompt();
+        await refreshMessages();
+        return;
+      }
+      await completeAdaptationForApp(
+        appId,
+        latestApp.activeAdaptation.id,
+        latestApp.activeAdaptation.status === 'applied' ? 'neutral' : 'failed',
+        'superseded-by-explicit-user-change',
+      );
+    }
+
+    if (source === 'interaction' && adaptationContext) {
+      await flushActiveDocument();
+      const before = await db.documents.get(appId);
+      const current = await db.apps.get(appId);
+      if (!before || !current) throw new Error('Could not capture a reversible pre-adaptation snapshot');
+
+      const fingerprint = adaptationFingerprint(adaptationContext.interactionKey, decision.technicalIntent.goal);
+      if (shouldSuppressAdaptation(current.adaptationHistory, fingerprint)) {
+        await log('info', 'adaptation', 'Repeated failed adaptation suppressed', {
+          fingerprint,
+          goal: decision.technicalIntent.goal.slice(0, 500),
+        }, appId);
+        await appendHistory(db, {
+          appId,
+          role: 'assistant',
+          kind: 'chat',
+          content: 'A very similar adaptation has already failed more than once, so I won’t keep reshaping the app from the same signal. Tell me the exact change you want and I can treat it as a normal explicit edit.',
+        });
+        await refreshMessages();
+        return;
+      }
+
+      const active = createActiveAdaptation({
+        id: crypto.randomUUID(),
+        interactionKey: adaptationContext.interactionKey,
+        hypothesis: adaptationContext.hypothesis,
+        technicalGoal: decision.technicalIntent.goal,
+        intendedOutcome: decision.technicalIntent.acceptanceCriteria.join(' '),
+        beforeDocument: { html: before.html, scripts: before.scripts },
+      });
+      const updated: AppRecord = { ...current, activeAdaptation: active, updatedAt: Date.now() };
+      await db.apps.put(updated);
+      apps = apps.map(item => item.id === appId ? updated : item);
+      await log('info', 'adaptation', 'Interaction adaptation hypothesis created', {
+        adaptationId: active.id,
+        fingerprint: active.fingerprint,
+        hypothesis: active.hypothesis,
+        intendedOutcome: active.intendedOutcome,
+      }, appId);
+
+      ui.setAgentProgress('Planning your change…');
+      const started = await runAgent(technicalIntentBlock(decision.technicalIntent), false, async result => {
+        if (result.status !== 'done') {
+          await completeAdaptationForApp(appId, active.id, 'failed', 'coding-run-' + result.status);
+          return;
+        }
+        await flushActiveDocument();
+        await markAdaptationAppliedForApp(appId, active.id);
+      });
+      const afterRun = await db.apps.get(appId);
+      if (!started || afterRun?.activeAdaptation?.id === active.id && afterRun.activeAdaptation.status === 'pending') {
+        await completeAdaptationForApp(appId, active.id, 'failed', started ? 'coding-run-ended-without-completion' : 'coding-run-not-started');
+      }
+      return;
+    }
+
     ui.setAgentProgress('Planning your change…');
     await runAgent(technicalIntentBlock(decision.technicalIntent));
   } catch (error) {
@@ -421,7 +508,11 @@ function runtimeSignalIntent(goal: string, telemetrySummary: string): TechnicalI
   };
 }
 
-async function runAgent(trigger: string, isInitialBuild = false): Promise<boolean> {
+async function runAgent(
+  trigger: string,
+  isInitialBuild = false,
+  onResult?: (result: CodingOrchestratorResult) => void | Promise<void>,
+): Promise<boolean> {
   const app = currentApp();
   if (!app || running) return false;
   let executor: ReturnType<RuntimeSession['requireReady']>;
@@ -474,6 +565,7 @@ async function runAgent(trigger: string, isInitialBuild = false): Promise<boolea
       handoffs: result.handoffs,
       timeline: result.timeline,
     }, app.id);
+    await onResult?.(result);
     if (result.message) {
       await db.history.add({ appId: app.id, timestamp: Date.now(), role: 'assistant', kind: 'chat', content: result.message });
     }
