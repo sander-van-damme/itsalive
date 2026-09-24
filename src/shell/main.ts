@@ -121,6 +121,7 @@ const ui = new ShellUI(root, {
   },
   resumePausedRun: async id => { await resumePausedRun(id); },
   resolveInteractionPrompt: async (id, clarification) => { await resolveInteractionPrompt(id, clarification); },
+  resolveAdaptationPrompt: async (id, action) => { await resolveAdaptationPrompt(id, action); },
   renameApp: async name => {
     const app = currentApp(); if (!app) return;
     const updated = renameAppRecord(app, name); await db.apps.put(updated);
@@ -206,6 +207,7 @@ async function refreshApps(select?: string): Promise<void> {
     ui.setApps(apps as AppSummary[], activeId);
     syncInteractionPrompt();
     syncResumePrompt();
+    syncAdaptationPrompt();
     await refreshMessages();
   }
 }
@@ -230,6 +232,7 @@ async function selectApp(id: string): Promise<void> {
   ui.setApps(apps as AppSummary[], id);
   syncInteractionPrompt();
   syncResumePrompt();
+  syncAdaptationPrompt();
   const runtimeSource = await loadRuntimeSource();
   connectionTimer = window.setTimeout(() => { runtime.setState('error'); ui.setBusy(false); ui.setConnectionStatus('error'); }, 10_000);
   const frame = runtime.switchTo(id, currentOrigin(), runtimeSource);
