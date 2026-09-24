@@ -91,22 +91,22 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
   const ai: Readonly<ApplicationAiApi> = Object.freeze({
     text,
-    choose: async (question, options, context) => {
+    choose: async (question: string, options: Record<string, string>, context?: unknown) => {
       const result = await requestDecision({ kind: "choose", question, options, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (result !== null && typeof result !== "string") throw new Error("application.ai.choose returned an invalid result");
       return result;
     },
-    score: async (question, levels, context) => {
+    score: async (question: string, levels: string[], context?: unknown) => {
       const result = await requestDecision({ kind: "score", question, levels, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (result !== null && typeof result !== "number") throw new Error("application.ai.score returned an invalid result");
       return result;
     },
-    decide: async (question, context) => {
+    decide: async (question: string, context?: unknown) => {
       const result = await requestDecision({ kind: "decide", question, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (result !== null && typeof result !== "boolean") throw new Error("application.ai.decide returned an invalid result");
       return result;
     },
-    probability: async (question, context) => {
+    probability: async (question: string, context?: unknown) => {
       const result = await requestDecision({ kind: "probability", question, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (typeof result !== "number" || result < 0 || result > 1) throw new Error("application.ai.probability returned an invalid result");
       return result;
