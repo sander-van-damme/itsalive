@@ -222,6 +222,8 @@ describe("coding manager and scoped workers", () => {
       managerProfile: profile("coding-manager"),
       resolveProfile: async id => profile(id),
       managerTrace,
+      triggerRoute: "debug",
+      preferredWorkerProfile: "repair-worker",
     });
 
     expect(result).toMatchObject({
@@ -233,6 +235,12 @@ describe("coding manager and scoped workers", () => {
         { status: "done", scope: "#lap-list", changed: ["Lap list built"] },
       ],
     });
+
+    const managerRequest = requests.find(request => request.purpose === "coding manager plan")!;
+    const managerContext = managerRequest.messages.map(message => message.content).join("\n");
+    expect(managerContext).toContain("ROUTING HINT");
+    expect(managerContext).toContain('"route":"debug"');
+    expect(managerContext).toContain('"preferredWorkerProfile":"repair-worker"');
 
     const workerRequests = requests.filter(request => request.purpose === "agent turn 1");
     expect(workerRequests).toHaveLength(2);
