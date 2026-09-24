@@ -1,37 +1,24 @@
-import type { LogRecord } from "../shared";
 import type { captureScreenshot } from "./screenshot";
 import type { ApplicationStore } from "./application-store";
 
-export interface LlmApi {
-  ask<T = unknown>(prompt: unknown): Promise<T>;
-}
-
 export interface ApplicationRuntimeApi {
   readonly store: ApplicationStore;
+  generate<T = unknown>(prompt: unknown): Promise<T>;
+  escalate(reason: string): void;
 }
 
-export interface ItsaliveRuntimeApi {
-  readonly apiVersion: 2;
-  readonly llm: Readonly<LlmApi>;
-  readonly history: Readonly<{ search(input: { query: string; limit?: number }): Promise<unknown> }>;
-  readonly agent: Readonly<{ wake(prompt: string): Promise<unknown> }>;
-  readonly dom: Readonly<{
-    screenshot: typeof captureScreenshot;
-  }>;
-  readonly logs: Readonly<{
-    get(input?: { level?: "debug" | "info" | "warn" | "error"; limit?: number }): Promise<LogRecord[]>;
-  }>;
-  readonly components: Readonly<Record<string, string>>;
-  readonly cron: (id: string, schedule: string, callback: () => unknown) => { id: string; schedule: string };
-  readonly done: (message?: string) => unknown;
+export interface AgentRuntimeApi {
+  memory(): Promise<string>;
+  screenshot: typeof captureScreenshot;
+  done(message?: string): unknown;
 }
 
 declare global {
   const application: ApplicationRuntimeApi;
-  const itsalive: ItsaliveRuntimeApi;
+  const agent: AgentRuntimeApi;
 
   interface Window {
     readonly application: ApplicationRuntimeApi;
-    readonly itsalive: ItsaliveRuntimeApi;
+    readonly agent: AgentRuntimeApi;
   }
 }
