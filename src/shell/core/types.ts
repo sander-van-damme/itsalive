@@ -77,12 +77,18 @@ export interface LlmContextTrace {
   estimatedInputTokens?: number;
   includedHistoryCount?: number;
   omittedHistoryCount?: number;
+  contextCandidateCount?: number;
+  selectedContextEvidenceCount?: number;
+  omittedContextEvidenceCount?: number;
+  selectedBehaviorEvidenceCount?: number;
+  contextRelevanceFallback?: boolean;
   modelContextTokens?: number;
   sources?: {
     system: number;
     mandatory: number;
     observation: number;
     environmentObservation: number;
+    evidence?: number;
     history: number;
     total: number;
   };
