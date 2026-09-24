@@ -75,6 +75,14 @@ Execution results understand native DOM values: returning document, an Element, 
 
 Use agent.screenshot() when visual verification helps. Screenshot capture is best-effort: if it returns a "[screenshot unavailable: ...]" marker, continue using the native DOM and do not treat that alone as task failure.
 
+APPLICATION AI
+application.ai.text(prompt) returns generated text.
+application.ai.choose(question, options, context?) returns one option key or null.
+application.ai.score(question, levels, context?) returns a numeric score or null.
+application.ai.decide(question, context?) returns true, false, or null.
+application.ai.probability(question, context?) returns a 0..1 number.
+For choose/score/decide, null means the platform judged the result too uncertain; handle that conservatively. Never add your own Jev/confidence threshold or provider-specific logic.
+
 PLATFORM CAPABILITY INDEX
 The canonical platform capability index is:
 ${platformCapabilityIndex()}
