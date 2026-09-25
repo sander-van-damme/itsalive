@@ -4,6 +4,7 @@ import {
   buildUserIntentRequest,
   initialBuildTechnicalIntent,
   parseUserIntentDecision,
+  reconcileRepairIntentWithRouting,
   technicalIntentBlock,
   type UserIntentInput,
 } from "../src/shell/core/user-intent";
@@ -53,6 +54,90 @@ describe("user-facing intent boundary", () => {
         capabilityIds: [],
       },
     }), interaction)).toThrow("may authorize coding only for a change request");
+  });
+
+  it("turns a confident direct broken-app report into a focused repair intent", () => {
+    const input: UserIntentInput = {
+      appPrompt: "A stopwatch",
+      source: "chat",
+      userText: "the buttons dont work",
+    };
+    const baseline = parseUserIntentDecision(JSON.stringify({
+      kind: "explanation",
+      shouldCode: false,
+      reply: "Thanks for flagging that.",
+    }), input);
+    const repaired = reconcileRepairIntentWithRouting(baseline, input, {
+      route: "debug",
+      routeConfidence: 0.99,
+      profileRoute: "repair",
+      profileConfidence: 0.98,
+      confident: true,
+      preferredWorkerProfile: "repair-worker",
+    });
+
+    expect(repaired).toMatchObject({
+      kind: "change",
+      shouldCode: true,
+      technicalIntent: {
+        goal: "Repair the reported app problem: the buttons dont work",
+        constraints: expect.arrayContaining([
+          "Preserve unrelated app behavior and existing user data.",
+          "Limit changes to the reported broken behavior; do not rebuild unrelated app functionality.",
+        ]),
+      },
+    });
+    expect(repaired.technicalIntent?.acceptanceCriteria[0]).toContain("the buttons dont work");
+  });
+
+  it("does not turn questions, interaction telemetry, or low-confidence routing into repair authorization", () => {
+    const routing = {
+      route: "debug" as const,
+      routeConfidence: 0.99,
+      profileRoute: "repair" as const,
+      profileConfidence: 0.98,
+      confident: true,
+      preferredWorkerProfile: "repair-worker" as const,
+    };
+    const questionInput: UserIntentInput = {
+      appPrompt: "A stopwatch",
+      source: "chat",
+      userText: "Why don't the buttons work?",
+    };
+    const question = parseUserIntentDecision(JSON.stringify({
+      kind: "question",
+      shouldCode: false,
+      reply: "I can inspect that.",
+    }), questionInput);
+    expect(reconcileRepairIntentWithRouting(question, questionInput, routing)).toEqual(question);
+
+    const interactionInput: UserIntentInput = {
+      appPrompt: "A stopwatch",
+      source: "interaction",
+      userText: "Repeated Start clicks did not change the display.",
+    };
+    const interactionDecision = parseUserIntentDecision(JSON.stringify({
+      kind: "explanation",
+      shouldCode: false,
+      reply: "Observed.",
+    }), interactionInput);
+    expect(reconcileRepairIntentWithRouting(interactionDecision, interactionInput, routing)).toEqual(interactionDecision);
+
+    const reportInput: UserIntentInput = {
+      appPrompt: "A stopwatch",
+      source: "chat",
+      userText: "the buttons dont work",
+    };
+    const reportDecision = parseUserIntentDecision(JSON.stringify({
+      kind: "explanation",
+      shouldCode: false,
+      reply: "Thanks.",
+    }), reportInput);
+    expect(reconcileRepairIntentWithRouting(reportDecision, reportInput, {
+      ...routing,
+      routeConfidence: 0.6,
+      confident: false,
+    })).toEqual(reportDecision);
   });
 
   it("turns an explicit requested change into a compact technical intent", () => {
