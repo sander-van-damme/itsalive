@@ -13,6 +13,19 @@ import { installAgentDurabilityAudit } from "./durability";
 
 const DONE = Symbol("agent-done");
 
+interface DoneSignal {
+  [DONE]: true;
+  message?: string;
+}
+
+function doneSignal(message?: string): DoneSignal {
+  return { [DONE]: true, ...(message === undefined ? {} : { message }) };
+}
+
+function isDoneSignal(value: unknown): value is DoneSignal {
+  return Boolean(value && typeof value === "object" && DONE in value);
+}
+
 function stringifyExecutionValue(value: unknown): string {
   const seen = new WeakSet<object>();
   const serialized = JSON.stringify(value, (_key, current: unknown) => {
@@ -57,7 +70,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     }
   };
 
-  const done = (message?: string) => ({ [DONE]: true, message });
+  const done = (message?: string): DoneSignal => doneSignal(message);
   const text = async (prompt: unknown): Promise<string> => {
     const promptText = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
     if (typeof promptText !== "string") throw new TypeError("application.ai.text prompt must be text or JSON-serializable");
@@ -137,9 +150,20 @@ export async function startAppRuntime(options: RuntimeOptions) {
   installAgentApi(window, agentApi);
   const durability = installAgentDurabilityAudit();
 
-  const run = async (code: string) => {
+  const run = async (code: string): Promise<{ value: unknown; completion?: DoneSignal }> => {
+    let completion: DoneSignal | undefined;
+    const executionAgent: AgentRuntimeApi = Object.freeze({
+      memory,
+      screenshot,
+      done: (message?: string) => {
+        const signal = doneSignal(message);
+        completion = signal;
+        return signal;
+      },
+    });
     const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    return new AsyncFunction(`"use strict";\n${code}`).call(window);
+    const value = await new AsyncFunction("agent", `"use strict";\n${code}`).call(window, executionAgent);
+    return { value, ...(completion ? { completion } : {}) };
   };
 
   const listener = async (event: MessageEvent<unknown>) => {
@@ -156,9 +180,9 @@ export async function startAppRuntime(options: RuntimeOptions) {
     } else if (message.type === "execute") {
       try {
         ensureCanonicalAppRoot();
-        let result: unknown;
+        let execution: { value: unknown; completion?: DoneSignal };
         try {
-          result = await durability.runAgentCommand(() => run(message.code));
+          execution = await durability.runAgentCommand(() => run(message.code));
         } catch (error) {
           try {
             enforceCanonicalAppRootAfterAgentCommand();
@@ -168,8 +192,10 @@ export async function startAppRuntime(options: RuntimeOptions) {
           throw error;
         }
         enforceCanonicalAppRootAfterAgentCommand();
-        if (result && typeof result === "object" && DONE in result) bridge.post({ type: "result", done: true, message: (result as { message?: string }).message }, message.requestId);
-        else bridge.post({ type: "result", result: bounded(result, options.maxResultBytes ?? 256_000) }, message.requestId);
+        const returnedCompletion = isDoneSignal(execution.value) ? execution.value : undefined;
+        const completion = returnedCompletion ?? execution.completion;
+        if (completion) bridge.post({ type: "result", done: true, message: completion.message }, message.requestId);
+        else bridge.post({ type: "result", result: bounded(execution.value, options.maxResultBytes ?? 256_000) }, message.requestId);
       } catch (error) {
         logs.add("error", ["Agent execution failed", error], "agent", error instanceof Error ? error.stack : undefined);
         bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
