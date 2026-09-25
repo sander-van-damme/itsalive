@@ -73,6 +73,17 @@ export function normalizeAgentRunFailure(error: unknown, signal?: AbortSignal): 
     };
   }
 
+  const planningFailedBeforeMutation = technical.message.startsWith("Coding manager ")
+    && !technical.message.startsWith("Coding manager verification ");
+  if (planningFailedBeforeMutation) {
+    return {
+      kind: "run-error",
+      resumable: false,
+      userMessage: "I hit a problem before app changes started. Nothing was changed. Try again.",
+      technical,
+    };
+  }
+
   return {
     kind: "run-error",
     resumable: false,
