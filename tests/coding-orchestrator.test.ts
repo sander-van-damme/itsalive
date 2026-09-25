@@ -86,6 +86,32 @@ describe("coding manager and scoped workers", () => {
     expect(normalized.tasks.map(task => task.idPrefix)).toEqual(["counter-", "same-name-", "same_name-"]);
   });
 
+  it("accepts raw and common Markdown JSON fences without accepting trailing prose", () => {
+    const planJson = JSON.stringify({
+      shared: { ref: "shared-v1", design: [], state: [], stores: [] },
+      tasks: [{ id: "main", goal: "Build", scope: "#main", acceptanceCriteria: [], dependencies: [], capabilityIds: [] }],
+    });
+
+    expect(parseCodingManagerPlan(planJson).tasks[0]?.id).toBe("main");
+    expect(parseCodingManagerPlan(`\`\`\`json\n${planJson}\n\`\`\``).tasks[0]?.id).toBe("main");
+    expect(parseCodingManagerPlan(`~~~json\n${planJson}\n~~~`).tasks[0]?.id).toBe("main");
+    expect(() => parseCodingManagerPlan(`\`\`\`json\n${planJson}\n\`\`\`\nextra`)).toThrow(/invalid JSON/);
+  });
+
+  it("accepts fenced manager integration verification", () => {
+    const verification = '{"ok":true,"summary":"Ready","unresolved":[]}';
+    expect(parseManagerVerification(`\`\`\`json\n${verification}\n\`\`\``)).toEqual({
+      ok: true,
+      summary: "Ready",
+      unresolved: [],
+    });
+    expect(parseManagerVerification(`~~~json\n${verification}\n~~~`)).toEqual({
+      ok: true,
+      summary: "Ready",
+      unresolved: [],
+    });
+  });
+
   it("parses manager integration verification separately from worker results", () => {
     expect(parseManagerVerification('{"ok":true,"summary":"Ready","unresolved":[]}')).toEqual({
       ok: true,
