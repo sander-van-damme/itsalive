@@ -1,6 +1,7 @@
 import type { AppDocumentSnapshot, AppScriptSnapshot } from "../shared";
 
 const RUNTIME_SELECTOR = "[data-app-runtime]";
+const BOOTSTRAP_SELECTOR = "[data-itsalive-bootstrap]";
 
 function normalizeControls(root: ParentNode) {
   root.querySelectorAll<HTMLInputElement>("input").forEach(input => {
@@ -25,7 +26,7 @@ function snapshotScript(script: HTMLScriptElement): AppScriptSnapshot {
 export function serializeAppDocument(store = "{}"): AppDocumentSnapshot {
   normalizeControls(document);
   const html = document.documentElement.cloneNode(true) as HTMLElement;
-  html.querySelectorAll(RUNTIME_SELECTOR).forEach(node => node.remove());
+  html.querySelectorAll(`${RUNTIME_SELECTOR}, ${BOOTSTRAP_SELECTOR}`).forEach(node => node.remove());
   const scripts = Array.from(html.querySelectorAll<HTMLScriptElement>("script")).map(snapshotScript);
   html.querySelectorAll("script").forEach(script => script.remove());
   return { html: `<!doctype html>\n${html.outerHTML}`, scripts, store };
