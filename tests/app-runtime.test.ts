@@ -174,6 +174,22 @@ describe("injected app runtime namespaces", () => {
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
   });
 
+  it("captures nested done calls per execution without leaking completion state", async () => {
+    emit({ type: "execute", code: '(() => { agent.done("nested"); })();', requestId: "nested-done" });
+    emit({ type: "execute", code: "return null;", requestId: "after-nested-done" });
+    await nextTask();
+
+    expect(state.posts).toContainEqual({
+      payload: { type: "result", done: true, message: "nested" },
+      requestId: "nested-done",
+    });
+    expect(state.posts).toContainEqual({
+      payload: { type: "result", result: null },
+      requestId: "after-nested-done",
+    });
+    expect(state.posts.some(({ requestId, payload }) => requestId === "after-nested-done" && payload.done === true)).toBe(false);
+  });
+
   it("tracks listeners installed only by transient agent commands", async () => {
     emit({
       type: "execute",

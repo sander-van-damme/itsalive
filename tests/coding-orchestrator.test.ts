@@ -293,9 +293,14 @@ describe("coding manager and scoped workers", () => {
     expect(managerContext).toContain("visible focus");
     expect(managerContext).not.toContain("Budget Pal");
     expect(managerContext).not.toContain("raw history");
+    expect(managerRequest.system).toContain("owning scope prefix");
+    expect(managerRequest.system).toContain("omit targetIds");
 
     const workerRequests = requests.filter(request => request.purpose === "agent turn 1");
     expect(workerRequests).toHaveLength(2);
+    expect(workerRequests[0]!.system).toContain("runtime also recognizes a nested final call");
+    expect(workerRequests[0]!.system).toContain("stable inline <script>");
+    expect(workerRequests[0]!.system).toContain("Direct addEventListener calls made only by the transient agent command");
     const firstContext = workerRequests[0]!.messages.map(message => message.content).join("\n");
     const secondContext = workerRequests[1]!.messages.map(message => message.content).join("\n");
 
