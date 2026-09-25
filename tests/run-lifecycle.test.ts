@@ -32,6 +32,20 @@ describe("agent run lifecycle semantics", () => {
     expect(result.userMessage).toBeUndefined();
   });
 
+  it("does not claim changes were kept when coding-manager planning failed before mutation", () => {
+    const result = normalizeAgentRunFailure(new Error("Coding manager returned invalid JSON"));
+    expect(result).toMatchObject({
+      kind: "run-error",
+      resumable: false,
+      userMessage: "I hit a problem before app changes started. Nothing was changed. Try again.",
+    });
+  });
+
+  it("still reports kept changes for integration-verification failures after workers may have mutated the app", () => {
+    const result = normalizeAgentRunFailure(new Error("Coding manager verification returned invalid JSON"));
+    expect(result.userMessage).toBe("I hit a problem while working. Changes already applied were kept. Try again.");
+  });
+
   it("stores, consumes, and restores one paused request per app", () => {
     let id = 0;
     const store = new PausedRunStore(() => `paused-${++id}`, () => 1234);
