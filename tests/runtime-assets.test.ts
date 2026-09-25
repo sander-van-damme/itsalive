@@ -20,6 +20,14 @@ describe("component-scoped build treatment", () => {
     expect(BUILDING_STYLE).not.toContain('@keyframes');
   });
 
+  it("uses disposable non-technical copy for the app bootstrap", () => {
+    const source = readFileSync(new URL("../sites/app/index.html", import.meta.url), "utf8");
+    expect(source).toContain("data-itsalive-bootstrap");
+    expect(source).toContain("Preparing your app…");
+    expect(source).not.toContain("itsalive shell");
+    expect(source).not.toContain("Connecting to the");
+  });
+
   it("explicitly disables motion for reduced-motion users", () => {
     expect(BUILDING_STYLE).toContain("prefers-reduced-motion: reduce");
     expect(BUILDING_STYLE).toContain("animation: none !important");
