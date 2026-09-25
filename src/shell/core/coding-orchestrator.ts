@@ -804,8 +804,8 @@ function stringArray(value: unknown, max = 12): string[] {
 
 function stripFence(value: string): string {
   const trimmed = value.trim();
-  const match = trimmed.match(/^~~~(?:json)?\s*([\s\S]*?)\s*~~~$/i);
-  return match ? match[1]!.trim() : trimmed;
+  const match = trimmed.match(/^(```|~~~)(?:json)?[ \t]*\r?\n([\s\S]*?)\r?\n?\1$/i);
+  return match ? match[2]!.trim() : trimmed;
 }
 
 export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
