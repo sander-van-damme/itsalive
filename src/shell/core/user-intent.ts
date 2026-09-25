@@ -1,4 +1,5 @@
 import { inferPlatformCapabilities, isPlatformCapabilityId, platformCapabilityHelp, platformCapabilityIndex, type PlatformCapabilityId } from "./capabilities";
+import type { TriggerRoutingDecision } from "./jev-routing";
 import type { GenerateRequest, ModelConfig } from "./types";
 
 export type UserInputKind = "change" | "explanation" | "question" | "preference" | "other";
@@ -116,6 +117,36 @@ export function parseUserIntentDecision(raw: string, input: UserIntentInput): Us
       constraints: constraints.length ? constraints : ["Preserve unrelated app behavior and existing user data."],
       acceptanceCriteria: acceptanceCriteria.length ? acceptanceCriteria : ["The requested behavior works from the visible app UI."],
       capabilityIds,
+      ...(input.telemetrySummary?.trim() ? { telemetrySummary: input.telemetrySummary.trim() } : {}),
+    },
+  };
+}
+
+export function reconcileRepairIntentWithRouting(
+  decision: UserIntentDecision,
+  input: UserIntentInput,
+  routing: TriggerRoutingDecision | undefined,
+): UserIntentDecision {
+  if (decision.shouldCode || input.source !== "chat" || !routing?.confident) return decision;
+  if (routing.route !== "debug" || routing.preferredWorkerProfile !== "repair-worker") return decision;
+  if (decision.kind === "question" || decision.kind === "preference") return decision;
+
+  const report = input.userText.replace(/\s+/g, " ").trim().slice(0, 1_000);
+  if (!report) return decision;
+  return {
+    kind: "change",
+    shouldCode: true,
+    reply: "",
+    technicalIntent: {
+      goal: `Repair the reported app problem: ${report}`,
+      constraints: [
+        "Preserve unrelated app behavior and existing user data.",
+        "Limit changes to the reported broken behavior; do not rebuild unrelated app functionality.",
+      ],
+      acceptanceCriteria: [
+        `The reported broken behavior is fixed from the visible app UI: ${report}`,
+      ],
+      capabilityIds: inferPlatformCapabilities(report),
       ...(input.telemetrySummary?.trim() ? { telemetrySummary: input.telemetrySummary.trim() } : {}),
     },
   };
