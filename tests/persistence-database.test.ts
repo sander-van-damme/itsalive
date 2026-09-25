@@ -12,7 +12,7 @@ describe("runtime document persistence client", () => {
   it("separates app setup from markup and restores scripts only after the complete DOM exists", async () => {
     document.documentElement.lang = "en";
     document.head.innerHTML = '<title>Saved app</title><script data-app-runtime src="/bootstrap.js"></script><script data-app-setup>window.__restoredSetup = true;</script>';
-    document.body.innerHTML = '<main id="itsalive-root"><input value="old"><textarea>old</textarea></main>';
+    document.body.innerHTML = '<main id="itsalive-root"><section data-itsalive-bootstrap>Preparing your app…</section><input value="old"><textarea>old</textarea></main>';
     const input = document.querySelector("input")!;
     const textarea = document.querySelector("textarea")!;
     input.value = "current";
@@ -22,6 +22,8 @@ describe("runtime document persistence client", () => {
     expect(snapshot.html).toContain('value="current"');
     expect(snapshot.html).toContain("current text");
     expect(snapshot.html).not.toContain("bootstrap.js");
+    expect(snapshot.html).not.toContain("data-itsalive-bootstrap");
+    expect(snapshot.html).not.toContain("Preparing your app");
     expect(snapshot.html).not.toContain("data-app-setup");
     expect(snapshot.store).toBe("{}");
     expect(snapshot.scripts).toEqual([
