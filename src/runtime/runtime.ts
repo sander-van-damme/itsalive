@@ -211,6 +211,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     applicationStore.restore(saved.document.store);
     await restoreAppDocument(saved.document);
   }
+  document.querySelectorAll("[data-itsalive-bootstrap]").forEach(node => node.remove());
   ensureCanonicalAppRoot();
   const autosave = installAutosave(document => {
     if (appDocumentCharacterSize(document) > MAX_SAVED_DOCUMENT_CHARACTERS) {
