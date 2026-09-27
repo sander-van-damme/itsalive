@@ -1,3 +1,4 @@
+import type { SharedContractChange } from "./app-contract";
 export type AgentRole =
   | "user-intent"
   | "coding-manager"
@@ -147,7 +148,7 @@ export interface WorkerHandoff {
   changed: string[];
   verified: string[];
   unresolved?: string[];
-  sharedContractChanges?: string[];
+  sharedContractChanges?: SharedContractChange[];
   /** A broader/different scope the worker needs instead of silently expanding ownership. */
   requestedScope?: string;
 }
@@ -166,7 +167,7 @@ export function compactWorkerHandoff(handoff: WorkerHandoff): string {
       ? { unresolved: handoff.unresolved.map(value => value.trim()).filter(Boolean) }
       : {}),
     ...(handoff.sharedContractChanges?.length
-      ? { sharedContractChanges: handoff.sharedContractChanges.map(value => value.trim()).filter(Boolean) }
+      ? { sharedContractChanges: handoff.sharedContractChanges }
       : {}),
     ...(handoff.requestedScope?.trim() ? { requestedScope: handoff.requestedScope.trim() } : {}),
   });
