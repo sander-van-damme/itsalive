@@ -73,8 +73,8 @@ class BrowserExecutor implements AppExecutor {
     };
 
     try {
-      const fn = new AsyncFunction("agent", '"use strict";\n' + code);
-      const value = await fn.call(window, agent);
+      const fn = new AsyncFunction("agent", "application", '"use strict";\n' + code);
+      const value = await fn.call(window, agent, (window as unknown as { application: unknown }).application);
       await this.runPendingSetupScripts();
       const returnedDone = Boolean(value && typeof value === "object" && (value as { __scenarioDone?: boolean }).__scenarioDone);
       if (doneCalled || returnedDone) return { done: true, ...(doneMessage ? { message: doneMessage } : {}) };
@@ -95,8 +95,8 @@ class BrowserExecutor implements AppExecutor {
       this.executedSetupScripts.add(script);
       const source = script.textContent?.trim();
       if (!source) continue;
-      const fn = new AsyncFunction('"use strict";\n' + source);
-      await fn.call(window);
+      const fn = new AsyncFunction("application", '"use strict";\n' + source);
+      await fn.call(window, (window as unknown as { application: unknown }).application);
     }
   }
 }
