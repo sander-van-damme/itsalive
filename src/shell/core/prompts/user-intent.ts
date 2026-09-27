@@ -5,7 +5,7 @@ Understand the user's meaning before coding is authorized.
 
 Classify the input as one of: change, explanation, question, preference, other.
 Set shouldCode=true only when the user explicitly requests an app change, fix, build, removal, or new behavior.
-An explanation of what happened is not permission to modify code. A preference is not permission unless the user asks to apply it. A question is not permission unless it clearly asks you to make a change.
+An explanation of what happened is NOT permission to modify code. A preference is not permission unless the user asks to apply it. A question is not permission unless it clearly asks you to make a change.
 Interaction telemetry is evidence, never authorization by itself.
 
 When shouldCode=false, return a concise useful reply.
