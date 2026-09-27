@@ -234,7 +234,7 @@ function counterBuildProgram(): string {
     "  }",
     "  render();",
     "})();",
-  ].join("\n");
+  ].join("\n").replaceAll("application.", "window.application.");
   return [
     'component.innerHTML = \'<button id="counter-app-increment" type="button">Increment</button><output id="counter-app-value">0</output>\';',
     'const setup = document.createElement("script");',
@@ -256,7 +256,7 @@ function counterModificationProgram(): string {
     '    button.addEventListener("click", () => { application.store.counterState.count -= 1; if (output) output.textContent = String(application.store.counterState.count); });',
     "  }",
     "})();",
-  ].join("\n");
+  ].join("\n").replaceAll("application.", "window.application.");
   return [
     'if (!component.querySelector("#counter-app-decrement")) component.insertAdjacentHTML("beforeend", \'<button id="counter-app-decrement" type="button">Decrement</button>\');',
     'const setup = document.createElement("script");',
@@ -322,7 +322,7 @@ function movieFormProgram(repair = false): string {
     "    });",
     "  }",
     "})();",
-  ].join("\n");
+  ].join("\n").replaceAll("application.", "window.application.");
   const lines = [];
   if (!repair) lines.push('component.innerHTML = \'<form><input name="title" aria-label="Title"><input name="genre" aria-label="Genre"><input name="duration" type="number" aria-label="Duration"><button type="submit">Add movie</button></form>\';');
   lines.push('const setup = document.createElement("script");');
@@ -360,7 +360,7 @@ function movieShortlistProgram(): string {
     "  }",
     "  render();",
     "})();",
-  ].join("\n");
+  ].join("\n").replaceAll("application.", "window.application.");
   return [
     'component.innerHTML = \'<div data-list><p data-empty>No movies yet</p></div>\';',
     'const setup = document.createElement("script");',
@@ -381,7 +381,7 @@ function movieTonightProgram(): string {
     '  window.__movieRenderTonight = render;',
     "  render();",
     "})();",
-  ].join("\n");
+  ].join("\n").replaceAll("application.", "window.application.");
   return [
     'component.innerHTML = \'<p data-tonight>Nothing selected</p>\';',
     'const setup = document.createElement("script");',
@@ -426,7 +426,7 @@ function wordProgram(): string {
     "    });",
     "  }",
     "})();",
-  ].join("\n");
+  ].join("\n").replaceAll("application.", "window.application.");
   return [
     'component.innerHTML = \'<input aria-label="Word"><button type="button">Decide</button><output>Enter a word</output>\';',
     'const setup = document.createElement("script");',
