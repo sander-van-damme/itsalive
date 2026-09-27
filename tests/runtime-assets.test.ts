@@ -1,13 +1,35 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { BUILDING_STYLE } from "../src/runtime/assets";
+import { BUILDING_STYLE, TAILWIND_BROWSER_ASSET, installRuntimeAssets } from "../src/runtime/assets";
 
 describe("component-scoped build treatment", () => {
-  it("keeps Tailwind Browser but ships no Alpine runtime assets", () => {
+  it("keeps only pinned Tailwind Browser as the default third-party runtime asset", () => {
     const source = readFileSync(new URL("../src/runtime/assets.ts", import.meta.url), "utf8");
-    expect(source).toContain("tailwindcss-browser");
-    expect(source).not.toContain("alpinejs");
+    expect(TAILWIND_BROWSER_ASSET.url).toContain("tailwindcss-browser/4.3.3");
+    expect(TAILWIND_BROWSER_ASSET.integrity).toMatch(/^sha512-/);
+    for (const removed of [
+      "feather-icons", "Chart.js", "d3/", "three.js", "marked/", "mermaid/",
+      "mathjs", "dayjs", "Swiper", "leaflet", "KaTeX", "gsap", "PapaParse",
+      "fuzzysort", "highlight.js", "alpinejs",
+    ]) expect(source, removed).not.toContain(removed);
     expect(source).not.toContain("[x-cloak]");
+  });
+
+  it("installs Tailwind once and keeps runtime build styling local", async () => {
+    const install = installRuntimeAssets(document);
+    const script = document.querySelector<HTMLScriptElement>(
+      `script[data-itsalive-runtime-asset="${TAILWIND_BROWSER_ASSET.url}"]`,
+    );
+    expect(script).not.toBeNull();
+    expect(script?.src).toBe(TAILWIND_BROWSER_ASSET.url);
+    expect(script?.integrity).toBe(TAILWIND_BROWSER_ASSET.integrity);
+    expect(document.querySelector("style[data-itsalive-runtime-style]")).not.toBeNull();
+    script!.dispatchEvent(new Event("load"));
+    await install;
+
+    await installRuntimeAssets(document);
+    expect(document.querySelectorAll(`script[data-itsalive-runtime-asset="${TAILWIND_BROWSER_ASSET.url}"]`)).toHaveLength(1);
+    expect(document.querySelectorAll("style[data-itsalive-runtime-style]")).toHaveLength(1);
   });
 
   it("uses quiet region state styling without the old Building label or frosted pulse", () => {
