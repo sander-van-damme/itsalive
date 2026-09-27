@@ -1,4 +1,5 @@
-import { inferPlatformCapabilities, isPlatformCapabilityId, platformApiIndex, platformCapabilityHelp, type PlatformCapabilityId } from "./capabilities";
+import { inferPlatformCapabilities, isPlatformCapabilityId, platformCapabilityHelp, type PlatformCapabilityId } from "./capabilities";
+import { USER_INTENT_SYSTEM_PROMPT } from "./prompts";
 import type { TriggerRoutingDecision } from "./jev-routing";
 import type { GenerateRequest, ModelConfig } from "./types";
 
@@ -28,27 +29,6 @@ export interface UserIntentInput {
   telemetrySummary?: string;
 }
 
-const INTENT_SYSTEM = `You are the user-facing intent manager for a live app builder.
-Your job is to understand the user's meaning before any coding agent is allowed to act.
-
-Classify the input as one of: change, explanation, question, preference, other.
-Set shouldCode=true only when the user explicitly requests an app change, fix, build, removal, or new behavior.
-An explanation of what happened is NOT permission to modify code. A preference is NOT permission unless the user asks to apply it. A question is NOT permission unless it clearly asks you to make a change.
-For interaction feedback, telemetry is evidence about what happened, never authorization by itself.
-
-When shouldCode=false, give a concise useful reply or acknowledgement in reply.
-When shouldCode=true, produce a compact technicalIntent with:
-- goal: explicit implementation goal, without conversational filler;
-- constraints: what must remain unchanged or boundaries to respect;
-- acceptanceCriteria: observable checks for completion;
-- capabilityIds: only IDs from the capability catalog that are relevant.
-Do not include the full user conversation. Do not invent requirements.
-Return JSON only with this exact shape:
-{"kind":"change|explanation|question|preference|other","shouldCode":boolean,"reply":"string","technicalIntent":{"goal":"string","constraints":["string"],"acceptanceCriteria":["string"],"capabilityIds":["id"]}}
-
-Available platform APIs:
-${platformApiIndex()}`;
-
 export function buildUserIntentRequest(input: UserIntentInput, model: ModelConfig, signal?: AbortSignal): GenerateRequest {
   const body = [
     `APP PURPOSE\n${input.appPrompt.trim()}`,
@@ -60,7 +40,7 @@ export function buildUserIntentRequest(input: UserIntentInput, model: ModelConfi
   return {
     purpose: "user intent interpretation",
     model,
-    system: INTENT_SYSTEM,
+    system: USER_INTENT_SYSTEM_PROMPT,
     messages: [{ role: "user", content: body }],
     signal,
   };
