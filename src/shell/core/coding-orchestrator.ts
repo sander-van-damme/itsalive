@@ -219,7 +219,7 @@ const MANAGER_VERIFY_SYSTEM = [
   "",
   "Judge only from the technical intent, shared contracts, worker handoffs, and compact final app outline.",
   "Do not request worker transcripts.",
-  "The summary is shown to the user. Use ordinary product language and never mention workers, handoffs, regions, final verification, or integration verification.",
+  "The summary is shown to the user. Use ordinary product language and never mention workers, handoffs, regions, or verification.",
   "Mark ok=false when an acceptance criterion is not supported by the evidence or a component remains missing/building."
 ].join("\n");
 
@@ -579,7 +579,7 @@ export class CodingOrchestrator {
   }
 }
 
-const INTERNAL_MANAGER_SUMMARY = /\b(?:worker|handoff|region|final verification|integration verification)\b/i;
+const INTERNAL_MANAGER_SUMMARY = /\b(?:worker|handoff|region|verification)\b/i;
 
 function userFacingManagerSummary(summary: string | undefined, ok: boolean): string {
   const normalized = summary?.replace(/\s+/g, " ").trim();
