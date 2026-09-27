@@ -1,13 +1,26 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
-import { BUILDING_STYLE } from "../src/runtime/assets";
+import { BUILDING_STYLE, TAILWIND_BROWSER_ASSET } from "../src/runtime/assets";
 
 describe("component-scoped build treatment", () => {
-  it("keeps Tailwind Browser but ships no Alpine runtime assets", () => {
+  it("keeps only pinned Tailwind Browser as the default third-party runtime asset", () => {
     const source = readFileSync(new URL("../src/runtime/assets.ts", import.meta.url), "utf8");
-    expect(source).toContain("tailwindcss-browser");
-    expect(source).not.toContain("alpinejs");
+    expect(TAILWIND_BROWSER_ASSET.url).toContain("tailwindcss-browser/4.3.3");
+    expect(TAILWIND_BROWSER_ASSET.integrity).toMatch(/^sha512-/);
+    for (const removed of [
+      "feather-icons", "Chart.js", "d3/", "three.js", "marked/", "mermaid/",
+      "mathjs", "dayjs", "Swiper", "leaflet", "KaTeX", "gsap", "PapaParse",
+      "fuzzysort", "highlight.js", "alpinejs",
+    ]) expect(source, removed).not.toContain(removed);
     expect(source).not.toContain("[x-cloak]");
+  });
+
+  it("loads exactly the retained Tailwind asset during runtime startup", () => {
+    const source = readFileSync(new URL("../src/runtime/assets.ts", import.meta.url), "utf8");
+    expect(source).toContain("await loadScript(ownerDocument, TAILWIND_BROWSER_ASSET)");
+    expect(source).not.toContain("loadStyle(");
+    expect(source.match(/cdnjs\.cloudflare\.com\/ajax\/libs\//g)).toHaveLength(1);
+    expect(source).toContain('data-itsalive-runtime-style');
   });
 
   it("uses quiet region state styling without the old Building label or frosted pulse", () => {

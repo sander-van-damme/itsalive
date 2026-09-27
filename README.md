@@ -42,7 +42,7 @@ The `window.application` and `window.agent` globals follow the same rule. Their 
 - OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
 - Native DOM inspection through ordinary browser APIs and execution results, plus coding-agent screenshot and curated-memory capabilities.
 - App-to-shell AI text generation and bounded Jev-backed decisions, plus explicit escalation to the external coding agent, with canonical capability metadata used for agent help.
-- Tailwind's browser runtime, Feather Icons, and preloaded browser libraries for charts, visualization, 3D, diagrams, math, dates, sliders, maps, animation, CSV, fuzzy search, and code highlighting. Runtime Tailwind deliberately supports utility classes introduced by the LLM after load rather than relying on build-time source scanning; generated behavior uses ordinary browser JavaScript.
+- A minimal generated-app environment: ordinary browser APIs, It's Alive's runtime APIs, and a pinned Tailwind Browser runtime for utility classes generated after build time. No charts/icons/visualization/date/map/etc. libraries are preloaded by default; apps may load ordinary browser resources themselves when a task genuinely needs them.
 - Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
 
 ## Local development
