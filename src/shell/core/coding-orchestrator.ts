@@ -4,7 +4,7 @@ import { normalizeAlivePolicyProposal, type AlivePolicy, type AlivePolicyProposa
 import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
-import { platformCapabilityHelp, isPlatformCapabilityId, type PlatformCapabilityId } from "./capabilities";
+import { platformApiIndex, platformCapabilityHelp, isPlatformCapabilityId, type PlatformCapabilityId } from "./capabilities";
 import type { AgentProfileId, ResolvedAgentProfile } from "./agent-profiles";
 import type { ProviderRegistry } from "./providers";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
@@ -797,6 +797,7 @@ function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown):
     "APP PURPOSE\n" + options.appPrompt.trim(),
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
     "CURRENT ALIVE POLICY\n" + JSON.stringify(options.alivePolicy ?? null),
+    "AVAILABLE PLATFORM APIS\n" + platformApiIndex(),
     "ESTABLISHED APP CONTRACT\n" + JSON.stringify(options.technicalContract ? normalizeAppTechnicalContract(options.technicalContract) : null),
     options.triggerRoute || options.preferredWorkerProfile
       ? "ROUTING HINT\n" + JSON.stringify({
@@ -857,7 +858,7 @@ function workerTaskInput(
     "SHARED SEMANTICS\n" + list(plan.shared.semantics),
     "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "DEPENDENCY HANDOFFS\n" + (dependencyHandoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
-    "RELEVANT PLATFORM CAPABILITIES\n" + platformCapabilityHelp(task.capabilityIds),
+    "SELECTED PLATFORM API HELP\n" + platformCapabilityHelp(task.capabilityIds),
   ].join("\n\n");
 }
 
