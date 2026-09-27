@@ -610,7 +610,8 @@ describe("coding manager and scoped workers", () => {
     const verifyContext = verifyRequest.messages.map(message => message.content).join("\n");
     expect(verifyContext).toContain("CURRENT SCOPE EVIDENCE");
     expect(verifyContext).toContain('"scope":"#grocery-list"');
-    expect(verifyRequest.system).toContain("not authoritative truth");
+    expect(verifyRequest.system).toContain("Current deterministic evidence is authoritative");
+    expect(verifyRequest.system).toContain("Handoff status is historical diagnostic evidence");
   });
 
   it("runs independent scopes concurrently and waits for dependencies before the next wave", async () => {
