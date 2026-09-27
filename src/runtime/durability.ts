@@ -20,7 +20,7 @@ function signalOption(options?: boolean | AddEventListenerOptions): AbortSignal 
   return typeof options === "object" && options ? options.signal ?? undefined : undefined;
 }
 
-function isRelevantTarget(target: EventTarget, root: HTMLElement | null): boolean {
+function isRelevantTarget(target: EventTarget, root: Element | null): boolean {
   if (target === window || target === document) return true;
   if (!root || !(target instanceof Node)) return false;
   return target === root || root.contains(target);
@@ -81,8 +81,10 @@ export function installAgentDurabilityAudit() {
   EventTarget.prototype.addEventListener = patchedAdd;
   EventTarget.prototype.removeEventListener = patchedRemove;
 
-  const audit = (): DurabilityAuditResult => {
-    const root = document.getElementById("itsalive-root");
+  const audit = (scopeSelector?: string): DurabilityAuditResult => {
+    const root = scopeSelector
+      ? document.querySelector(scopeSelector)
+      : document.getElementById("itsalive-root");
     let runtimeOnlyEventListenerCount = 0;
     for (const registration of registrations) {
       if (registration.signal?.aborted) continue;
