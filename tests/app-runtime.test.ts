@@ -174,6 +174,43 @@ describe("injected app runtime namespaces", () => {
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
   });
 
+  it("rejects structured agent.done objects immediately instead of emitting an invalid result that times out", async () => {
+    emit({
+      type: "execute",
+      code: 'return agent.done({ status: "done", changed: ["grocery list built"] });',
+      requestId: "invalid-done-object",
+    });
+    await nextTask();
+
+    const response = state.posts.find(({ requestId }) => requestId === "invalid-done-object");
+    expect(response?.payload.type).toBe("execution.error");
+    expect(response?.payload).toEqual(expect.objectContaining({
+      error: expect.objectContaining({
+        name: "TypeError",
+        message: expect.stringContaining("JSON.stringify"),
+      }),
+    }));
+    expect(state.posts.some(({ requestId, payload }) => requestId === "invalid-done-object" && payload.type === "result")).toBe(false);
+  });
+
+  it("accepts a JSON-stringified structured worker handoff as the done message", async () => {
+    emit({
+      type: "execute",
+      code: 'return agent.done(JSON.stringify({ status: "done", changed: ["grocery list built"], verified: ["add works"] }));',
+      requestId: "structured-done-string",
+    });
+    await nextTask();
+
+    expect(state.posts).toContainEqual({
+      payload: {
+        type: "result",
+        done: true,
+        message: JSON.stringify({ status: "done", changed: ["grocery list built"], verified: ["add works"] }),
+      },
+      requestId: "structured-done-string",
+    });
+  });
+
   it("captures nested done calls per execution without leaking completion state", async () => {
     emit({ type: "execute", code: '(() => { agent.done("nested"); })();', requestId: "nested-done" });
     emit({ type: "execute", code: "return null;", requestId: "after-nested-done" });
@@ -232,13 +269,16 @@ describe("injected app runtime namespaces", () => {
 
     emit({
       type: "execute",
-      code: "return window['__itsaliveRuntimeDurabilityAuditV1']();",
+      code: "return { all: window['__itsaliveRuntimeDurabilityAuditV1'](), scoped: window['__itsaliveRuntimeDurabilityAuditV1']('[data-ephemeral]') };",
       requestId: "durability-audit",
     });
     await nextTask();
 
     expect(state.posts).toContainEqual({
-      payload: { type: "result", result: { runtimeOnlyEventListenerCount: 1 } },
+      payload: { type: "result", result: {
+        all: { runtimeOnlyEventListenerCount: 1 },
+        scoped: { runtimeOnlyEventListenerCount: 1 },
+      } },
       requestId: "durability-audit",
     });
 

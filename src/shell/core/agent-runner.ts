@@ -771,6 +771,8 @@ async function verifyScopedCompletion(
   const selector = options.scopeSelector!;
   const inspection = await executor.execute(options.appId, `
 const component = document.querySelector(${JSON.stringify(selector)});
+const durabilityAudit = window["__itsaliveRuntimeDurabilityAuditV1"];
+const durability = typeof durabilityAudit === "function" ? durabilityAudit(${JSON.stringify(selector)}) : undefined;
 return component ? {
   html: component.innerHTML,
   buildingCount: component.querySelectorAll('[data-itsalive-building]').length + (component.matches('[data-itsalive-building]') ? 1 : 0),
@@ -778,6 +780,7 @@ return component ? {
   buildOwner: component.getAttribute('data-itsalive-build-owner'),
   inert: component.hasAttribute('inert'),
   ariaBusy: component.getAttribute('aria-busy'),
+  runtimeOnlyEventListenerCount: durability?.runtimeOnlyEventListenerCount ?? 0,
 } : null;
 `, {
     signal,
@@ -794,6 +797,15 @@ return component ? {
   if (!shellOwned && ((value.buildingCount as number | undefined ?? 0) > 0 || value.inert === true || value.ariaBusy === "true")) {
     return { ok: false, reason: `assigned component ${selector} is still marked as building/busy` };
   }
+  const runtimeOnlyEventListenerCount = typeof value.runtimeOnlyEventListenerCount === "number"
+    ? value.runtimeOnlyEventListenerCount
+    : 0;
+  if (runtimeOnlyEventListenerCount > 0) {
+    return {
+      ok: false,
+      reason: `assigned component ${selector} still depends on ${runtimeOnlyEventListenerCount} runtime-only event listener${runtimeOnlyEventListenerCount === 1 ? "" : "s"} installed by an agent command; persist that interaction setup so it survives restore`,
+    };
+  }
   const html = typeof value.html === "string" ? value.html : "";
   const tree = assessCompletionTree(html);
   if (!tree.ok) return tree;
@@ -806,6 +818,7 @@ return component ? {
       // orchestration reveals it. That lifecycle marker is not worker-owned
       // unfinished work and must not bias the semantic completion assessor.
       buildingCount: shellOwned ? 0 : (typeof value.buildingCount === "number" ? value.buildingCount : 0),
+      runtimeOnlyEventListenerCount,
     }),
   };
 }

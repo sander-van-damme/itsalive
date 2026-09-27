@@ -878,6 +878,60 @@ describe('AgentRunner lifecycle', () => {
     );
   });
 
+  it('rejects scoped completion while interaction behavior depends on transient agent listeners', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn()
+      .mockResolvedValueOnce({ text: 'return agent.done("candidate");' })
+      .mockResolvedValueOnce({ text: 'return agent.done("durable");' }) };
+    let inspections = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('Assigned component scope not found')) {
+        return { done: true, message: inspections ? 'durable' : 'candidate' };
+      }
+      if (code.includes('durabilityAudit') && code.includes('nestedBuildingCount')) {
+        inspections++;
+        return {
+          value: {
+            html: '<button>Add grocery</button><ul><li>Milk</li></ul>',
+            buildingCount: 1,
+            nestedBuildingCount: 0,
+            buildOwner: 'shell',
+            inert: false,
+            ariaBusy: 'true',
+            runtimeOnlyEventListenerCount: inspections === 1 ? 2 : 0,
+          },
+        };
+      }
+      throw new Error('Unexpected scoped test command');
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId,
+      appPrompt: 'A grocery list',
+      trigger: 'Build a durable grocery list',
+      model,
+      scopeSelector: '#grocery-list',
+      budget: { emergencyTurnCeiling: 2 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'durable', turns: 2 });
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        role: 'observation',
+        kind: 'error',
+        content: expect.stringContaining('runtime-only event listener'),
+      }),
+    ]));
+  });
+
   it('still rejects scoped completion when a nested unfinished region remains', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {

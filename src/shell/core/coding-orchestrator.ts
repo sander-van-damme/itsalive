@@ -103,6 +103,18 @@ export interface CodingLifecycleSummary {
   blocked: number;
 }
 
+export interface IntegrationScopeEvidence {
+  scope: string;
+  exists: boolean;
+  meaningfulUi: boolean;
+  nestedBuildingCount: number;
+  workerOwnedBusy: boolean;
+  durabilityAvailable: boolean;
+  runtimeOnlyEventListenerCount: number;
+  ok: boolean;
+  problems: string[];
+}
+
 export interface CodingOrchestratorResult {
   status: CodingOrchestratorStatus;
   message?: string;
@@ -110,6 +122,7 @@ export interface CodingOrchestratorResult {
   handoffs: WorkerHandoff[];
   workerTurns: number;
   timeline: WorkerTimelineEntry[];
+  verificationEvidence?: IntegrationScopeEvidence[];
 }
 
 export interface CodingOrchestratorOptions {
@@ -207,7 +220,7 @@ const WORKER_SYSTEM = [
   "OUTPUT",
   "Return exactly one complete executable JavaScript program for this turn. Raw JavaScript is preferred; one JavaScript code fence around the whole response is also accepted. Do not add prose or multiple code blocks.",
   "The shell validates the complete response before executing it exactly once. No partial response is executed while generation is still streaming. If runtime feedback is needed before deciding the next change, use this turn to inspect and use the returned value/console output/error on the next turn.",
-  "Call agent.done(...) only after your assigned scope works. Call it exactly once; returning agent.done(...) is preferred for clarity, although the runtime also recognizes a nested final call.",
+  "Call agent.done(...) only after your assigned scope works. agent.done accepts only an optional string. For the required structured worker handoff, always call return agent.done(JSON.stringify({...handoff...})). Never pass an object directly.",
   "",
   "SCOPE",
   "A variable named component is bound to your assigned Element for every command.",
@@ -223,14 +236,16 @@ const WORKER_SYSTEM = [
   "DURABILITY",
   "Use durable app-authored markup/setup/state. Do not leave behavior dependent on transient command listeners/closures. Keep setup idempotent.",
   "For interactive behavior, persist the setup in app-authored markup such as a stable inline <script> element owned by this component (replace the prior setup script idempotently) or another serializable browser-native mechanism. Direct addEventListener calls made only by the transient agent command do not survive document restoration and will fail completion verification.",
+  "Do not verify behavior by inserting, selecting, deleting, or otherwise mutating fake records in the live application/store. Use current real state plus read-only DOM/state inspection. If a criterion genuinely requires synthetic state to prove, report it as unresolved instead of exposing probe data to the user.",
   "",
   "BUILD STATE",
   "The shell owns data-itsalive-building, data-itsalive-build-state, data-itsalive-build-owner, and aria-busy on the assigned component root.",
   "These attributes communicate progress; they do not disable the component. Do not remove or rewrite them. Because each model turn executes atomically, leave any visible controls in a usable state at the end of each turn whenever practical.",
   "",
   "HANDOFF",
-  "On success, the final done payload must be JSON only with:",
-  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"machine-readable path\",\"description\":\"what changed\",\"from\":\"optional old value\",\"to\":\"optional new value\"}],\"requestedScope\":\"#broader-scope-or-empty\"}",
+  "On success, build this handoff object and serialize it as the string argument to agent.done:",
+  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\",\"read-only evidence only\"],\"unresolved\":[],\"sharedContractChanges\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"machine-readable path\",\"description\":\"what changed\",\"from\":\"optional old value\",\"to\":\"optional new value\"}],\"requestedScope\":\"#broader-scope-or-empty\"}",
+  "Required form: return agent.done(JSON.stringify(handoff)); Do not call agent.done(handoff).",
   "Report sharedContractChanges only when the manager declared a contractChange and this worker actually applied part of it; otherwise return an empty array.",
   "If the task needs ownership outside ASSIGNED SCOPE, do not edit there. Return status=blocked with requestedScope and explain the dependency in unresolved.",
   "Keep it compact."
@@ -241,7 +256,9 @@ const MANAGER_VERIFY_SYSTEM = [
   "Return JSON only:",
   "{\"ok\":boolean,\"summary\":\"short user-safe summary\",\"unresolved\":[\"specific unmet integration or acceptance criterion\"]}",
   "",
-  "Judge only from the technical intent, shared contracts, worker handoffs, and compact final app outline.",
+  "Judge from the technical intent, shared contracts, worker handoffs, compact final app outline, and deterministic CURRENT SCOPE EVIDENCE.",
+  "Worker handoff status is diagnostic history, not authoritative truth about the current app. When a handoff says blocked/failed but current deterministic evidence shows the scope exists, has meaningful UI, is not building, and has no runtime-only interaction wiring, evaluate the current evidence instead of repeating the stale handoff label.",
+  "Never claim a component is absent or unbuilt when CURRENT SCOPE EVIDENCE says it exists and has meaningful UI.",
   "Do not request worker transcripts.",
   "The summary is shown to the user. Use ordinary product language and never mention workers, handoffs, regions, or verification.",
   "Mark ok=false when an acceptance criterion is not supported by the evidence or a component remains missing/building."
@@ -453,21 +470,28 @@ export class CodingOrchestrator {
 
       options.onLifecycle?.(lifecycleSummary(scopeStates, "integration-verification"));
       const finalOutline = await inspectAppOutline(this.executor, options.appId, controller.signal);
+      const verificationEvidence = await inspectIntegrationScopeEvidence(
+        this.executor,
+        options.appId,
+        [...new Set(plan.tasks.map(task => task.scope))],
+        controller.signal,
+      );
+      console.info("Integration scope evidence", verificationEvidence);
       const verified = await this.providers.generate({
         purpose: "coding manager integration verification",
         model: options.managerProfile.modelConfig,
         system: MANAGER_VERIFY_SYSTEM,
         messages: [{
           role: "user",
-          content: managerVerificationInput(options, plan, handoffs, finalOutline),
+          content: managerVerificationInput(options, plan, handoffs, finalOutline, verificationEvidence),
         }],
         trace: options.managerTrace,
         signal: controller.signal,
       }, options.credential);
       const finalCostStop = rootBudget.recordUsage(verified.usage?.cost);
       const verification = parseManagerVerification(verified.text);
-      const hasBlockedWorker = handoffs.some(handoff => handoff.status !== "done");
-      if (verification.ok && !hasBlockedWorker) {
+      const deterministicIntegrationOk = verificationEvidence.every(evidence => evidence.ok);
+      if (verification.ok && deterministicIntegrationOk) {
         if (plan.alivePolicy && options.onAlivePolicyProposal) {
           try { await options.onAlivePolicyProposal(plan.alivePolicy); }
           catch (error) { console.warn("Alive policy proposal was not activated", error); }
@@ -479,16 +503,20 @@ export class CodingOrchestrator {
           handoffs,
           workerTurns,
           timeline,
+          verificationEvidence,
         };
       }
-      if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns, timeline), plan };
+      if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns, timeline), plan, verificationEvidence };
       return {
         status: "manager-verification-failed",
-        message: userFacingManagerSummary(verification.summary, false),
+        message: deterministicIntegrationOk
+          ? userFacingManagerSummary(verification.summary, false)
+          : "The app still needs work before it’s ready.",
         plan,
         handoffs,
         workerTurns,
         timeline,
+        verificationEvidence,
       };
     } finally {
       clearTimeout(deadline);
@@ -791,6 +819,7 @@ function managerVerificationInput(
   plan: CodingManagerPlan,
   handoffs: WorkerHandoff[],
   outline: unknown,
+  verificationEvidence: IntegrationScopeEvidence[],
 ): string {
   return [
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
@@ -802,6 +831,7 @@ function managerVerificationInput(
     "SHARED SEMANTICS\n" + list(plan.shared.semantics),
     "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "WORKER HANDOFFS\n" + (handoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
+    "CURRENT SCOPE EVIDENCE\n" + JSON.stringify(verificationEvidence),
     "FINAL APP OUTLINE\n" + JSON.stringify(outline),
   ].join("\n\n");
 }
@@ -1118,6 +1148,72 @@ function workerHandoff(
     changed: ["Completed scoped task: " + task.goal],
     verified: task.acceptanceCriteria,
   };
+}
+
+async function inspectIntegrationScopeEvidence(
+  executor: AppExecutor,
+  appId: string,
+  scopes: readonly string[],
+  signal: AbortSignal,
+): Promise<IntegrationScopeEvidence[]> {
+  if (!scopes.length) return [];
+  const code = [
+    "/* itsalive:integration-scope-evidence */",
+    "const scopes = " + JSON.stringify(scopes) + ";",
+    "const audit = window['__itsaliveRuntimeDurabilityAuditV1'];",
+    "return scopes.map(scope => {",
+    "  const component = document.querySelector(scope);",
+    "  if (!component) return { scope, exists: false };",
+    "  const html = component.innerHTML;",
+    "  const withoutImplementation = html.replace(/<script\\b[^>]*>[\\s\\S]*?<\\/script>/gi, ' ').replace(/<style\\b[^>]*>[\\s\\S]*?<\\/style>/gi, ' ');",
+    "  const text = withoutImplementation.replace(/<[^>]+>/g, ' ').replace(/&nbsp;/gi, ' ').replace(/\\s+/g, ' ').trim();",
+    "  const interactive = /<(?:button|input|textarea|select|a)\\b/i.test(withoutImplementation);",
+    "  const visual = /<(?:canvas|svg|img|video|audio)\\b/i.test(withoutImplementation);",
+    "  const structure = /<(?:main|section|article|header|nav|form|div|ul|ol|table)\\b/i.test(withoutImplementation);",
+    "  const durability = typeof audit === 'function' ? audit(scope) : null;",
+    "  return {",
+    "    scope, exists: true, meaningfulUi: Boolean(text || interactive || visual || structure),",
+    "    nestedBuildingCount: component.querySelectorAll('[data-itsalive-building]').length,",
+    "    buildOwner: component.getAttribute('data-itsalive-build-owner'),",
+    "    rootBuilding: component.hasAttribute('data-itsalive-building'),",
+    "    ariaBusy: component.getAttribute('aria-busy'),",
+    "    durabilityAvailable: durability !== null,",
+    "    runtimeOnlyEventListenerCount: durability?.runtimeOnlyEventListenerCount ?? 0,",
+    "  };",
+    "});",
+  ].join("\n");
+  const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
+  if (result.error) throw new Error("Could not collect integration scope evidence: " + result.error.message);
+  if (!Array.isArray(result.value)) throw new Error("Integration scope evidence returned an invalid result");
+  const values = result.value as unknown[];
+  return scopes.map((scope, index) => {
+    const raw = values[index] as Record<string, unknown> | undefined;
+    const exists = raw?.exists === true;
+    const meaningfulUi = raw?.meaningfulUi === true;
+    const nestedBuildingCount = typeof raw?.nestedBuildingCount === "number" ? raw.nestedBuildingCount : 0;
+    const shellOwned = raw?.buildOwner === "shell";
+    const workerOwnedBusy = exists && !shellOwned && (raw?.rootBuilding === true || raw?.ariaBusy === "true");
+    const durabilityAvailable = raw?.durabilityAvailable === true;
+    const runtimeOnlyEventListenerCount = typeof raw?.runtimeOnlyEventListenerCount === "number" ? raw.runtimeOnlyEventListenerCount : 0;
+    const problems: string[] = [];
+    if (!exists) problems.push("scope is missing");
+    if (exists && !meaningfulUi) problems.push("scope has no meaningful UI");
+    if (nestedBuildingCount > 0) problems.push("scope contains unfinished nested UI");
+    if (workerOwnedBusy) problems.push("scope is still worker-owned busy/building");
+    if (!durabilityAvailable) problems.push("durability evidence is unavailable");
+    if (runtimeOnlyEventListenerCount > 0) problems.push("scope depends on runtime-only event listeners");
+    return {
+      scope,
+      exists,
+      meaningfulUi,
+      nestedBuildingCount,
+      workerOwnedBusy,
+      durabilityAvailable,
+      runtimeOnlyEventListenerCount,
+      ok: problems.length === 0,
+      problems,
+    };
+  });
 }
 
 async function validateDeclaredSharedStores(
