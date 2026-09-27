@@ -50,12 +50,14 @@ Implication for itsalive:
 
 ## Current baseline
 
-The production coding turn currently contains:
+Production agents use explicit role-owned prompts rather than one generic coding fallback:
 
-1. one large stable `SYSTEM_PROMPT`;
-2. mandatory app purpose + curated behavior + current technical intent;
-3. latest execution/environment observation when present;
-4. recent technical history up to the configured history budget.
+1. user-intent interpretation has its own authorization/classification prompt;
+2. coding-manager planning owns decomposition and canonical contracts;
+3. component/repair workers share the scoped console-execution contract;
+4. final manager verification has a separate evidence-based prompt.
+
+A coding worker turn then combines its stable worker prompt with mandatory app purpose + current technical intent, latest execution/environment observations when present, and selected technical evidence/history within budget.
 
 Raw user/assistant chat is already excluded from coding history after #78.
 
@@ -85,20 +87,11 @@ Default role prompts should use:
 
 Avoid filler, motivational prose, duplicated examples, and repeated explanation of rules already encoded by the runtime.
 
-### Do not adopt telegraphic/"caveman" language by default
+### Test further compression against the production console contract
 
-The benchmark includes a telegraphic candidate because it is cheap to test, not because it is recommended.
+The production worker prompt is already intentionally concise and platform-specific. The benchmark keeps one smaller console candidate to test whether further compression preserves quality.
 
-Risks to measure:
-
-- weakened instruction hierarchy;
-- ambiguous negation or scope;
-- worse tool/API selection;
-- more repair turns;
-- more accidental cross-component edits;
-- weaker behavior on cheaper/low-compute models.
-
-A telegraphic prompt only wins if end-to-end task quality stays equivalent while total cost/latency improves.
+Low-compute component workers are the primary robustness probe: a shorter prompt is useful only if it preserves scope, durability, API selection, handoff correctness, and task quality rather than making the model reason around missing platform semantics.
 
 ## Stable versus dynamic versus JIT context
 
@@ -306,11 +299,10 @@ Whether a repeated shared manager contract is economically useful depends on pro
 
 It compares the same dynamic task context against:
 
-- `baseline`: current production `SYSTEM_PROMPT`;
-- `concise-natural`: candidate shorter structured prompt;
-- `telegraphic`: deliberately aggressive "caveman" candidate.
+- `production-worker`: the actual role-owned component-worker console prompt;
+- `minimal-console`: a deliberately smaller console contract used only as an experimental compression candidate.
 
-The static matrix changes **only prompt wording**. History-budget/context-selection experiments must be run separately so prompt compression and context compression are not conflated.
+The static matrix changes **only the stable worker prompt**. History-budget/context-selection experiments remain separate so prompt compression and context compression are not conflated. Live robustness checks use the component-worker's Low compute profile first.
 
 Run:
 
@@ -320,11 +312,11 @@ npm run benchmark:prompts
 
 The CI test verifies:
 
-- all scenarios are present;
-- all variants see the same dynamic context/history;
+- all five scenarios are present;
+- both variants see the same dynamic context/history;
 - token composition adds up exactly;
-- concise/telegraphic variants are actually shorter;
-- telegraphic wording remains labeled experimental;
+- the experimental minimal prompt is actually smaller;
+- the production component worker remains configured for Low-compute robustness testing;
 - role contracts exclude known pollution sources.
 
 ## Live eval protocol after #85
