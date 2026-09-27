@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { CODING_WORKER_SYSTEM_PROMPT } from "../src/shell/core/prompts";
 import { AgentRunner, type ExecutionResult } from '../src/shell/core/agent-runner';
 import { AGENT_IDLE_TIMEOUT_REASON, AGENT_TIME_BUDGET_REASON } from '../src/shell/core/run-lifecycle';
 import type { HistoryEntry } from '../src/shell/core/types';
@@ -22,7 +23,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain the app', trigger: 'Make a change',
       model, budget: { emergencyTurnCeiling: 2 },
     });
@@ -52,7 +53,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const contexts: unknown[] = [];
 
-    await new AgentRunner(db as never, providers as never, executor).run({
+    await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'Maintain it',
       trigger: 'Repair the timer',
@@ -144,7 +145,7 @@ describe('AgentRunner lifecycle', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 1 },
       onProgress: update => {
         progress.push(update.phase);
@@ -182,7 +183,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    await new AgentRunner(db as never, providers as never, executor).run({
+    await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, budget: { emergencyTurnCeiling: 1 },
     });
 
@@ -212,7 +213,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 1 },
     });
 
@@ -232,7 +233,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, budget: { emergencyTurnCeiling: 1 },
     });
 
@@ -253,7 +254,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    await expect(new AgentRunner(db as never, providers as never, executor).run({
+    await expect(new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 1 },
     })).resolves.toMatchObject({ status: 'emergency-ceiling', turns: 1 });
 
@@ -277,7 +278,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(new AgentRunner(db as never, providers as never, executor).run({
+    await expect(new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 12 },
     })).resolves.toMatchObject({ status: 'generation-failure', turns: 3 });
 
@@ -300,7 +301,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Fix audio', model, budget: { emergencyTurnCeiling: 1 },
     });
 
@@ -326,7 +327,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Add a zebra', model, budget: { emergencyTurnCeiling: 1 },
     });
 
@@ -356,7 +357,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 3 },
     });
 
@@ -389,7 +390,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Build progressively', model, budget: { emergencyTurnCeiling: 3 },
     });
 
@@ -423,7 +424,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Make the button durable', model, budget: { emergencyTurnCeiling: 3 },
     });
 
@@ -465,7 +466,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Inspect then finish', model, budget: { emergencyTurnCeiling: 3 },
     });
 
@@ -508,7 +509,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Inspect, build, and verify', model, budget: { emergencyTurnCeiling: 4 },
     });
 
@@ -537,7 +538,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Fix the quiz', model, budget: { emergencyTurnCeiling: 12 },
     });
 
@@ -560,7 +561,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    await expect(new AgentRunner(db as never, providers as never, executor).run({
+    await expect(new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain the app', trigger: 'Change it',
       model, signal: controller.signal,
     })).rejects.toMatchObject({ name: 'AbortError' });
@@ -583,7 +584,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const run = new AgentRunner(db as never, providers as never, executor).run({
+    const run = new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Make it complex', model,
       budget: { idleTimeoutMs: 50, maxDurationMs: 1_000 },
     });
@@ -611,7 +612,7 @@ describe('AgentRunner lifecycle', () => {
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const run = new AgentRunner(db as never, providers as never, executor).run({
+    const run = new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Reason before coding', model,
       budget: { idleTimeoutMs: 50, maxDurationMs: 125 },
     });
@@ -641,7 +642,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const run = new AgentRunner(db as never, providers as never, executor).run({
+    const run = new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Keep building', model,
       budget: { idleTimeoutMs: 50, maxDurationMs: 125 },
     });
@@ -662,7 +663,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    await new AgentRunner(db as never, providers as never, executor).run({
+    await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'A durable detailed specification',
       trigger: 'Build the initial version of this app now.', persistTrigger: false,
       model,
@@ -682,7 +683,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    await new AgentRunner(db as never, providers as never, executor).run({
+    await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Add a chart',
       model,
     });
@@ -700,7 +701,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const run = new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: consume });
+    const run = new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT, appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: consume });
     await vi.waitFor(() => expect(providers.generate).toHaveBeenCalledTimes(1));
     queue.push('The user changed tempo to 120.');
     release({ text: 'return "updated";' });
@@ -726,7 +727,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
-    const result = await new AgentRunner(db as never, providers as never, executor).run({ appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: () => queue.splice(0) });
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT, appId, appPrompt: 'Maintain it', trigger: 'Start', model, consumeEnvironmentObservations: () => queue.splice(0) });
     expect(result).toMatchObject({ status: 'done', turns: 2 });
     expect(providers.generate.mock.calls[1]![0].messages).toEqual(expect.arrayContaining([expect.objectContaining({ content: expect.stringContaining('A final user action arrived.') })]));
   });
@@ -746,7 +747,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Do substantial work', model,
       budget: { maxCostUsd: 1, emergencyTurnCeiling: 1_000 },
     });
@@ -764,7 +765,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Work within budget', model,
       budget: { maxCostUsd: 0.05 },
     });
@@ -783,7 +784,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Work within budget', model,
       budget: { maxCostUsd: 0.05 },
     });
@@ -802,7 +803,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Repair it', model,
       budget: { maxConsecutiveFailures: 2 },
     });
@@ -823,7 +824,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Finish it', model,
       budget: { maxConsecutiveFailures: 2 },
     });
@@ -859,7 +860,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'Maintain it',
       trigger: 'Finish the scoped component',
@@ -913,7 +914,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'A grocery list',
       trigger: 'Build a durable grocery list',
@@ -964,7 +965,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'Maintain it',
       trigger: 'Finish the nested component',
@@ -1006,7 +1007,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'A poem generator',
       trigger: 'Make the button generate and show a poem.',
@@ -1052,7 +1053,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Finish the requested behavior', model,
       completionAssessor,
       budget: { emergencyTurnCeiling: 2 },
@@ -1078,7 +1079,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Finish the requested behavior', model,
       completionAssessor,
       maxCompletionAssessmentRepairs: 1,
@@ -1103,7 +1104,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Finish the requested behavior', model,
       completionAssessor,
       maxCompletionAssessmentRepairs: 1,
@@ -1132,7 +1133,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'Maintain it',
       trigger: 'Make the ambiguous control behave correctly',
@@ -1174,7 +1175,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Repair it', model,
       failureAssessor,
       budget: { emergencyTurnCeiling: 3 },
@@ -1198,7 +1199,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     vi.spyOn(console, 'error').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId, appPrompt: 'Maintain it', trigger: 'Repair it', model,
       failureAssessor,
       budget: { maxConsecutiveFailures: 1, emergencyTurnCeiling: 5 },
@@ -1263,7 +1264,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'A stopwatch',
       trigger: 'Repair the restored timer',
@@ -1335,7 +1336,7 @@ describe('AgentRunner lifecycle', () => {
     vi.spyOn(console, 'info').mockImplementation(() => undefined);
     vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 
-    const result = await new AgentRunner(db as never, providers as never, executor).run({
+    const result = await new AgentRunner(db as never, providers as never, executor).run({ systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
       appId,
       appPrompt: 'A stopwatch',
       trigger: 'Repair the restored timer',
