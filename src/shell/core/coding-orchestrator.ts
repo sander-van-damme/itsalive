@@ -10,13 +10,22 @@ import type { ProviderRegistry } from "./providers";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
 import { createAgentTimeout } from "./run-lifecycle";
 import { createLlmTraceIdentity } from "./llm-trace";
+import {
+  contractChangeCoversDiff,
+  normalizeAppSharedContract,
+  sharedContractDiff,
+  sharedContractsEqual,
+  technicalContractForPlan,
+  type AppSharedContract,
+  type AppTechnicalContract,
+  type CodingContractChange,
+  type SharedContractChange,
+  type SharedContractChangeKind,
+} from "./app-contract";
 import type { Credential, LlmTraceIdentity } from "./types";
 
-export interface CodingManagerSharedContracts {
-  ref: string;
+export interface CodingManagerSharedContracts extends AppSharedContract {
   design: string[];
-  state: string[];
-  stores: string[];
 }
 
 export interface WorkerBudgetOverride {
@@ -42,6 +51,7 @@ export interface CodingWorkerTask {
 export interface CodingManagerPlan {
   shared: CodingManagerSharedContracts;
   tasks: CodingWorkerTask[];
+  contractChange?: CodingContractChange;
   alivePolicy?: AlivePolicyProposal;
 }
 
@@ -126,11 +136,15 @@ export interface CodingOrchestratorOptions {
   contextRelevanceAssessor?: ContextRelevanceAssessor;
   /** Current shell-owned app policy supplied to the manager for controlled revision. */
   alivePolicy?: AlivePolicy;
+  /** Canonical shared state/store contract already established for this live app. */
+  technicalContract?: AppTechnicalContract;
   /** Bounded JEV routing hint. The manager still owns decomposition and final worker choice. */
   preferredWorkerProfile?: "component-worker" | "repair-worker";
   triggerRoute?: string;
   /** User-controlled compact cross-app preferences. Never raw behavior/history. */
   portablePreferences?: Array<{ id: string; label: string; context: string }>;
+  /** Persists an initial or explicitly revised technical contract before workers run. */
+  onTechnicalContractProposal?: (contract: AppTechnicalContract, change?: CodingContractChange) => Promise<void>;
   /** Called only after successful integration verification. */
   onAlivePolicyProposal?: (proposal: AlivePolicyProposal) => Promise<void>;
 }
@@ -149,11 +163,17 @@ const MANAGER_PLAN_SYSTEM = [
   "Plan implementation; do not write DOM mutation code.",
   "",
   "Return JSON only:",
-  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"],\"stores\":[\"sharedStore\"]},\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
+  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"application.store.sharedStore.items: array of ...\"],\"stores\":[\"sharedStore\"]},\"contractChange\":null,\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
+  "When changing an established shared contract, replace contractChange=null with: {\"reason\":\"why this is necessary\",\"affectedScopes\":[\"#component-id\"],\"changes\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"application.store.sharedStore.field\",\"from\":\"old meaning/type\",\"to\":\"new meaning/type\",\"description\":\"concrete change\"}]}.",
   "",
   "Rules:",
   "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
   "- Shared design/state contracts are written once here, then referenced by workers.",
+  "- ESTABLISHED SHARED CONTRACT is shell-owned canonical technical state. When it is non-null, preserve its shared.ref, shared.state, and shared.stores unless the current technical intent genuinely requires changing that contract.",
+  "- shared.design may evolve without a contract change. Changing shared.ref, shared.state, or shared.stores requires a non-null contractChange with a concrete reason, affected task scopes, and machine-readable change entries.",
+  "- When ESTABLISHED SHARED CONTRACT is null, create the initial shared contract and leave contractChange null/omitted. The shell owns the revision number.",
+  "- Do not introduce compatibility aliases, duplicate old/new fields, or migrations merely to preserve obsolete beta internals. If a contract change is genuinely required, make one explicit coherent change.",
+  "- shared.state should name stable shared fields and their meaning/type precisely enough that later repair workers can reuse the same contract.",
   "- shared.stores lists only application.store namespaces intentionally shared across worker scopes; omit ordinary local state from it.",
   "- Use one ordered task for a truly atomic change; use 2+ tasks when distinct components/work units exist.",
   "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
@@ -269,7 +289,17 @@ export class CodingOrchestrator {
       }, options.credential);
       const planningStop = rootBudget.recordUsage(planned.usage?.cost);
       if (planningStop) return stopResult(planningStop, handoffs, workerTurns);
-      const plan = parseCodingManagerPlan(planned.text);
+      const plan = parseCodingManagerPlan(planned.text, options.technicalContract);
+      const technicalContract = technicalContractForPlan(options.technicalContract, plan.shared);
+      if (technicalContract !== options.technicalContract) {
+        console.info("App technical contract established", {
+          revision: technicalContract.revision,
+          changed: Boolean(options.technicalContract),
+          contractChange: plan.contractChange,
+        });
+        await options.onTechnicalContractProposal?.(technicalContract, plan.contractChange);
+      }
+      await validateDeclaredSharedStores(this.executor, options.appId, plan.shared.stores, controller.signal);
 
       const maxParallelWorkers = normalizeParallelism(options.maxParallelWorkers);
       const uniqueScopes = [...new Set(plan.tasks.map(task => task.scope))];
