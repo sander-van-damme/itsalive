@@ -200,6 +200,46 @@ export function resolveAgentProfile(
   };
 }
 
+export interface AgentProfileOverview {
+  id: AgentProfileId;
+  label: string;
+  model: string;
+  compute: AgentComputeLevel;
+  contextPolicy: AgentContextPolicyId;
+  historyPolicy: string;
+  effectiveHistoryTokens: number;
+}
+
+const PROFILE_LABELS: Readonly<Record<AgentProfileId, string>> = Object.freeze({
+  "user-intent": "Intent",
+  "coding-manager": "Coding manager",
+  "component-worker": "Component work",
+  "repair-worker": "Repair work",
+  "runtime-llm": "Runtime AI",
+  "behavior-summary": "Behavior summary",
+});
+
+function historyPolicyLabel(profile: AgentProfile): string {
+  if (profile.historyBudget.kind === "settings") return "Settings value";
+  if (profile.historyBudget.kind === "cap") return `Settings value, capped at ${profile.historyBudget.tokens.toLocaleString()}`;
+  return `Fixed at ${profile.historyBudget.tokens.toLocaleString()}`;
+}
+
+export function agentProfileOverview(configuredHistoryTokens: number): AgentProfileOverview[] {
+  return (Object.keys(AGENT_PROFILES) as AgentProfileId[]).map(id => {
+    const profile = agentProfile(id);
+    return {
+      id,
+      label: PROFILE_LABELS[id],
+      model: profile.model,
+      compute: profile.compute,
+      contextPolicy: profile.contextPolicy,
+      historyPolicy: historyPolicyLabel(profile),
+      effectiveHistoryTokens: historyTokens(profile, configuredHistoryTokens),
+    };
+  });
+}
+
 export function agentProfileDiagnostic(profile: ResolvedAgentProfile): Record<string, unknown> {
   return {
     id: profile.id,

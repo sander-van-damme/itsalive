@@ -98,6 +98,44 @@ describe("LLM trace accounting", () => {
     expect(tracker.rollups()).toHaveLength(2);
   });
 
+  it("preserves exact model options, context selection, usage, and timing in snapshots", () => {
+    const tracker = new LlmTraceTracker();
+    tracker.record(event({
+      modelOptions: { reasoning: { effort: "low" } },
+      context: {
+        configuredHistoryTokens: 12_000,
+        effectiveHistoryBudget: 4_000,
+        selectedHistoryTokens: 3_200,
+        omittedHistoryCount: 7,
+        modelContextTokens: 1_000_000,
+        estimatedInputTokens: 4_500,
+      },
+      elapsedMs: 321,
+    }));
+
+    expect(tracker.snapshot()[0]).toMatchObject({
+      role: "component-worker",
+      profile: "worker-low",
+      provider: "openrouter",
+      model: "openrouter/auto",
+      modelOptions: { reasoning: { effort: "low" } },
+      context: {
+        configuredHistoryTokens: 12_000,
+        effectiveHistoryBudget: 4_000,
+        selectedHistoryTokens: 3_200,
+        omittedHistoryCount: 7,
+        modelContextTokens: 1_000_000,
+        estimatedInputTokens: 4_500,
+      },
+      elapsedMs: 321,
+      usage: {
+        inputTokens: 100,
+        outputTokens: 20,
+        reasoningTokens: 5,
+      },
+    });
+  });
+
   it("bounds in-memory request history without losing the newest traces", () => {
     const tracker = new LlmTraceTracker(2);
     tracker.record(event({ requestId: "one" }));

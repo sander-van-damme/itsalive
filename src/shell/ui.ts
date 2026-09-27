@@ -1,3 +1,4 @@
+import { agentProfileOverview } from './core/agent-profiles';
 import { createIcons, icons } from 'lucide';
 
 declare const __ITSALIVE_COMMIT__: string;
@@ -566,9 +567,17 @@ export class ShellUI {
           <p class="security-note">Session usage and key spend are shown in the usage control at the bottom of the sidebar.</p>
         </section>
         <section class="settings-section" aria-labelledby="context-test-heading"><h2 id="context-test-heading">Context testing</h2>
-          <p>Use this while testing to vary how much prior shell history can be sent on each agent turn.</p>
+          <p>Use this while testing to vary the history budget available to coding roles.</p>
           <div class="field"><label for="historyContextTokens">History budget (tokens)</label><input id="historyContextTokens" type="number" min="0" step="1000" required value="${this.settings.historyContextTokens}"></div>
-          <p class="security-note">This budget applies only to prior history. The system prompt, app prompt, current request and latest observations are handled separately. The live model context capacity remains the hard safety ceiling.</p>
+          <p class="security-note">Coding manager uses this value directly. Component work uses at most 4,000 tokens, repair work at most 6,000, and Intent / Runtime AI / Behavior summary use no prior technical history. System prompts, app purpose, current request and latest observations are separate; model context capacity remains the hard ceiling.</p>
+        </section>
+        <section class="settings-section" aria-labelledby="agent-profiles-heading">
+          <h2 id="agent-profiles-heading">Agent profiles <span class="beta-badge">Beta details</span></h2>
+          <p class="security-note">All roles currently route through <code>openrouter/auto</code>. Compute is configured separately per role; there is no single global compute level.</p>
+          <div class="profile-table" role="table" aria-label="Effective agent profile configuration">
+            <div class="profile-row profile-head" role="row"><span role="columnheader">Role</span><span role="columnheader">Route</span><span role="columnheader">Compute</span><span role="columnheader">History</span></div>
+            ${agentProfileOverview(this.settings.historyContextTokens).map(profile => `<div class="profile-row" role="row" data-agent-profile="${esc(profile.id)}"><span role="cell"><strong>${esc(profile.label)}</strong><small>${esc(profile.id)} · ${esc(profile.contextPolicy)}</small></span><span role="cell"><code>${esc(profile.model)}</code></span><span role="cell">${esc(profile.compute)}</span><span role="cell"><strong>${profile.effectiveHistoryTokens.toLocaleString()}</strong><small>${esc(profile.historyPolicy)}</small></span></div>`).join('')}
+          </div>
         </section>
         <section class="settings-section" aria-labelledby="portable-preferences-heading">
           <h2 id="portable-preferences-heading">Cross-app preferences <span class="beta-badge">Experiment</span></h2>

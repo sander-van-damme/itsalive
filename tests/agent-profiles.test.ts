@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { AGENT_PROFILES, agentProfile, resolveAgentProfile } from "../src/shell/core/agent-profiles";
+import { AGENT_PROFILES, agentProfile, agentProfileOverview, resolveAgentProfile } from "../src/shell/core/agent-profiles";
 
 describe("agent profile registry", () => {
   it("defines distinct role profiles with centralized compute and context policies", () => {
@@ -42,6 +42,43 @@ describe("agent profile registry", () => {
       contextPolicy: "runtime-minimal",
       capabilityExposure: "none",
     });
+  });
+
+  it("exposes route, compute, context policy, and effective history for beta testing", () => {
+    const rows = agentProfileOverview(12_000);
+    expect(rows).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        id: "coding-manager",
+        label: "Coding manager",
+        model: "openrouter/auto",
+        compute: "high",
+        contextPolicy: "manager-technical",
+        historyPolicy: "Settings value",
+        effectiveHistoryTokens: 12_000,
+      }),
+      expect.objectContaining({
+        id: "component-worker",
+        compute: "low",
+        historyPolicy: "Settings value, capped at 4,000",
+        effectiveHistoryTokens: 4_000,
+      }),
+      expect.objectContaining({
+        id: "repair-worker",
+        compute: "medium",
+        effectiveHistoryTokens: 6_000,
+      }),
+      expect.objectContaining({
+        id: "user-intent",
+        compute: "medium",
+        effectiveHistoryTokens: 0,
+      }),
+      expect.objectContaining({
+        id: "runtime-llm",
+        label: "Runtime AI",
+        compute: "low",
+        effectiveHistoryTokens: 0,
+      }),
+    ]));
   });
 
   it("maps compute to provider options inside the profile layer", () => {

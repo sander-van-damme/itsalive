@@ -184,7 +184,7 @@ describe('ShellUI workspace', () => {
     await vi.waitFor(() => expect(document.querySelector('h1')?.textContent).toBe('What do you want to make?'));
   });
 
-  it('exposes the history budget experiment without exposing provider internals', async () => {
+  it('exposes effective per-role route, compute, and history for beta experiments', async () => {
     const { callbacks, ui } = mounted();
     document.querySelector<HTMLButtonElement>('[data-settings]')!.click();
 
@@ -195,6 +195,17 @@ describe('ShellUI workspace', () => {
     expect(document.querySelector('#contextTokens')).toBeNull();
     expect(document.querySelector('#outputTokens')).toBeNull();
     expect(document.querySelector<HTMLInputElement>('#historyContextTokens')?.value).toBe('12000');
+    const profileTable = document.querySelector('[aria-label="Effective agent profile configuration"]')!;
+    expect(profileTable.textContent).toContain('openrouter/auto');
+    expect(profileTable.textContent).toContain('Coding manager');
+    expect(profileTable.querySelector('[data-agent-profile="coding-manager"]')?.textContent).toContain('high');
+    expect(profileTable.querySelector('[data-agent-profile="coding-manager"]')?.textContent).toContain('12,000');
+    expect(profileTable.querySelector('[data-agent-profile="component-worker"]')?.textContent).toContain('low');
+    expect(profileTable.querySelector('[data-agent-profile="component-worker"]')?.textContent).toContain('4,000');
+    expect(profileTable.querySelector('[data-agent-profile="repair-worker"]')?.textContent).toContain('6,000');
+    expect(profileTable.querySelector('[data-agent-profile="user-intent"]')?.textContent).toContain('0');
+    expect(profileTable.querySelector('[data-agent-profile="runtime-llm"]')?.textContent).toContain('Runtime AI');
+    expect(profileTable.textContent).not.toContain('reasoning effort');
     expect(document.querySelector<HTMLButtonElement>('button[type=submit]')?.textContent).toBe('Save');
     expect(document.querySelector('[data-build-commit]')?.textContent).toBe('development');
 

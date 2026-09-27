@@ -43,7 +43,11 @@ Profiles declare default time, idle, failure, stall, and cost fields. The runner
 
 ## Observability
 
-Every provider trace includes the resolved profile ID and role. Model options are also recorded in sanitized request metadata, so beta exports can compare High/Medium/Low behavior and cost.
+Settings includes a **Beta details** table derived from this registry. It shows the role/profile, `openrouter/auto` routing target, compute level, context policy, history rule, and effective history tokens for the current History budget. The route and compute columns are intentionally separate so testers do not mistake Auto routing for one global compute setting.
+
+The History budget is role-specific: coding-manager uses the Settings value directly, component-worker caps it at 4k, repair-worker caps it at 6k, and user-intent/runtime-llm/behavior-summary use zero prior technical history.
+
+Every provider trace includes the resolved profile ID and role. Sanitized model options, full context-selection telemetry, provider token usage, and elapsed time are retained in the in-memory trace snapshot. Diagnostic export writes both the exact trace events and aggregate rollups, plus the effective profile configuration used for the session.
 
 ## Changing defaults
 
