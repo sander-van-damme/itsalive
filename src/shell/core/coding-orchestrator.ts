@@ -12,7 +12,6 @@ import { createAgentTimeout } from "./run-lifecycle";
 import { createLlmTraceIdentity } from "./llm-trace";
 import {
   contractChangeCoversDiff,
-  normalizeAppSharedContract,
   normalizeAppTechnicalContract,
   sharedContractDiff,
   sharedContractsEqual,
