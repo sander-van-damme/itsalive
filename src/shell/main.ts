@@ -695,6 +695,8 @@ async function runAgent(
       failureAssessor: (state, signal) => assessFailureWithJev(app.id, state, signal),
       contextRelevanceAssessor: (state, signal) => assessContextRelevanceWithJev(app.id, state, signal),
       alivePolicy: app.alivePolicy,
+      technicalContract: app.technicalContract,
+      onTechnicalContractProposal: (contract, change) => persistTechnicalContractForApp(app.id, contract, change),
       triggerRoute: routeHint?.triggerRoute,
       preferredWorkerProfile: routeHint?.preferredWorkerProfile,
       portablePreferences: appliedPortablePreferences.map(item => ({
@@ -759,6 +761,25 @@ async function runAgent(
     }
   }
   return true;
+}
+
+async function persistTechnicalContractForApp(
+  appId: string,
+  contract: import('./core').AppTechnicalContract,
+  change?: import('./core').CodingContractChange,
+): Promise<void> {
+  const current = await db.apps.get(appId);
+  if (!current) throw new Error('Cannot persist technical contract for a missing app');
+  const updated: AppRecord = { ...current, technicalContract: contract, updatedAt: Date.now() };
+  await db.apps.put(updated);
+  apps = apps.map(item => item.id === appId ? updated : item);
+  await log('info', 'app-contract', change ? 'App technical contract revised' : 'App technical contract established', {
+    revision: contract.revision,
+    ref: contract.shared.ref,
+    stores: contract.shared.stores,
+    stableDomIds: contract.shared.stableDomIds,
+    change: change ?? null,
+  }, appId);
 }
 
 async function activateAlivePolicyForApp(
