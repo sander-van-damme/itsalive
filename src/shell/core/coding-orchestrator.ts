@@ -1121,6 +1121,44 @@ function workerHandoff(
   };
 }
 
+async function validateDeclaredSharedStores(
+  executor: AppExecutor,
+  appId: string,
+  stores: readonly string[],
+  signal: AbortSignal,
+): Promise<void> {
+  if (!stores.length) return;
+  const code = [
+    "/* itsalive:validate-shared-store-json */",
+    "const namespaces = " + JSON.stringify(stores) + ";",
+    "const isPlainObject = value => { const proto = Object.getPrototypeOf(value); return proto === Object.prototype || proto === null; };",
+    "const validate = (value, path, stack = new Set()) => {",
+    "  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;",
+    "  if (typeof value === 'number') { if (!Number.isFinite(value)) throw new TypeError(path + ' must contain only finite numbers'); return; }",
+    "  if (typeof value !== 'object') throw new TypeError(path + ' must contain only JSON-like values');",
+    "  if (stack.has(value)) throw new TypeError(path + ' cannot contain circular references');",
+    "  if (!Array.isArray(value) && !isPlainObject(value)) throw new TypeError(path + ' must contain only arrays and plain objects');",
+    "  stack.add(value);",
+    "  if (Array.isArray(value)) value.forEach((entry, index) => validate(entry, path + '[' + index + ']', stack));",
+    "  else Object.entries(value).forEach(([key, entry]) => validate(entry, path + '.' + key, stack));",
+    "  stack.delete(value);",
+    "};",
+    "const present = [];",
+    "for (const namespace of namespaces) {",
+    "  if (!Object.prototype.hasOwnProperty.call(application.store, namespace)) continue;",
+    "  validate(application.store[namespace], 'application.store.' + namespace);",
+    "  present.push(namespace);",
+    "}",
+    "return { ok: true, present };",
+  ].join("\n");
+  const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
+  if (result.error) {
+    throw new Error("Declared shared application.store values failed JSON-like validation: " + result.error.message);
+  }
+  const value = result.value as { ok?: boolean } | undefined;
+  if (!value?.ok) throw new Error("Could not validate declared shared application.store values");
+}
+
 async function inspectAppOutline(executor: AppExecutor, appId: string, signal: AbortSignal): Promise<unknown> {
   const code = [
     'const root = document.getElementById("itsalive-root");',
