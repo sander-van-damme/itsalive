@@ -66,7 +66,7 @@ export const AGENT_CONTEXT_CONTRACTS: Readonly<Record<AgentRole, AgentContextCon
       "Raw user/assistant chat.",
       "Full worker transcripts.",
       "Full document snapshots when a compact work-state summary is sufficient.",
-      "Full platform capability manual.",
+      "Full platform API manual.",
     ],
   },
   "component-worker": {
@@ -83,7 +83,7 @@ export const AGENT_CONTEXT_CONTRACTS: Readonly<Record<AgentRole, AgentContextCon
       "Relevant dependencies/interfaces.",
     ],
     justInTime: [
-      "Selected capability help needed by this task.",
+      "Selected platform API help.",
       "Focused DOM inspection inside the assigned scope.",
       "Relevant runtime errors or logs.",
     ],
@@ -91,7 +91,7 @@ export const AGENT_CONTEXT_CONTRACTS: Readonly<Record<AgentRole, AgentContextCon
       "Raw user conversation.",
       "Unrelated app components.",
       "Other workers' detailed transcripts.",
-      "Full platform capability manual.",
+      "Full platform API manual.",
       "Whole-app HTML by default.",
     ],
   },
@@ -133,7 +133,7 @@ export const AGENT_CONTEXT_CONTRACTS: Readonly<Record<AgentRole, AgentContextCon
       "Coding transcript.",
       "App HTML.",
       "Shell behavioral history.",
-      "Platform capability documentation.",
+      "Platform API documentation.",
     ],
   },
 });
