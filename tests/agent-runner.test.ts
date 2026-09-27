@@ -478,6 +478,48 @@ describe('AgentRunner lifecycle', () => {
     ]));
   });
 
+  it('supports a predictable inspect-modify-verify console workflow across model turns', async () => {
+    const entries: HistoryEntry[] = [];
+    const requests: import('../src/shell/core/types').GenerateRequest[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const programs = [
+      'return document.querySelector("#itsalive-root")?.textContent;',
+      'document.querySelector("#itsalive-root").innerHTML = "<button>Ready</button>"; return "installed";',
+      'return agent.done("ready");',
+    ];
+    const providers = { generate: vi.fn(async (request: import('../src/shell/core/types').GenerateRequest) => {
+      requests.push(structuredClone(request));
+      return { text: programs[requests.length - 1]! };
+    }) };
+    let turnExecution = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0 } };
+      }
+      turnExecution++;
+      if (turnExecution === 1) return { value: 'empty app' };
+      if (turnExecution === 2) return { value: 'installed' };
+      return { done: true, message: 'ready' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect, build, and verify', model, budget: { emergencyTurnCeiling: 4 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 3 });
+    expect(providers.generate).toHaveBeenCalledTimes(3);
+    expect(turnExecution).toBe(3);
+    expect(requests[1]!.messages.map(message => message.content).join('\n')).toContain('empty app');
+    expect(requests[2]!.messages.map(message => message.content).join('\n')).toContain('installed');
+    expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual(programs);
+  });
+
   it('stops a repeated low-signal verification loop after one diagnostic repair turn', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
