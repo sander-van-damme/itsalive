@@ -470,10 +470,13 @@ describe("reliability scenarios", () => {
     const fence = String.fromCharCode(96).repeat(3);
     const malformed = 'component.innerHTML = "<p>PARTIAL MUTATION</p>";\n' + fence + "broken" + fence;
     const provider = new FixtureProvider([counterPlan()], { "#counter-app": [malformed, counterBuildProgram()] }, "Counter is ready.");
-    const completionAssessor = vi.fn(async (_state: CompletionAssessmentState) => ({
-      action: "uncertain" as const,
-      reason: "evidence-uncertain",
-    }));
+    const completionAssessor = vi.fn(async (state: CompletionAssessmentState) => {
+      void state;
+      return {
+        action: "uncertain" as const,
+        reason: "evidence-uncertain",
+      };
+    });
 
     const { result, contract } = await runCodingScenario({
       provider,
