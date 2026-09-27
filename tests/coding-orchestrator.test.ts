@@ -424,7 +424,9 @@ describe("coding manager and scoped workers", () => {
 
     const workerRequests = requests.filter(request => request.purpose === "agent turn 1");
     expect(workerRequests).toHaveLength(2);
-    expect(workerRequests[0]!.system).toContain("runtime also recognizes a nested final call");
+    expect(workerRequests[0]!.system).toContain("agent.done accepts only an optional string");
+    expect(workerRequests[0]!.system).toContain("return agent.done(JSON.stringify(handoff))");
+    expect(workerRequests[0]!.system).toContain("Do not verify behavior by inserting");
     expect(workerRequests[0]!.system).toContain("stable inline <script>");
     expect(workerRequests[0]!.system).toContain("Direct addEventListener calls made only by the transient agent command");
     const firstContext = workerRequests[0]!.messages.map(message => message.content).join("\n");
@@ -533,6 +535,76 @@ describe("coding manager and scoped workers", () => {
     const workerRequest = requests.find(request => request.purpose?.startsWith("agent turn"));
     expect(workerRequest?.system).toContain("they do not disable the component");
     expect(workerRequest?.system).not.toContain("region is inert");
+  });
+
+  it("lets current deterministic scope evidence override a stale blocked handoff when final verification confirms the app works", async () => {
+    const requests: GenerateRequest[] = [];
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [], stores: [] },
+      tasks: [{
+        id: "grocery",
+        goal: "Build the grocery list",
+        scope: "#grocery-list",
+        acceptanceCriteria: ["Items can be added and shown"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "shared-v1",
+        parallel: false,
+      }],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        requests.push(structuredClone(request));
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return { text: '{"ok":true,"summary":"The grocery list is ready.","unresolved":[]}', usage: { cost: 0 } };
+        }
+        return {
+          text: 'return agent.done(JSON.stringify({status:"blocked",changed:["UI is present"],verified:["Current controls render"],unresolved:["completion transport was interrupted"]}));',
+          usage: { cost: 0 },
+        };
+      }),
+    };
+    const ensured = new Set<string>();
+    const base = parallelExecutor(ensured);
+    const executor = {
+      execute: vi.fn(async (id: string, code: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult> => {
+        if (code.includes("Assigned component scope not found") && code.includes("JSON.stringify")) {
+          return {
+            done: true,
+            message: JSON.stringify({
+              status: "blocked",
+              changed: ["UI is present"],
+              verified: ["Current controls render"],
+              unresolved: ["completion transport was interrupted"],
+            }),
+          };
+        }
+        return base.execute(id, code, options);
+      }),
+    };
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, executor).run({
+      appId,
+      appPrompt: "Grocery list",
+      technicalIntent: "Build a working grocery list.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+    });
+
+    expect(result).toMatchObject({
+      status: "done",
+      message: "The grocery list is ready.",
+      handoffs: [expect.objectContaining({ status: "blocked", scope: "#grocery-list" })],
+      verificationEvidence: [expect.objectContaining({ scope: "#grocery-list", ok: true, runtimeOnlyEventListenerCount: 0 })],
+    });
+    const verifyRequest = requests.find(request => request.purpose === "coding manager integration verification")!;
+    const verifyContext = verifyRequest.messages.map(message => message.content).join("\n");
+    expect(verifyContext).toContain("CURRENT SCOPE EVIDENCE");
+    expect(verifyContext).toContain('"scope":"#grocery-list"');
+    expect(verifyRequest.system).toContain("not authoritative truth");
   });
 
   it("runs independent scopes concurrently and waits for dependencies before the next wave", async () => {
