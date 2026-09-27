@@ -15,17 +15,26 @@ describe("agent profile registry", () => {
       role: "coding-manager",
       compute: "high",
       contextPolicy: "manager-technical",
-      capabilityExposure: "selected",
+      capabilityExposure: "index",
+      promptId: "coding-manager-v2",
     });
     expect(agentProfile("component-worker")).toMatchObject({
       role: "component-worker",
       compute: "low",
       contextPolicy: "component-scoped",
+      capabilityExposure: "selected",
+      promptId: "coding-worker-console-v1",
     });
     expect(agentProfile("repair-worker")).toMatchObject({
       role: "repair-worker",
       compute: "medium",
       contextPolicy: "repair-evidence",
+      capabilityExposure: "selected",
+      promptId: "coding-worker-console-v1",
+    });
+    expect(agentProfile("user-intent")).toMatchObject({
+      promptId: "user-intent-v2",
+      capabilityExposure: "index",
     });
     expect(agentProfile("runtime-llm")).toMatchObject({
       role: "runtime-llm",
