@@ -427,11 +427,11 @@ describe("coding manager and scoped workers", () => {
 
     const workerRequests = requests.filter(request => request.purpose === "agent turn 1");
     expect(workerRequests).toHaveLength(2);
-    expect(workerRequests[0]!.system).toContain("agent.done accepts only an optional string");
+    expect(workerRequests[0]!.system).toContain("JavaScript console");
     expect(workerRequests[0]!.system).toContain("return agent.done(JSON.stringify(handoff))");
-    expect(workerRequests[0]!.system).toContain("Do not verify behavior by inserting");
-    expect(workerRequests[0]!.system).toContain("stable inline <script>");
-    expect(workerRequests[0]!.system).toContain("Direct addEventListener calls made only by the transient agent command");
+    expect(workerRequests[0]!.system).toContain("Do not verify by inserting");
+    expect(workerRequests[0]!.system).toContain("Durable data belongs in application.store");
+    expect(workerRequests[0]!.system).toContain("transient command listeners");
     const firstContext = workerRequests[0]!.messages.map(message => message.content).join("\n");
     const secondContext = workerRequests[1]!.messages.map(message => message.content).join("\n");
 
@@ -537,8 +537,9 @@ describe("coding manager and scoped workers", () => {
     expect(lifecycleCommands.some(code => code.includes('removeAttribute("inert")'))).toBe(true);
 
     const workerRequest = requests.find(request => request.purpose?.startsWith("agent turn"));
-    expect(workerRequest?.system).toContain("they do not disable the component");
+    expect(workerRequest?.system).toContain("shell owns build/progress attributes");
     expect(workerRequest?.system).not.toContain("region is inert");
+    expect(workerRequest?.system).not.toContain("setAttribute(\"inert\")");
   });
 
   it("lets current deterministic scope evidence override a stale blocked handoff when final verification confirms the app works", async () => {
