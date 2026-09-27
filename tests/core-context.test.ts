@@ -17,7 +17,7 @@ describe("shell context builder", () => {
   });
 
   it("rejects an empty role prompt instead of falling back to generic coding guidance", () => {
-    expect(() => buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT,
+    expect(() => buildModelContext({
       systemPrompt: "   ",
       model,
       appPrompt: "A violin coach",
