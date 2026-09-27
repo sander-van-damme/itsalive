@@ -8,10 +8,12 @@ import { sanitizeDiagnostic } from './diagnostics';
 import { createAgentTimeout } from "./run-lifecycle";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
 import { appendFailureRoute, assessFailureRoute, failureRouteStopResult } from "./failure-routing";
+import type { ExecutionConsoleEntry } from "../../shared";
 
 export interface ExecutionResult {
   value?: unknown;
-  error?: { message: string; stack?: string; logs?: unknown[] };
+  logs?: ExecutionConsoleEntry[];
+  error?: { message: string; stack?: string };
   done?: boolean;
   message?: string;
 }
@@ -189,7 +191,7 @@ export class AgentRunner {
     let lastProgressAt = startedAt;
     let firstProviderActivityMs: number | undefined;
     let firstStreamTextMs: number | undefined;
-    let firstCompleteCommandMs: number | undefined;
+    let firstCompleteProgramMs: number | undefined;
     let firstExecutionMs: number | undefined;
     const recordMilestone = (milestone: string): number => {
       const elapsed = elapsedMs();
@@ -309,41 +311,7 @@ export class AgentRunner {
             contextRelevanceFallback,
             hasObservation: Boolean(observation),
           });
-          const commandParser = new StreamedCommandParser();
-          let streamedResult: ExecutionResult | undefined;
-          let streamedObservation: string | undefined;
-          let streamedCodeError: GeneratedCodeError | undefined;
-          let streamedRuntimeError: unknown;
-          let streamedCommands = 0;
-          let executionQueue = Promise.resolve();
-
-          const enqueueCommand = (code: string) => {
-            streamedCommands++;
-            const commandNumber = streamedCommands;
-            executionQueue = executionQueue.then(async () => {
-              if (streamedCodeError || streamedRuntimeError || streamedResult?.done || streamedResult?.error) return;
-              try {
-                validateExecutableJavaScript(code);
-              } catch (error) {
-                streamedCodeError = error instanceof GeneratedCodeError
-                  ? error
-                  : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
-                return;
-              }
-              try {
-                touchProgress();
-                if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
-                reportProgress(options, "executing", turn, commandNumber);
-                const executed = await executeGeneratedCommand(historyStore, this.executor, options, controller.signal, code);
-                touchProgress();
-                streamedResult = executed.result;
-                streamedObservation = executed.observation;
-              } catch (error) {
-                streamedRuntimeError = error;
-              }
-            });
-          };
-
+          let streamedText = "";
           let generated;
           let pendingCostStop: RunBudgetStopKind | undefined;
           try {
@@ -359,20 +327,17 @@ export class AgentRunner {
               },
               options.credential,
               delta => {
+                streamedText += delta;
                 if (delta) {
                   touchProgress();
                   if (firstStreamTextMs == null) firstStreamTextMs = recordMilestone('first-stream-text');
                 }
-                const commands = commandParser.push(delta);
-                if (commands.length && firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
-                for (const code of commands) enqueueCommand(code);
               },
               () => {
                 touchProgress();
                 if (firstProviderActivityMs == null) firstProviderActivityMs = recordMilestone('first-provider-activity');
               },
             );
-            await executionQueue;
             touchProgress();
             pendingCostStop = budget.recordUsage(generated.usage?.cost);
           } catch (error) {
@@ -381,82 +346,47 @@ export class AgentRunner {
             throw error;
           }
           if (controller.signal.aborted) throw controller.signal.reason ?? new DOMException("Aborted", "AbortError");
-          if (streamedRuntimeError) throw streamedRuntimeError;
 
-          let result: ExecutionResult;
-          if (commandParser.usesProtocol) {
-            try {
-              commandParser.finish();
-              if (streamedCodeError) throw streamedCodeError;
-              if (!streamedCommands || !streamedResult) throw new GeneratedCodeError("format", "Model returned no complete streamed commands");
-              budget.recordSuccess("generation");
-            } catch (error) {
-              const generatedError = error instanceof GeneratedCodeError
-                ? error
-                : new GeneratedCodeError("format", error instanceof Error ? error.message : String(error));
-              observation = generatedCodeObservation(generatedError);
-              const failureStop = budget.recordFailure("generation");
-              console.warn('Generated command stream rejected', sanitizeDiagnostic({
-                phase: generatedError.phase,
-                message: generatedError.message,
-                consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
-              }));
-              await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
-              if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
-              if (failureStop) return budgetStopResult(failureStop, turn, budget);
-              const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
-              const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
-              if (routeStop) return routeStop;
-              if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
-              repeatedLowSignalObservation = undefined;
-              repeatedLowSignalState = undefined;
-              reportProgress(options, "repairing", turn);
-              console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
-              console.info('Continuing to next turn for streamed command repair');
-              continue;
-            }
-            result = streamedResult!;
-            observation = streamedObservation;
-          } else {
-            let code: string;
-            try {
-              code = extractExecutableJavaScript(generated.text);
-              validateExecutableJavaScript(code);
-              budget.recordSuccess("generation");
-            } catch (error) {
-              const generatedError = error instanceof GeneratedCodeError
-                ? error
-                : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
-              observation = generatedCodeObservation(generatedError);
-              const failureStop = budget.recordFailure("generation");
-              console.warn('Generated code rejected before execution', sanitizeDiagnostic({
-                phase: generatedError.phase,
-                message: generatedError.message,
-                consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
-              }));
-              await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
-              if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
-              if (failureStop) return budgetStopResult(failureStop, turn, budget);
-              const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
-              const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
-              if (routeStop) return routeStop;
-              if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
-              repeatedLowSignalObservation = undefined;
-              repeatedLowSignalState = undefined;
-              reportProgress(options, "repairing", turn);
-              console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
-              console.info('Continuing to next turn for code repair');
-              continue;
-            }
-            touchProgress();
-            if (firstCompleteCommandMs == null) firstCompleteCommandMs = recordMilestone('first-complete-command');
-            if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
-            reportProgress(options, "executing", turn, 1);
-            const executed = await executeGeneratedCommand(historyStore, this.executor, options, controller.signal, code);
-            touchProgress();
-            result = executed.result;
-            observation = executed.observation;
+          let code: string;
+          try {
+            const completeResponse = generated.text?.trim() ? generated.text : streamedText;
+            code = extractExecutableJavaScript(completeResponse);
+            validateExecutableJavaScript(code);
+            budget.recordSuccess("generation");
+          } catch (error) {
+            const generatedError = error instanceof GeneratedCodeError
+              ? error
+              : new GeneratedCodeError("compile", error instanceof Error ? error.message : String(error));
+            observation = generatedCodeObservation(generatedError);
+            const failureStop = budget.recordFailure("generation");
+            console.warn('Generated code rejected before execution', sanitizeDiagnostic({
+              phase: generatedError.phase,
+              message: generatedError.message,
+              consecutiveFailures: budget.snapshot().consecutiveFailures.generation,
+            }));
+            await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: observation });
+            if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
+            if (failureStop) return budgetStopResult(failureStop, turn, budget);
+            const failureRoute = await assessFailureRoute(options, "generation", observation, turn, budget, controller.signal);
+            const routeStop = failureRoute ? failureRouteStopResult(failureRoute, turn) : undefined;
+            if (routeStop) return routeStop;
+            if (failureRoute) observation = appendFailureRoute(observation, failureRoute);
+            repeatedLowSignalObservation = undefined;
+            repeatedLowSignalState = undefined;
+            reportProgress(options, "repairing", turn);
+            console.info('Turn outcome', { kind: 'generation-repair', phase: generatedError.phase });
+            console.info('Continuing to next turn for code repair');
+            continue;
           }
+
+          touchProgress();
+          if (firstCompleteProgramMs == null) firstCompleteProgramMs = recordMilestone('first-complete-program');
+          if (firstExecutionMs == null) firstExecutionMs = recordMilestone('first-runtime-execution');
+          reportProgress(options, "executing", turn, 1);
+          const executed = await executeGeneratedCommand(historyStore, this.executor, options, controller.signal, code);
+          touchProgress();
+          const result = executed.result;
+          observation = executed.observation;
 
           if (result.error) {
             if (pendingCostStop) return budgetStopResult(pendingCostStop, turn, budget);
@@ -642,7 +572,7 @@ export class AgentRunner {
         totalMs,
         firstProviderActivityMs,
         firstStreamTextMs,
-        firstCompleteCommandMs,
+        firstCompleteProgramMs,
         firstExecutionMs,
         lastProgressMs: Math.round(lastProgressAt - startedAt),
         budget: budget.snapshot(),
@@ -690,37 +620,6 @@ function userFacingCompletionMessage(message: string | undefined): string | unde
 function reportProgress(options: RunOptions, phase: AgentProgressPhase, turn: number, step?: number): void {
   try { options.onProgress?.({ phase, turn, ...(step == null ? {} : { step }) }); }
   catch (error) { console.warn("Agent progress callback failed", diagnosticError(error)); }
-}
-
-const COMMAND_START = "/* itsalive:command */";
-const COMMAND_END = "/* itsalive:end */";
-
-class StreamedCommandParser {
-  private buffer = "";
-  private protocol = false;
-
-  get usesProtocol(): boolean { return this.protocol; }
-
-  push(delta: string): string[] {
-    this.buffer += delta;
-    const commands: string[] = [];
-    while (true) {
-      const start = this.buffer.indexOf(COMMAND_START);
-      if (start < 0) return commands;
-      this.protocol = true;
-      if (start > 0) this.buffer = this.buffer.slice(start);
-      const end = this.buffer.indexOf(COMMAND_END, COMMAND_START.length);
-      if (end < 0) return commands;
-      const code = this.buffer.slice(COMMAND_START.length, end).trim();
-      this.buffer = this.buffer.slice(end + COMMAND_END.length);
-      if (code) commands.push(code);
-    }
-  }
-
-  finish(): void {
-    if (!this.protocol) return;
-    if (this.buffer.trim()) throw new GeneratedCodeError("format", "Model stream ended with an incomplete command or trailing content");
-  }
 }
 
 async function generateWithStreaming(
@@ -781,14 +680,15 @@ function extractExecutableJavaScript(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) throw new GeneratedCodeError("format", "Model returned an empty response");
 
-  const fences = [...trimmed.matchAll(/```(?:javascript|js)?[ \t]*\r?\n([\s\S]*?)```/gi)];
-  if (fences.length === 1) {
-    const code = fences[0]![1]!.trim();
+  const wholeFence = trimmed.match(/^```(?:javascript|js)?[ \t]*\r?\n([\s\S]*?)\r?\n?```$/i);
+  if (wholeFence) {
+    const code = wholeFence[1]!.trim();
     if (!code) throw new GeneratedCodeError("format", "Model returned an empty JavaScript code block");
     return code;
   }
-  if (fences.length > 1) throw new GeneratedCodeError("format", "Model returned multiple code blocks; expected one executable JavaScript program");
-  if (trimmed.includes("```")) throw new GeneratedCodeError("format", "Model returned a fenced response that was not a single JavaScript code block");
+  if (trimmed.includes("```")) {
+    throw new GeneratedCodeError("format", "Model response must be exactly one JavaScript program, optionally wrapped in one JavaScript code fence");
+  }
   return trimmed;
 }
 
@@ -804,7 +704,7 @@ function validateExecutableJavaScript(code: string): void {
 
 function generatedCodeObservation(error: GeneratedCodeError): string {
   const label = error.phase === "format" ? "Generated response was not usable JavaScript" : "Generated JavaScript did not parse";
-  return `${label}:\n${error.message}\nReturn complete executable JavaScript commands wrapped with /* itsalive:command */ and /* itsalive:end */. Do not add prose or Markdown fences.`;
+  return `${label}:\n${error.message}\nReturn exactly one complete executable JavaScript program. Raw JavaScript is preferred; one JavaScript code fence is also accepted. Do not add prose or multiple code blocks.`;
 }
 
 async function inspectRuntimeProgress(executor: AppExecutor, options: RunOptions, signal: AbortSignal): Promise<string | undefined> {
@@ -957,6 +857,7 @@ function isLowSignalObservation(observation: string): boolean {
     const parsed = JSON.parse(observation) as unknown;
     if (!parsed || typeof parsed !== "object") return false;
     const candidate = parsed as Record<string, unknown>;
+    if (Array.isArray(candidate.logs) && candidate.logs.length > 0) return false;
     return Object.prototype.hasOwnProperty.call(candidate, "value") && isLowSignalValue(candidate.value);
   } catch {
     return false;
