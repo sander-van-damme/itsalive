@@ -613,7 +613,8 @@ describe("coding manager and scoped workers", () => {
       }),
     };
 
-    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set())).run({
+    const executor = parallelExecutor(new Set());
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, executor).run({
       appId,
       appPrompt: "Sibling components",
       technicalIntent: "Build both.",
@@ -631,6 +632,11 @@ describe("coding manager and scoped workers", () => {
     expect(lifecycles).toEqual(expect.arrayContaining([
       expect.objectContaining({ total: 2, ready: 1, failed: 1 }),
     ]));
+    const lifecycleCommands = executor.execute.mock.calls
+      .map(([, code]) => String(code))
+      .filter(code => code.includes("data-itsalive-build-state") || code.includes("data-itsalive-building"));
+    expect(lifecycleCommands.some(code => code.includes('setAttribute("inert"'))).toBe(false);
+    expect(lifecycleCommands.some(code => code.includes('removeAttribute("inert")'))).toBe(true);
   });
 
   it("cascades parent cancellation to all active parallel workers", async () => {
