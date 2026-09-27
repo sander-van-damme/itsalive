@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { platformCapabilityHelp, platformCapabilityIndex } from "../src/shell/core/capabilities";
+import { inferPlatformCapabilities, platformApiIndex, platformCapabilityHelp } from "../src/shell/core/capabilities";
 import {
   buildUserIntentRequest,
   initialBuildTechnicalIntent,
@@ -175,7 +175,8 @@ describe("user-facing intent boundary", () => {
     expect(intent.capabilityIds).toContain("ai");
     const block = technicalIntentBlock(intent);
     expect(block).toContain("application.ai.text");
-    expect(block).toContain("text: await application.ai.text('Name this note') -> 'Trip ideas'");
+    expect(block).toContain("application.ai.text(prompt: string): Promise<string>");
+    expect(block).toContain("await application.ai.text('Name this note') // -> 'Trip ideas'");
   });
 
   it("selects the same AI capability for bounded decisions", () => {
@@ -183,15 +184,47 @@ describe("user-facing intent boundary", () => {
     expect(intent.capabilityIds).toContain("ai");
   });
 
-  it("uses one canonical capability definition for both compact index and selected help", () => {
-    const index = platformCapabilityIndex();
+  it("uses one canonical API catalog for compact discovery and selected detailed help", () => {
+    const index = platformApiIndex();
     const selected = platformCapabilityHelp(["ai"]);
-    expect(index).toContain("application.ai.text / choose / score / decide / probability");
-    expect(selected).toContain("text: await application.ai.text('Name this note') -> 'Trip ideas'");
-    expect(selected).toContain("choose: await application.ai.choose");
-    expect(selected).toContain("score: await application.ai.score");
-    expect(selected).toContain("decide: await application.ai.decide");
-    expect(selected).toContain("probability: await application.ai.probability");
-    expect(selected).toContain("Do not implement your own confidence threshold");
+    for (const signature of [
+      "application.ai.text(prompt: string): Promise<string>",
+      "application.ai.choose<T extends string>",
+      "application.ai.score(question: string, levels: string[], context?: JsonValue): Promise<number | null>",
+      "application.ai.decide(question: string, context?: JsonValue): Promise<boolean | null>",
+      "application.ai.probability(question: string, context?: JsonValue): Promise<number>",
+    ]) expect(index).toContain(signature);
+    expect(index).toContain("type JsonValue = null | boolean | finite number | string");
+    expect(selected).toContain("Parameters:");
+    expect(selected).toContain("Returns:");
+    expect(selected).toContain("await application.ai.decide('Is this word English?', { word })");
+    expect(selected).toContain("Handle null explicitly");
+    expect(selected).not.toContain("Jev");
+  });
+
+  it("recognizes natural AI wording variants used in real app prompts", () => {
+    for (const text of [
+      "it decides whether the word is in English",
+      "decide if this is English",
+      "make a decision about the word",
+      "classify this ticket",
+      "choose a route",
+      "score the severity",
+      "show the probability",
+      "generate text for a poem",
+    ]) {
+      expect(inferPlatformCapabilities(text), text).toContain("ai");
+    }
+  });
+
+  it("always exposes the typed API index to the intent manager", () => {
+    const request = buildUserIntentRequest({
+      appPrompt: "A word checker",
+      source: "chat",
+      userText: "Add a decide button",
+    }, model);
+    expect(request.system).toContain("Available platform APIs:");
+    expect(request.system).toContain("application.ai.decide(question: string, context?: JsonValue): Promise<boolean | null>");
+    expect(request.system).toContain("application.store: JsonObject");
   });
 });

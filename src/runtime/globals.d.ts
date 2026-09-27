@@ -1,12 +1,12 @@
 import type { captureScreenshot } from "./screenshot";
-import type { ApplicationStore } from "./application-store";
+import type { ApplicationStore, JsonValue } from "./application-store";
 
 export interface ApplicationAiApi {
-  text(prompt: unknown): Promise<string>;
-  choose(question: string, options: Record<string, string>, context?: unknown): Promise<string | null>;
-  score(question: string, levels: string[], context?: unknown): Promise<number | null>;
-  decide(question: string, context?: unknown): Promise<boolean | null>;
-  probability(question: string, context?: unknown): Promise<number>;
+  text(prompt: string): Promise<string>;
+  choose<T extends string>(question: string, options: Record<T, string>, context?: JsonValue): Promise<T | null>;
+  score(question: string, levels: string[], context?: JsonValue): Promise<number | null>;
+  decide(question: string, context?: JsonValue): Promise<boolean | null>;
+  probability(question: string, context?: JsonValue): Promise<number>;
 }
 
 export interface ApplicationRuntimeApi {

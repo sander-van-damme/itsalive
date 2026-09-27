@@ -30,13 +30,16 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).not.toContain('itsalive-history');
   });
 
-  it('documents coding-agent and simple application AI semantics', () => {
-    expect(SYSTEM_PROMPT).toContain("agent.screenshot()");
-    expect(SYSTEM_PROMPT).toContain("application.store");
-    expect(SYSTEM_PROMPT).toContain("application.ai.choose(question, options, context?) returns one option key or null");
-    expect(SYSTEM_PROMPT).toContain("application.ai.score(question, levels, context?) returns a numeric score or null");
-    expect(SYSTEM_PROMPT).toContain("application.ai.decide(question, context?) returns true, false, or null");
-    expect(SYSTEM_PROMPT).toContain("Never add your own Jev/confidence threshold");
+  it('documents the typed public application and coding-agent API without provider internals', () => {
+    expect(SYSTEM_PROMPT).toContain("AVAILABLE PLATFORM APIs");
+    expect(SYSTEM_PROMPT).toContain("agent.screenshot(input?: { scale?: number }): Promise<string>");
+    expect(SYSTEM_PROMPT).toContain("application.store: JsonObject");
+    expect(SYSTEM_PROMPT).toContain("application.ai.choose<T extends string>");
+    expect(SYSTEM_PROMPT).toContain("application.ai.score(question: string, levels: string[], context?: JsonValue): Promise<number | null>");
+    expect(SYSTEM_PROMPT).toContain("application.ai.decide(question: string, context?: JsonValue): Promise<boolean | null>");
+    expect(SYSTEM_PROMPT).toContain("undefined, functions, class instances");
+    expect(SYSTEM_PROMPT).not.toContain("Jev");
+    expect(SYSTEM_PROMPT).not.toContain("provider-specific");
   });
 
   it('defines the canonical generated-app root as an invariant', () => {

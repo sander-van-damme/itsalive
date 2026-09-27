@@ -90,17 +90,20 @@ Configure the first Worker route/custom domain for the exact root host and the s
 
 Generated application code uses native browser APIs plus a deliberately small shell-owned `application` global:
 
-```js
-application.store
-application.ai.text(prompt)
-application.ai.choose(question, options, context?)
-application.ai.score(question, levels, context?)
-application.ai.decide(question, context?)
-application.ai.probability(question, context?)
-application.escalate(reason)
+```ts
+type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
+type JsonObject = { [key: string]: JsonValue };
+
+application.store: JsonObject
+application.ai.text(prompt: string): Promise<string>
+application.ai.choose<T extends string>(question: string, options: Record<T, string>, context?: JsonValue): Promise<T | null>
+application.ai.score(question: string, levels: string[], context?: JsonValue): Promise<number | null>
+application.ai.decide(question: string, context?: JsonValue): Promise<boolean | null>
+application.ai.probability(question: string, context?: JsonValue): Promise<number>
+application.escalate(reason: string): void
 ```
 
-`application.store` is a durable JSON-like object tree persisted atomically with the app document. Ordinary app state can use normal JavaScript property access and initialization such as `application.store.counter ??= { count: 0 }`. Larger, binary, or query-heavy data may still use native IndexedDB directly.
+`application.store` is a durable JSON-like object tree persisted atomically with the app document. Valid values are `null`, booleans, finite numbers, strings, arrays, and plain objects recursively. `undefined`, functions, class instances, accessor properties, non-finite numbers, and circular references are rejected. Ordinary app state can use normal JavaScript property access and initialization such as `application.store.counter ??= { count: 0 }`. Larger, binary, or query-heavy data may still use native IndexedDB directly.
 
 `application.ai` keeps provider/model details out of generated apps:
 
@@ -125,16 +128,16 @@ await application.ai.probability("Is this a refund request?", message)
 // -> 0.93
 ```
 
-`text()` uses the configured LLM text-generation path. `choose()`, `score()`, `decide()`, and `probability()` use the shell-owned Jev/Decisions integration. Choice and Score return `null` when the platform judges confidence too low; Decide returns `null` when the probability is neither clearly true nor clearly false. Generated app code should handle `null` conservatively and must not implement its own Jev confidence thresholds. The current thresholds are shell-owned policy and may be tuned without changing the public API.
+`text()` returns generated text. `choose()`, `score()`, and `decide()` return `null` when the platform cannot make a sufficiently confident bounded decision; generated app code should handle that conservatively rather than inventing another confidence threshold. `probability()` returns a number from 0 through 1. Provider/model/scoring details remain shell-owned and are intentionally not part of the generated-app API.
 
 `application.escalate(reason)` hands a problem to the external coding agent; it is not a content-generation call and does not return the agent's work product.
 
 Coding commands also receive a small `agent` global:
 
-```js
-await agent.memory()
-await agent.screenshot()
-return agent.done(message)
+```ts
+agent.memory(): Promise<string>
+agent.screenshot(input?: { scale?: number }): Promise<string>
+agent.done(message?: string): unknown
 ```
 
 `agent.memory()` exposes curated shell-owned context rather than raw history records. `agent.screenshot()` is best-effort visual verification, while `agent.done()` signals that the current coding task is complete. The naming is intentionally a semantic nudge: persist `application.*` behavior into the app when appropriate; use `agent.*` for coding and inspection.

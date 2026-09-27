@@ -4,7 +4,7 @@ import { installAutosave, restoreAppDocument, serializeAppDocument } from "./per
 import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
 import type { AgentRuntimeApi, ApplicationAiApi, ApplicationRuntimeApi } from "./globals";
-import { createApplicationStore } from "./application-store";
+import { createApplicationStore, type JsonValue } from "./application-store";
 import type { ApplicationAiDecisionRequest, ApplicationAiDecisionResult, BridgeMessage, ExecutionConsoleEntry, ShellToAppPayload } from "../shared";
 import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, isApplicationAiDecisionRequest, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
@@ -120,20 +120,18 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
 
   const done = (message?: string): DoneSignal => doneSignal(message);
-  const text = async (prompt: unknown): Promise<string> => {
-    const promptText = typeof prompt === "string" ? prompt : JSON.stringify(prompt);
-    if (typeof promptText !== "string") throw new TypeError("application.ai.text prompt must be text or JSON-serializable");
+  const text = async (prompt: string): Promise<string> => {
+    if (typeof prompt !== "string") throw new TypeError("application.ai.text prompt must be a string");
     const response = await bridge.request<BridgeMessage<ShellToAppPayload>>({
       type: "llm.request",
-      prompt: promptText,
+      prompt,
     }, 120_000);
     if (response.type !== "llm.response") throw new Error(`Unexpected LLM response: ${response.type}`);
     if (response.error) throw new Error(response.error.message);
     if (typeof response.result !== "string") throw new Error("application.ai.text returned a non-text result");
     return response.result;
   };
-  const contextJson = (context: unknown): string | undefined => {
-    if (context === undefined) return undefined;
+  const contextJson = (context: JsonValue): string => {
     let serialized: string | undefined;
     try { serialized = JSON.stringify(context); }
     catch { throw new TypeError("application.ai context must be JSON-serializable"); }
@@ -153,22 +151,22 @@ export async function startAppRuntime(options: RuntimeOptions) {
   };
   const ai: Readonly<ApplicationAiApi> = Object.freeze({
     text,
-    choose: async (question: string, options: Record<string, string>, context?: unknown) => {
+    choose: async <T extends string>(question: string, options: Record<T, string>, context?: JsonValue): Promise<T | null> => {
       const result = await requestDecision({ kind: "choose", question, options, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (result !== null && typeof result !== "string") throw new Error("application.ai.choose returned an invalid result");
-      return result;
+      return result as T | null;
     },
-    score: async (question: string, levels: string[], context?: unknown) => {
+    score: async (question: string, levels: string[], context?: JsonValue) => {
       const result = await requestDecision({ kind: "score", question, levels, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (result !== null && typeof result !== "number") throw new Error("application.ai.score returned an invalid result");
       return result;
     },
-    decide: async (question: string, context?: unknown) => {
+    decide: async (question: string, context?: JsonValue) => {
       const result = await requestDecision({ kind: "decide", question, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (result !== null && typeof result !== "boolean") throw new Error("application.ai.decide returned an invalid result");
       return result;
     },
-    probability: async (question: string, context?: unknown) => {
+    probability: async (question: string, context?: JsonValue) => {
       const result = await requestDecision({ kind: "probability", question, ...(context === undefined ? {} : { contextJson: contextJson(context) }) });
       if (typeof result !== "number" || result < 0 || result > 1) throw new Error("application.ai.probability returned an invalid result");
       return result;

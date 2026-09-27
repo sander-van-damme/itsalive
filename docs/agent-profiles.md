@@ -1,6 +1,6 @@
 # Agent profiles
 
-Agent profiles are the single configuration point for model route, compute, context policy, prompt identity, capability exposure, and default lifecycle budgets.
+Agent profiles are the single configuration point for model route, compute, context policy, prompt identity, API-documentation exposure, and default lifecycle budgets.
 
 The registry lives in `src/shell/core/agent-profiles.ts`.
 
@@ -27,11 +27,11 @@ All currently use `openrouter/auto`. The important change is that this is centra
 
 ## Prompt and capability policy
 
-Every profile declares a stable `promptId` and capability exposure policy.
+Every profile declares a stable `promptId` and API-documentation exposure policy.
 
-- `index`: role may receive the compact capability index.
-- `selected`: inject detailed help only for selected capabilities.
-- `none`: do not inject platform capability documentation.
+- `index`: role may receive the compact platform API index.
+- `selected`: inject detailed help only for selected API groups.
+- `none`: do not inject platform API documentation.
 
 The actual manager/worker prompts are introduced with the orchestration issues; profile IDs already give them a stable lookup key.
 

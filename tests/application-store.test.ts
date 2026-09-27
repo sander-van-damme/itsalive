@@ -48,15 +48,15 @@ describe("application store", () => {
 
   it("rejects values that cannot survive JSON-style persistence", () => {
     const controller = createApplicationStore();
-    const store = controller.store;
+    const unsafeStore = controller.store as Record<string, unknown>;
 
-    expect(() => { store.fn = () => undefined; }).toThrow(/JSON-like/);
-    expect(() => { store.date = new Date(); }).toThrow(/arrays and plain objects/);
-    expect(() => { store.nan = Number.NaN; }).toThrow(/finite numbers/);
+    expect(() => { unsafeStore.fn = () => undefined; }).toThrow(/JSON-like/);
+    expect(() => { unsafeStore.date = new Date(); }).toThrow(/arrays and plain objects/);
+    expect(() => { unsafeStore.nan = Number.NaN; }).toThrow(/finite numbers/);
 
     const circular: Record<string, unknown> = {};
     circular.self = circular;
-    expect(() => { store.circular = circular; }).toThrow(/circular/);
+    expect(() => { unsafeStore.circular = circular; }).toThrow(/circular/);
   });
 
   it("rejects malformed persisted roots", () => {

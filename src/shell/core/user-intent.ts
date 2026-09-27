@@ -1,4 +1,4 @@
-import { inferPlatformCapabilities, isPlatformCapabilityId, platformCapabilityHelp, platformCapabilityIndex, type PlatformCapabilityId } from "./capabilities";
+import { inferPlatformCapabilities, isPlatformCapabilityId, platformApiIndex, platformCapabilityHelp, type PlatformCapabilityId } from "./capabilities";
 import type { TriggerRoutingDecision } from "./jev-routing";
 import type { GenerateRequest, ModelConfig } from "./types";
 
@@ -46,8 +46,8 @@ Do not include the full user conversation. Do not invent requirements.
 Return JSON only with this exact shape:
 {"kind":"change|explanation|question|preference|other","shouldCode":boolean,"reply":"string","technicalIntent":{"goal":"string","constraints":["string"],"acceptanceCriteria":["string"],"capabilityIds":["id"]}}
 
-Capability catalog:
-${platformCapabilityIndex()}`;
+Available platform APIs:
+${platformApiIndex()}`;
 
 export function buildUserIntentRequest(input: UserIntentInput, model: ModelConfig, signal?: AbortSignal): GenerateRequest {
   const body = [
@@ -165,7 +165,7 @@ export function technicalIntentBlock(intent: TechnicalIntent): string {
     "ACCEPTANCE CRITERIA",
     intent.acceptanceCriteria.length ? intent.acceptanceCriteria.map(value => `- ${value}`).join("\n") : "- (none)",
     "",
-    "RELEVANT PLATFORM CAPABILITIES",
+    "SELECTED PLATFORM API HELP",
     platformCapabilityHelp(intent.capabilityIds),
     ...(intent.telemetrySummary?.trim() ? ["", "SELECTED TELEMETRY", intent.telemetrySummary.trim()] : []),
   ].join("\n");
