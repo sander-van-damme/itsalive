@@ -411,6 +411,9 @@ describe("coding manager and scoped workers", () => {
 
     const managerRequest = requests.find(request => request.purpose === "coding manager plan")!;
     const managerContext = managerRequest.messages.map(message => message.content).join("\n");
+    expect(managerContext).toContain("AVAILABLE PLATFORM APIS");
+    expect(managerContext).toContain("application.ai.decide(question: string, context?: JsonValue): Promise<boolean | null>");
+    expect(managerContext).toContain("application.store: JsonObject");
     expect(managerContext).toContain("ROUTING HINT");
     expect(managerContext).toContain('"route":"debug"');
     expect(managerContext).toContain('"preferredWorkerProfile":"repair-worker"');
@@ -435,6 +438,7 @@ describe("coding manager and scoped workers", () => {
     expect(firstContext).toContain("ASSIGNED SCOPE\n#timer-controls");
     expect(firstContext).toContain("DOM ID PREFIX\ntimer-controls-");
     expect(firstContext).toContain("STORE NAMESPACE\ntimer_controls");
+    expect(firstContext).toContain("SELECTED PLATFORM API HELP");
     expect(secondContext).toContain("ASSIGNED SCOPE\n#lap-list");
     expect(secondContext).toContain("DOM ID PREFIX\nlap-list-");
     expect(secondContext).toContain("STORE NAMESPACE\nlap_list");
