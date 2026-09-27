@@ -92,7 +92,7 @@ export const AGENT_PROFILES: Readonly<Record<AgentProfileId, AgentProfile>> = Ob
     model: "openrouter/auto",
     compute: "high",
     contextPolicy: "manager-technical",
-    capabilityExposure: "selected",
+    capabilityExposure: "index",
     outputHeadroomTokens: 8_192,
     observationHeadroomTokens: 1_024,
     historyBudget: { kind: "settings" },
