@@ -13,6 +13,7 @@ import { createLlmTraceIdentity } from "./llm-trace";
 import {
   contractChangeCoversDiff,
   normalizeAppSharedContract,
+  normalizeAppTechnicalContract,
   sharedContractDiff,
   sharedContractsEqual,
   technicalContractForPlan,
