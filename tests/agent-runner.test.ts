@@ -728,7 +728,7 @@ describe('AgentRunner lifecycle', () => {
       }
       throw new Error('Unexpected scoped test command');
     }) };
-    const completionAssessor = vi.fn(async () => ({ action: 'uncertain' as const, reason: 'evidence-uncertain' }));
+    const completionAssessor = vi.fn(async (_state: import('../src/shell/core/agent-runner').CompletionAssessmentState) => ({ action: 'uncertain' as const, reason: 'evidence-uncertain' }));
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
