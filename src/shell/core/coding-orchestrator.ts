@@ -570,7 +570,7 @@ export class CodingOrchestrator {
       runStatus = result.status;
       message = result.message;
       await stateWrites;
-      handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
+      handoff = workerHandoff(plan, task, result.status, result.rawMessage, result.message);
       status = handoff.status === "done" ? result.status : "blocked";
       const terminalState: ComponentBuildState = handoff.status === "done"
         ? (revealOnSuccess ? "ready" : "queued")
@@ -1053,6 +1053,7 @@ export function parseManagerVerification(raw: string): ManagerVerification {
 }
 
 function workerHandoff(
+  plan: CodingManagerPlan,
   task: CodingWorkerTask,
   status: RunResult["status"],
   rawMessage: string | undefined,
@@ -1074,11 +1075,30 @@ function workerHandoff(
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const record = parsed as Record<string, unknown>;
         const unresolved = stringArray(record.unresolved, 12);
-        const sharedContractChanges = stringArray(record.sharedContractChanges, 12);
+        const rawContractChanges = Array.isArray(record.sharedContractChanges) ? record.sharedContractChanges : [];
+        const sharedContractChanges = rawContractChanges
+          .map(parseSharedContractChange)
+          .filter((entry): entry is SharedContractChange => Boolean(entry))
+          .slice(0, 24);
+        if (rawContractChanges.length !== sharedContractChanges.length) {
+          unresolved.push("Worker returned malformed sharedContractChanges; contract coordination requires structured change entries.");
+        }
+
+        if (sharedContractChanges.length && !plan.contractChange) {
+          unresolved.push("Worker reported an undeclared app-contract change; replan with an explicit manager contractChange before applying it.");
+        } else if (sharedContractChanges.length && plan.contractChange) {
+          const declared = new Set(plan.contractChange.changes.map(change => change.kind + ":" + change.path));
+          const undeclared = sharedContractChanges.filter(change => !declared.has(change.kind + ":" + change.path));
+          if (undeclared.length) {
+            unresolved.push("Worker reported contract changes that were not declared by the coding manager: "
+              + undeclared.map(change => change.kind + ":" + change.path).join(", "));
+          }
+        }
+
         const requestedScope = typeof record.requestedScope === "string" && record.requestedScope.trim()
           ? record.requestedScope.trim()
           : undefined;
-        const handoffStatus = record.status === "blocked" || requestedScope ? "blocked" : "done";
+        const handoffStatus = record.status === "blocked" || requestedScope || unresolved.length ? "blocked" : "done";
         return {
           status: handoffStatus,
           scope: task.scope,
