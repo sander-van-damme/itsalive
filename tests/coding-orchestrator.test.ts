@@ -350,6 +350,72 @@ describe("coding manager and scoped workers", () => {
     expect(db.history.forApp).not.toHaveBeenCalled();
     expect(db.history.add).not.toHaveBeenCalled();
   });
+  it("keeps completed controls interactive even when final checking reports a false negative", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [], stores: [] },
+      tasks: [{
+        id: "movie-form",
+        goal: "Build the movie form",
+        scope: "#movie-form",
+        acceptanceCriteria: ["The Add button works"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "shared-v1",
+        parallel: false,
+      }],
+    };
+    const requests: GenerateRequest[] = [];
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        requests.push(structuredClone(request));
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return {
+            text: '{"ok":false,"summary":"The app is not ready for final integration verification.","unresolved":["false negative"]}',
+            usage: { cost: 0 },
+          };
+        }
+        return {
+          text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"form works\\"],\\"verified\\":[\\"Add button works\\"]}");',
+          usage: { cost: 0 },
+        };
+      }),
+    };
+    const executor = parallelExecutor(new Set<string>());
+    vi.spyOn(console, "groupCollapsed").mockImplementation(() => undefined);
+    vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
+    vi.spyOn(console, "info").mockImplementation(() => undefined);
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, executor).run({
+      appId,
+      appPrompt: "Movie planner",
+      technicalIntent: "Build a working add-movie form.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+    });
+
+    expect(result).toMatchObject({
+      status: "manager-verification-failed",
+      message: "The app still needs work before it’s ready.",
+      handoffs: [expect.objectContaining({ status: "done", scope: "#movie-form" })],
+    });
+
+    const lifecycleCommands = executor.execute.mock.calls
+      .map(([, code]) => String(code))
+      .filter(code => code.includes("data-itsalive-build-state") || code.includes("data-itsalive-building"));
+
+    expect(lifecycleCommands.length).toBeGreaterThan(0);
+    expect(lifecycleCommands.some(code => code.includes('setAttribute("inert"'))).toBe(false);
+    expect(lifecycleCommands.some(code => code.includes('removeAttribute("inert")'))).toBe(true);
+
+    const workerRequest = requests.find(request => request.purpose?.startsWith("agent turn"));
+    expect(workerRequest?.system).toContain("they do not disable the component");
+    expect(workerRequest?.system).not.toContain("region is inert");
+  });
+
   it("runs independent scopes concurrently and waits for dependencies before the next wave", async () => {
     const requests: GenerateRequest[] = [];
     const started: string[] = [];
