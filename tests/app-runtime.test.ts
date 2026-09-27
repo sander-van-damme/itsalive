@@ -153,7 +153,7 @@ describe("injected app runtime namespaces", () => {
     await expect(window.application.ai.choose("?", { only: "one" })).rejects.toThrow("Invalid application.ai decision request");
     const circular: Record<string, unknown> = {};
     circular.self = circular;
-    await expect(window.application.ai.decide("Circular?", circular)).rejects.toThrow("JSON-serializable");
+    await expect(window.application.ai.decide("Circular?", circular as never)).rejects.toThrow("JSON-serializable");
 
     window.application.escalate("continue");
     expect(state.posts.some(({ payload }) => payload.type === "wake" && payload.reason === "continue")).toBe(true);
