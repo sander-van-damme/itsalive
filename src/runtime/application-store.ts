@@ -1,4 +1,7 @@
-export type ApplicationStore = Record<string, unknown>;
+export type JsonPrimitive = null | boolean | number | string;
+export type JsonValue = JsonPrimitive | JsonValue[] | JsonObject;
+export interface JsonObject { [key: string]: JsonValue }
+export type ApplicationStore = JsonObject;
 
 export interface ApplicationStoreController {
   readonly store: ApplicationStore;
