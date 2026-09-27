@@ -14,7 +14,9 @@
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "preview": "vite preview --config vite.root.config.ts",
-    "benchmark:prompts": "vitest run tests/prompt-context-benchmark.test.ts --reporter=verbose"
+    "benchmark:prompts": "vitest run tests/prompt-context-benchmark.test.ts --reporter=verbose",
+    "test:reliability": "vitest run tests/reliability-scenarios.test.ts --reporter=verbose",
+    "eval:reliability": "node scripts/reliability-live-eval.mjs"
   },
   "dependencies": {
     "lucide": "^0.468.0"
