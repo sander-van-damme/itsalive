@@ -120,7 +120,7 @@ Dynamic:
 
 JIT:
 
-- compact capability index if request classification needs it.
+- compact platform API index if request classification needs it.
 
 Never repeat:
 
@@ -147,7 +147,7 @@ Dynamic:
 JIT:
 
 - focused DOM inspection;
-- relevant capability help;
+- selected platform API help;
 - relevant error/log summaries.
 
 Never repeat:
@@ -223,7 +223,7 @@ Never repeat:
 - coding transcript;
 - app HTML;
 - shell behavioral history;
-- platform capability documentation.
+- platform API documentation.
 
 ## Capability documentation strategy
 
