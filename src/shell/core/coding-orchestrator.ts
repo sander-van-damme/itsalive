@@ -202,8 +202,8 @@ const WORKER_SYSTEM = [
   "For interactive behavior, persist the setup in app-authored markup such as a stable inline <script> element owned by this component (replace the prior setup script idempotently) or another serializable browser-native mechanism. Direct addEventListener calls made only by the transient agent command do not survive document restoration and will fail completion verification.",
   "",
   "BUILD STATE",
-  "The shell owns data-itsalive-building, data-itsalive-build-state, data-itsalive-build-owner, inert, and aria-busy on the assigned component root.",
-  "Do not remove or rewrite those root lifecycle attributes. Build and verify the content while the region is inert; the shell reveals it after scoped verification.",
+  "The shell owns data-itsalive-building, data-itsalive-build-state, data-itsalive-build-owner, and aria-busy on the assigned component root.",
+  "These attributes communicate progress; they do not disable the component. Do not remove or rewrite them. Because each model turn executes atomically, leave any visible controls in a usable state at the end of each turn whenever practical.",
   "",
   "HANDOFF",
   "On success, the final done payload must be JSON only with:",
@@ -219,6 +219,7 @@ const MANAGER_VERIFY_SYSTEM = [
   "",
   "Judge only from the technical intent, shared contracts, worker handoffs, and compact final app outline.",
   "Do not request worker transcripts.",
+  "The summary is shown to the user. Use ordinary product language and never mention workers, handoffs, regions, final verification, or integration verification.",
   "Mark ok=false when an acceptance criterion is not supported by the evidence or a component remains missing/building."
 ].join("\n");
 
@@ -439,7 +440,7 @@ export class CodingOrchestrator {
         }
         return {
           status: "done",
-          message: verification.summary || "Done — it’s ready.",
+          message: userFacingManagerSummary(verification.summary, true),
           plan,
           handoffs,
           workerTurns,
@@ -449,7 +450,7 @@ export class CodingOrchestrator {
       if (finalCostStop) return { ...stopResult(finalCostStop, handoffs, workerTurns, timeline), plan };
       return {
         status: "manager-verification-failed",
-        message: verification.summary || "Final integration verification found unfinished work.",
+        message: userFacingManagerSummary(verification.summary, false),
         plan,
         handoffs,
         workerTurns,
@@ -576,6 +577,16 @@ export class CodingOrchestrator {
     console.info("Worker lifecycle", timeline);
     return { task, handoff, turns, timeline, ...(runStatus ? { runStatus } : {}), ...(message ? { message } : {}) };
   }
+}
+
+const INTERNAL_MANAGER_SUMMARY = /\b(?:worker|handoff|region|final verification|integration verification)\b/i;
+
+function userFacingManagerSummary(summary: string | undefined, ok: boolean): string {
+  const normalized = summary?.replace(/\s+/g, " ").trim();
+  if (!normalized || INTERNAL_MANAGER_SUMMARY.test(normalized)) {
+    return ok ? "Done — it’s ready." : "The app still needs work before it’s ready.";
+  }
+  return normalized;
 }
 
 function emptyLifecycleSummary(phase: CodingLifecycleSummary["phase"]): CodingLifecycleSummary {
@@ -1003,7 +1014,7 @@ async function setWorkerScopeState(
     '  component.setAttribute("data-itsalive-build-owner", "shell");',
     '  component.setAttribute("data-itsalive-build-state", state);',
     '  component.setAttribute("data-itsalive-building", "");',
-    '  component.setAttribute("inert", "");',
+    '  component.removeAttribute("inert");',
     '  if (state === "failed" || state === "blocked") component.removeAttribute("aria-busy");',
     '  else component.setAttribute("aria-busy", "true");',
     '}',
@@ -1036,7 +1047,7 @@ async function ensureWorkerScope(
     'component.setAttribute("data-itsalive-build-owner", "shell");',
     'component.setAttribute("data-itsalive-build-state", "queued");',
     'component.setAttribute("data-itsalive-building", "");',
-    'component.setAttribute("inert", "");',
+    'component.removeAttribute("inert");',
     'component.setAttribute("aria-busy", "true");',
     'return { ok: true, state: "queued" };',
   ].join("\n");
