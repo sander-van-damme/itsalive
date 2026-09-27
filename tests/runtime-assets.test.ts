@@ -18,6 +18,7 @@ describe("component-scoped build treatment", () => {
     expect(BUILDING_STYLE).not.toContain('content: "Building…"');
     expect(BUILDING_STYLE).not.toContain('backdrop-filter');
     expect(BUILDING_STYLE).not.toContain('@keyframes');
+    expect(BUILDING_STYLE).toContain('pointer-events: none');
   });
 
   it("uses disposable non-technical copy for the app bootstrap", () => {

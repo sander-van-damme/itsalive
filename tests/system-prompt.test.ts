@@ -46,8 +46,9 @@ describe('SYSTEM_PROMPT code examples', () => {
 
   it('defines a safe staged-construction contract', () => {
     expect(SYSTEM_PROMPT).toContain('data-itsalive-building');
-    expect(SYSTEM_PROMPT).toContain('inert');
+    expect(SYSTEM_PROMPT).toContain('do not make the whole component inert');
     expect(SYSTEM_PROMPT).toContain('data-itsalive-build-owner="shell"');
+    expect(SYSTEM_PROMPT).toContain('They do not disable the component');
     expect(SYSTEM_PROMPT).toContain('aria-busy');
     expect(SYSTEM_PROMPT).toContain('inspect → make one coherent change → inspect/verify');
     expect(SYSTEM_PROMPT).toContain('min-height: 100dvh');

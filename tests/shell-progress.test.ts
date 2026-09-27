@@ -21,20 +21,37 @@ describe("component lifecycle progress copy", () => {
     expect(codingLifecycleLabel(summary({ phase: "planning", total: 0 }), false)).toBe("Planning the change…");
   });
 
-  it("describes partial readiness instead of treating the whole app as blocked", () => {
+  it("reports completed, active, and queued parts in one consistent summary", () => {
+    expect(codingLifecycleLabel(summary({ queued: 2, building: 1 }), true))
+      .toBe("Building app · 0 of 3 parts complete · 1 in progress · 2 waiting…");
     expect(codingLifecycleLabel(summary({ ready: 2, building: 1 }), true))
-      .toBe("2/3 regions ready · 1 still taking shape…");
+      .toBe("Building app · 2 of 3 parts complete · 1 in progress…");
   });
 
-  it("localizes failed or blocked regions in the aggregate message", () => {
+  it("localizes failed or blocked parts without presenting the whole app as blocked", () => {
     expect(codingLifecycleLabel(summary({ total: 2, ready: 1, failed: 1 }), false))
-      .toBe("1/2 regions ready · 1 needs attention…");
+      .toBe("Building app · 1 of 2 parts complete · 1 part needs attention…");
+    expect(codingLifecycleLabel(summary({ total: 3, ready: 1, failed: 1, blocked: 1 }), false))
+      .toBe("Building app · 1 of 3 parts complete · 2 parts need attention…");
   });
 
-  it("keeps final integration verification distinct from component readiness", () => {
-    expect(codingLifecycleLabel(summary({
-      phase: "integration-verification",
-      ready: 3,
-    }), true)).toBe("3/3 regions ready · checking everything together…");
+  it("uses simple user-facing copy while the app is being checked", () => {
+    expect(codingLifecycleLabel(summary({ phase: "integration-verification", ready: 3 }), true))
+      .toBe("Checking the app · 3 of 3 parts complete…");
+    expect(codingLifecycleLabel(summary({ phase: "integration-verification", ready: 1, failed: 1, blocked: 1 }), false))
+      .toBe("Checking the app · 1 of 3 parts complete · 2 parts need attention…");
+  });
+
+  it("never exposes orchestration jargon in user-facing lifecycle labels", () => {
+    const labels = [
+      codingLifecycleLabel(summary({ queued: 2, building: 1 }), true),
+      codingLifecycleLabel(summary({ ready: 2, repairing: 1 }), false),
+      codingLifecycleLabel(summary({ phase: "integration-verification", ready: 3 }), true),
+      codingLifecycleLabel(summary({ total: 2, ready: 1, blocked: 1 }), false),
+    ].join("\n").toLowerCase();
+
+    for (const internal of ["region", "worker", "handoff", "final verification", "integration verification"]) {
+      expect(labels).not.toContain(internal);
+    }
   });
 });

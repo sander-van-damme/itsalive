@@ -52,7 +52,7 @@ IMPLEMENTATION
 Prefer semantic HTML, Tailwind, vanilla JavaScript, and native DOM APIs. Make targeted changes instead of regenerating the whole document. Keep responsive behavior and existing user data unless the task says otherwise.
 
 PROGRESS
-For substantial unfinished regions use data-itsalive-building + inert + aria-busy. Remove them only when the visible controls work. Verify the requested acceptance criteria before done().
+For substantial unfinished work, shell-owned data-itsalive-building + aria-busy may communicate progress without disabling the component. Verify the requested acceptance criteria before done().
 
 CONTEXT
 The technical intent is authoritative. Raw chat is intentionally absent. Detailed platform capability help is supplied only when relevant; do not invent APIs.`;
@@ -72,7 +72,7 @@ IMPLEMENTATION
 Prefer semantic HTML, Tailwind, vanilla JavaScript, and native DOM APIs. Make targeted changes instead of regenerating the whole document. Keep responsive behavior and existing user data unless the task says otherwise.
 
 PROGRESS
-For substantial unfinished regions use data-itsalive-building + inert + aria-busy. Remove them only when the visible controls work. Verify the requested acceptance criteria before done().
+For substantial unfinished work, shell-owned data-itsalive-building + aria-busy may communicate progress without disabling the component. Verify the requested acceptance criteria before done().
 
 CONTEXT
 The technical intent is authoritative. Raw chat is intentionally absent. Detailed platform capability help is supplied only when relevant; do not invent APIs.`;
@@ -85,7 +85,7 @@ Durability: transient listeners/closures/timers die on restore. Use application.
 
 Build: semantic HTML; Tailwind; vanilla JS + native DOM. Targeted edits, preserve unrelated UI/data, responsive.
 
-Unfinished substantial region: data-itsalive-building + inert + aria-busy. Remove only when working. Technical intent authoritative. Raw chat absent. Use only supplied platform APIs.`;
+Unfinished substantial work: shell-owned data-itsalive-building + aria-busy may show progress without disabling controls. Technical intent authoritative. Raw chat absent. Use only supplied platform APIs.`;
 
 export const PROMPT_BENCHMARK_VARIANTS: readonly PromptBenchmarkVariant[] = Object.freeze([
   {
