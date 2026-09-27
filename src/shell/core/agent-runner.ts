@@ -93,8 +93,8 @@ export interface RunOptions {
   behaviorSummary?: string;
   trigger: string;
   model: ModelConfig;
-  /** Optional role-specific stable prompt. Defaults to the production coding system prompt. */
-  systemPrompt?: string;
+  /** Required role-owned stable prompt. AgentRunner has no generic production fallback. */
+  systemPrompt: string;
   /** Optional isolated history store. Defaults to durable shell history. */
   history?: AgentHistoryStore;
   /** Simple CSS selector for a worker-owned component scope. */
@@ -271,7 +271,7 @@ export class AgentRunner {
             behaviorEvidence: selectedEvidence.behaviorEvidence,
             availableHistoryCount: candidateSet.availableTechnicalHistoryCount,
             availableBehaviorEvidenceCount: candidateSet.availableBehaviorEpisodeCount,
-            ...(options.systemPrompt ? { systemPrompt: options.systemPrompt } : {}),
+            systemPrompt: options.systemPrompt,
             countTokens: options.countTokens,
           });
           environmentObservation = undefined;
