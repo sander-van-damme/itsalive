@@ -258,7 +258,7 @@ describe("coding manager and scoped workers", () => {
     vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const completionAssessor = vi.fn(async () => ({ action: "uncertain" as const, reason: "evidence-uncertain" }));
+    const completionAssessor = vi.fn(async (_state: import('../src/shell/core/agent-runner').CompletionAssessmentState) => ({ action: "uncertain" as const, reason: "evidence-uncertain" }));
 
     const result = await new CodingOrchestrator(db as never, providers as never, executor).run({
       appId,
