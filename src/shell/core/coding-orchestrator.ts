@@ -865,29 +865,87 @@ function stripFence(value: string): string {
   return match ? match[2]!.trim() : trimmed;
 }
 
-export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
+function parseSharedContractChange(value: unknown): SharedContractChange | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  const allowedKinds: SharedContractChangeKind[] = ["reference", "store", "state", "dom", "semantic"];
+  if (typeof kind !== "string" || !allowedKinds.includes(kind as SharedContractChangeKind)) return undefined;
+  const path = typeof record.path === "string" ? record.path.trim().slice(0, 240) : "";
+  const description = typeof record.description === "string" ? record.description.trim().slice(0, 500) : "";
+  if (!path || !description) return undefined;
+  const from = typeof record.from === "string" && record.from.trim() ? record.from.trim().slice(0, 500) : undefined;
+  const to = typeof record.to === "string" && record.to.trim() ? record.to.trim().slice(0, 500) : undefined;
+  return {
+    kind: kind as SharedContractChangeKind,
+    path,
+    description,
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
+  };
+}
+
+function parseCodingContractChange(value: unknown, taskScopes: ReadonlySet<string>): CodingContractChange | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const reason = typeof record.reason === "string" ? record.reason.trim().slice(0, 1_000) : "";
+  const affectedScopes = [...new Set(stringArray(record.affectedScopes, 16))];
+  const changes = Array.isArray(record.changes)
+    ? record.changes.map(parseSharedContractChange).filter((entry): entry is SharedContractChange => Boolean(entry)).slice(0, 24)
+    : [];
+  if (!reason || !affectedScopes.length || !changes.length) return undefined;
+  if (affectedScopes.some(scope => !SIMPLE_SCOPE.test(scope) || !taskScopes.has(scope))) {
+    throw new Error("Coding manager contractChange affectedScopes must reference task scopes in the current plan");
+  }
+  return { reason, affectedScopes, changes };
+}
+
+export function parseCodingManagerPlan(raw: string, establishedContract?: AppTechnicalContract): CodingManagerPlan {
   let parsed: unknown;
   try { parsed = JSON.parse(stripFence(raw)); }
   catch { throw new Error("Coding manager returned invalid JSON"); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Coding manager returned an invalid plan");
   const record = parsed as Record<string, unknown>;
+  const established = establishedContract ? normalizeAppTechnicalContract(establishedContract) : undefined;
   const sharedRaw = record.shared;
   const sharedRecord = sharedRaw && typeof sharedRaw === "object" && !Array.isArray(sharedRaw)
     ? sharedRaw as Record<string, unknown>
     : {};
-  const sharedRef = typeof sharedRecord.ref === "string" && TASK_ID.test(sharedRecord.ref.trim())
-    ? sharedRecord.ref.trim()
-    : "shared-v1";
-  const sharedStores = [...new Set(stringArray(sharedRecord.stores, 16))];
+
+  const explicitRef = typeof sharedRecord.ref === "string" ? sharedRecord.ref.trim() : "";
+  const sharedRef = explicitRef || established?.shared.ref || "shared-v1";
+  if (!TASK_ID.test(sharedRef)) throw new Error("Coding manager shared contract ref is invalid");
+
+  const sharedStores = Array.isArray(sharedRecord.stores)
+    ? [...new Set(stringArray(sharedRecord.stores, 16))]
+    : [...(established?.shared.stores ?? [])];
   if (sharedStores.some(store => !STORE_NAMESPACE.test(store))) {
     throw new Error("Coding manager shared stores must be JavaScript identifier names");
   }
+
+  const sharedState = Array.isArray(sharedRecord.state)
+    ? stringArray(sharedRecord.state, 32)
+    : [...(established?.shared.state ?? [])];
+  const stableDomIdsExplicit = Array.isArray(sharedRecord.stableDomIds);
+  const stableDomIds = stableDomIdsExplicit
+    ? [...new Set(stringArray(sharedRecord.stableDomIds, 48))]
+    : [...(established?.shared.stableDomIds ?? [])];
+  if (stableDomIds.some(id => !TASK_ID.test(id))) {
+    throw new Error("Coding manager stableDomIds must be plain stable id values without #");
+  }
+  const semantics = Array.isArray(sharedRecord.semantics)
+    ? stringArray(sharedRecord.semantics, 32)
+    : [...(established?.shared.semantics ?? [])];
+
   const shared: CodingManagerSharedContracts = {
     ref: sharedRef,
     design: stringArray(sharedRecord.design, 16),
-    state: stringArray(sharedRecord.state, 16),
+    state: sharedState,
     stores: sharedStores,
+    stableDomIds,
+    semantics,
   };
+
   if (!Array.isArray(record.tasks) || record.tasks.length < 1 || record.tasks.length > 8) {
     throw new Error("Coding manager must return between 1 and 8 tasks");
   }
@@ -946,8 +1004,38 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
       ...(budget ? { budget } : {}),
     };
   });
+
+  if (!established && !stableDomIdsExplicit) {
+    shared.stableDomIds = [...new Set(tasks.map(task => task.scope.slice(1)))];
+  }
+
+  const taskScopes = new Set(tasks.map(task => task.scope));
+  const contractChange = parseCodingContractChange(record.contractChange, taskScopes);
+  if (!established) {
+    if (record.contractChange != null) {
+      throw new Error("Initial coding manager plan must establish the contract without contractChange");
+    }
+  } else {
+    const diff = sharedContractDiff(established.shared, shared);
+    const changed = !sharedContractsEqual(established.shared, shared);
+    if (changed && !contractChange) {
+      throw new Error("Coding manager changed the established app contract without a valid contractChange");
+    }
+    if (!changed && record.contractChange != null) {
+      throw new Error("Coding manager declared contractChange but preserved the established app contract");
+    }
+    if (changed && contractChange && !contractChangeCoversDiff(contractChange, diff)) {
+      throw new Error("Coding manager contractChange does not cover every changed contract category");
+    }
+  }
+
   const alivePolicy = normalizeAlivePolicyProposal(record.alivePolicy);
-  return { shared, tasks, ...(alivePolicy ? { alivePolicy } : {}) };
+  return {
+    shared,
+    tasks,
+    ...(contractChange ? { contractChange } : {}),
+    ...(alivePolicy ? { alivePolicy } : {}),
+  };
 }
 
 export function parseManagerVerification(raw: string): ManagerVerification {
