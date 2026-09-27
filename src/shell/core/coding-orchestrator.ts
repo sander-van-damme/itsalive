@@ -1185,8 +1185,9 @@ async function inspectIntegrationScopeEvidence(
   const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
   if (result.error) throw new Error("Could not collect integration scope evidence: " + result.error.message);
   if (!Array.isArray(result.value)) throw new Error("Integration scope evidence returned an invalid result");
+  const values = result.value as unknown[];
   return scopes.map((scope, index) => {
-    const raw = result.value?.[index] as Record<string, unknown> | undefined;
+    const raw = values[index] as Record<string, unknown> | undefined;
     const exists = raw?.exists === true;
     const meaningfulUi = raw?.meaningfulUi === true;
     const nestedBuildingCount = typeof raw?.nestedBuildingCount === "number" ? raw.nestedBuildingCount : 0;
