@@ -234,10 +234,11 @@ function counterBuildProgram(): string {
     "  }",
     "  render();",
     "})();",
-  ].join("\n").replaceAll("application.", "window.application.");
+  ].join("\n");
   return [
     'component.innerHTML = \'<button id="counter-app-increment" type="button">Increment</button><output id="counter-app-value">0</output>\';',
     'const setup = document.createElement("script");',
+    'setup.type = "application/itsalive-test-setup";',
     'setup.setAttribute("data-app-setup", "");',
     "setup.textContent = " + JSON.stringify(setup) + ";",
     "component.append(setup);",
@@ -256,10 +257,11 @@ function counterModificationProgram(): string {
     '    button.addEventListener("click", () => { application.store.counterState.count -= 1; if (output) output.textContent = String(application.store.counterState.count); });',
     "  }",
     "})();",
-  ].join("\n").replaceAll("application.", "window.application.");
+  ].join("\n");
   return [
     'if (!component.querySelector("#counter-app-decrement")) component.insertAdjacentHTML("beforeend", \'<button id="counter-app-decrement" type="button">Decrement</button>\');',
     'const setup = document.createElement("script");',
+    'setup.type = "application/itsalive-test-setup";',
     'setup.setAttribute("data-app-setup", "");',
     "setup.textContent = " + JSON.stringify(setup) + ";",
     "component.append(setup);",
@@ -322,10 +324,11 @@ function movieFormProgram(repair = false): string {
     "    });",
     "  }",
     "})();",
-  ].join("\n").replaceAll("application.", "window.application.");
+  ].join("\n");
   const lines = [];
   if (!repair) lines.push('component.innerHTML = \'<form><input name="title" aria-label="Title"><input name="genre" aria-label="Genre"><input name="duration" type="number" aria-label="Duration"><button type="submit">Add movie</button></form>\';');
   lines.push('const setup = document.createElement("script");');
+  lines.push('setup.type = "application/itsalive-test-setup";');
   lines.push('setup.setAttribute("data-app-setup", "");');
   lines.push("setup.textContent = " + JSON.stringify(setup) + ";");
   lines.push("component.append(setup);");
@@ -360,10 +363,11 @@ function movieShortlistProgram(): string {
     "  }",
     "  render();",
     "})();",
-  ].join("\n").replaceAll("application.", "window.application.");
+  ].join("\n");
   return [
     'component.innerHTML = \'<div data-list><p data-empty>No movies yet</p></div>\';',
     'const setup = document.createElement("script");',
+    'setup.type = "application/itsalive-test-setup";',
     'setup.setAttribute("data-app-setup", "");',
     "setup.textContent = " + JSON.stringify(setup) + ";",
     "component.append(setup);",
@@ -381,10 +385,11 @@ function movieTonightProgram(): string {
     '  window.__movieRenderTonight = render;',
     "  render();",
     "})();",
-  ].join("\n").replaceAll("application.", "window.application.");
+  ].join("\n");
   return [
     'component.innerHTML = \'<p data-tonight>Nothing selected</p>\';',
     'const setup = document.createElement("script");',
+    'setup.type = "application/itsalive-test-setup";',
     'setup.setAttribute("data-app-setup", "");',
     "setup.textContent = " + JSON.stringify(setup) + ";",
     "component.append(setup);",
@@ -426,10 +431,11 @@ function wordProgram(): string {
     "    });",
     "  }",
     "})();",
-  ].join("\n").replaceAll("application.", "window.application.");
+  ].join("\n");
   return [
     'component.innerHTML = \'<input aria-label="Word"><button type="button">Decide</button><output>Enter a word</output>\';',
     'const setup = document.createElement("script");',
+    'setup.type = "application/itsalive-test-setup";',
     'setup.setAttribute("data-app-setup", "");',
     "setup.textContent = " + JSON.stringify(setup) + ";",
     "component.append(setup);",
