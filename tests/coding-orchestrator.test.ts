@@ -1073,6 +1073,9 @@ function isolatedDb() {
 function parallelExecutor(ensured: Set<string>) {
   return {
     execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes("itsalive:validate-shared-store-json")) {
+        return { value: { ok: true, present: ["sharedApp"] } };
+      }
       if (code.includes("const selectors = ") && code.includes("const overlaps = []")) return { value: [] };
       if (code.includes("childCount: root.children.length")) {
         return {
