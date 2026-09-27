@@ -19,6 +19,9 @@ interface DoneSignal {
 }
 
 function doneSignal(message?: string): DoneSignal {
+  if (message !== undefined && typeof message !== "string") {
+    throw new TypeError("agent.done(message) accepts only a string. Serialize structured completion data with JSON.stringify(...).");
+  }
   return { [DONE]: true, ...(message === undefined ? {} : { message }) };
 }
 
