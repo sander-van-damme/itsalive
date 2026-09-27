@@ -433,6 +433,51 @@ describe('AgentRunner lifecycle', () => {
     ]));
   });
 
+  it('carries console inspection output into the next turn even when the return value is null', async () => {
+    const entries: HistoryEntry[] = [];
+    const requests: import('../src/shell/core/types').GenerateRequest[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async (request: import('../src/shell/core/types').GenerateRequest) => {
+      requests.push(structuredClone(request));
+      return requests.length === 1
+        ? { text: 'console.log("scope", document.querySelector("#itsalive-root")?.outerHTML);' }
+        : { text: 'return agent.done("ready");' };
+    }) };
+    let executions = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0 } };
+      }
+      executions++;
+      if (executions === 1) {
+        return {
+          value: null,
+          logs: [{ level: 'log', args: ['scope', '<main id="itsalive-root"><button>Decide</button></main>'] }],
+        };
+      }
+      return { done: true, message: 'ready' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect then finish', model, budget: { emergencyTurnCeiling: 3 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 2 });
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+    const secondContext = requests[1]!.messages.map(message => message.content).join('\n');
+    expect(secondContext).toContain('<button>Decide</button>');
+    expect(entries).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'error', content: expect.stringContaining('low-signal') }),
+    ]));
+  });
+
   it('stops a repeated low-signal verification loop after one diagnostic repair turn', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
