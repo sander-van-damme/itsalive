@@ -1,4 +1,3 @@
-import { SYSTEM_PROMPT } from "./system-prompt";
 import type { HistoryEntry, ModelConfig, ModelMessage } from "./types";
 
 export type TokenCounter = (text: string) => number;
@@ -21,8 +20,8 @@ export interface ContextInput {
   behaviorEvidence?: ContextEvidenceInput[];
   availableHistoryCount?: number;
   availableBehaviorEvidenceCount?: number;
-  /** Benchmark/profile override. Production callers default to SYSTEM_PROMPT. */
-  systemPrompt?: string;
+  /** Stable role-owned system prompt. Every caller must choose its role explicitly. */
+  systemPrompt: string;
   countTokens?: TokenCounter;
 }
 
@@ -54,7 +53,8 @@ const section = (title: string, body: string) => `${title}\n${body.trim() || "(n
 
 export function buildModelContext(input: ContextInput): BuiltContext {
   const count = input.countTokens ?? conservativeTokenEstimate;
-  const system = input.systemPrompt ?? SYSTEM_PROMPT;
+  const system = input.systemPrompt.trim();
+  if (!system) throw new Error("A role-owned system prompt is required");
   const headroom = input.model.observationHeadroomTokens ?? 1_024;
   const budget = input.model.maxContextTokens - input.model.outputHeadroomTokens - headroom;
   const mandatory = [

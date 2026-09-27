@@ -5,6 +5,7 @@ import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
 import { platformApiIndex, platformCapabilityHelp, isPlatformCapabilityId, type PlatformCapabilityId } from "./capabilities";
+import { CODING_MANAGER_PLAN_PROMPT, CODING_MANAGER_VERIFY_PROMPT, CODING_WORKER_SYSTEM_PROMPT } from "./prompts";
 import type { AgentProfileId, ResolvedAgentProfile } from "./agent-profiles";
 import type { ProviderRegistry } from "./providers";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
@@ -171,99 +172,6 @@ interface WorkerRunOutcome {
   message?: string;
 }
 
-const MANAGER_PLAN_SYSTEM = [
-  "You are the coding manager for one live browser app.",
-  "Plan implementation; do not write DOM mutation code.",
-  "",
-  "Return JSON only:",
-  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"application.store.sharedStore.movies: array of movie records\"],\"stores\":[\"sharedStore\"],\"stableDomIds\":[\"movie-night-app\",\"movie-shortlist\"],\"semantics\":[\"durationMin is an integer number of minutes\"]},\"contractChange\":null,\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
-  "When changing an established app contract, replace contractChange=null with: {\"reason\":\"why this is necessary\",\"affectedScopes\":[\"#component-id\"],\"changes\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"application.store.sharedStore.field or #stable-id\",\"from\":\"old meaning/type\",\"to\":\"new meaning/type\",\"description\":\"concrete change\"}]}.",
-  "",
-  "Rules:",
-  "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
-  "- ESTABLISHED APP CONTRACT is shell-owned canonical technical state. It is null only before the first plan.",
-  "- When ESTABLISHED APP CONTRACT is non-null, preserve its shared.ref, shared.state, shared.stores, shared.stableDomIds, and shared.semantics exactly unless the current technical intent genuinely requires changing them.",
-  "- shared.design may evolve without a contract change. Any change to canonical shared fields requires non-null contractChange with a concrete reason, affected task scopes, and machine-readable change entries that cover every changed category.",
-  "- When ESTABLISHED APP CONTRACT is null, create the initial shared contract and leave contractChange null/omitted. The shell owns revision numbers.",
-  "- Do not introduce compatibility aliases, duplicate old/new fields, or migrations merely to preserve obsolete beta internals. If a contract change is genuinely required, make one explicit coherent change.",
-  "- shared.state names stable shared application.store fields with their meaning/type. Reuse those exact field names in later modifications and repairs.",
-  "- shared.stores lists only application.store namespaces intentionally shared across worker scopes; omit ordinary local state from it.",
-  "- shared.stableDomIds contains stable id values without #. Preserve existing ids and add/remove them only through an explicit contract change.",
-  "- shared.semantics records compact cross-worker meanings that must stay stable, for example units or enum meanings.",
-  "- application.store values are JSON-like only: null, booleans, finite numbers, strings, arrays, and plain objects. Never design a shared contract that relies on undefined, functions, class instances, or circular references.",
-  "- Use one ordered task for a truly atomic change; use 2+ tasks when distinct components/work units exist.",
-  "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
-  "- Reuse an existing stable component id from ESTABLISHED APP CONTRACT or APP OUTLINE when it owns the work; otherwise choose a new stable id and declare a contract change when a contract already exists.",
-  "- Local DOM/store names are derived deterministically from each scope by the orchestrator and supplied to workers; do not spend manager output on local prefixes/namespaces.",
-  "- When alivePolicy targetIds refer to new worker-created elements, use ids compatible with the owning scope prefix (<scope-id>-...). If the exact id is not known, omit targetIds and use exact targetHints instead of inventing an unrelated id.",
-  "- Cross-scope state sharing belongs only in shared.stores.",
-  "- Dependencies may reference only earlier task ids.",
-  "- shared.ref is the persistent contract reference. Every task must repeat that exact value in sharedContractRef.",
-  "- Set parallel=true only when the task can safely overlap other dependency-ready tasks on a different scope.",
-  "- Use parallel=false for manager-ordered/shared-state-sensitive work.",
-  "- Worker budget overrides may only tighten maxDurationMs/maxCostUsd; profile defaults remain the ceiling.",
-  "- component-worker is the default. Use repair-worker when the task is primarily diagnosis/repair; repairs should preserve the established contract unless changing it is unavoidable.",
-  "- A ROUTING HINT is advisory bounded classification, not technical intent. If preferredWorkerProfile=repair-worker and the task is genuinely diagnosis/repair, prefer repair-worker; never distort the task merely to match the hint.",
-  "- PORTABLE SHELL PREFERENCES are user-controlled cross-app hints. Apply them only when compatible with the explicit technical intent, app purpose, accessibility, and existing app behavior. Never infer additional user traits.",
-  "- capabilityIds may contain only platform capability ids relevant to that worker.",
-  "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
-  "- The manager owns decomposition, the canonical shared contract, ordering and final integration verification.",
-  "- alivePolicy is declarative app-specific context, never executable code and never permission for silent mutation.",
-  "- Use stable ids/exact semantic target hints for app-specific meaningful/repeatable interactions; do not encode generic shell heuristics.",
-  "- safeReactions must describe only reversible suggestions/highlights/existing actions. User confirmation and shell invariants remain authoritative.",
-  "- Preserve or refine CURRENT ALIVE POLICY when it still matches the resulting app; update it when structural/semantic targets change."
-].join("\n");
-
-const WORKER_SYSTEM = [
-  "You are an element-scoped implementation worker in a live browser app.",
-  "",
-  "OUTPUT",
-  "Return exactly one complete executable JavaScript program for this turn. Raw JavaScript is preferred; one JavaScript code fence around the whole response is also accepted. Do not add prose or multiple code blocks.",
-  "The shell validates the complete response before executing it exactly once. No partial response is executed while generation is still streaming. If runtime feedback is needed before deciding the next change, use this turn to inspect and use the returned value/console output/error on the next turn.",
-  "Call agent.done(...) only after your assigned scope works. agent.done accepts only an optional string. For the required structured worker handoff, always call return agent.done(JSON.stringify({...handoff...})). Never pass an object directly.",
-  "",
-  "SCOPE",
-  "A variable named component is bound to your assigned Element for every command.",
-  "Modify component and its descendants only. Native DOM/browser APIs are available, but do not change unrelated nodes, #itsalive-root, or another worker scope.",
-  "This is a beta convention rather than a security boundary, so follow it strictly.",
-  "Inspect through component when possible. If a dependency outside the scope is missing, report it instead of silently expanding scope.",
-  "",
-  "NAMING AND STATE",
-  "Use the supplied DOM ID PREFIX for every new id you create inside this scope. Use ordinary native DOM APIs such as getElementById/querySelector; do not invent a ref helper.",
-  "Keep state owned by this scope under application.store.<STORE NAMESPACE>. Initialize missing state with normal JavaScript such as ??=.",
-  "Use a namespace listed under SHARED STORE NAMESPACES only when the task genuinely needs that intentionally shared state. Do not invent or write other workers' namespaces.",
-  "",
-  "DURABILITY",
-  "Use durable app-authored markup/setup/state. Do not leave behavior dependent on transient command listeners/closures. Keep setup idempotent.",
-  "For interactive behavior, persist the setup in app-authored markup such as a stable inline <script> element owned by this component (replace the prior setup script idempotently) or another serializable browser-native mechanism. Direct addEventListener calls made only by the transient agent command do not survive document restoration and will fail completion verification.",
-  "Do not verify behavior by inserting, selecting, deleting, or otherwise mutating fake records in the live application/store. Use current real state plus read-only DOM/state inspection. If a criterion genuinely requires synthetic state to prove, report it as unresolved instead of exposing probe data to the user.",
-  "",
-  "BUILD STATE",
-  "The shell owns data-itsalive-building, data-itsalive-build-state, data-itsalive-build-owner, and aria-busy on the assigned component root.",
-  "These attributes communicate progress; they do not disable the component. Do not remove or rewrite them. Because each model turn executes atomically, leave any visible controls in a usable state at the end of each turn whenever practical.",
-  "",
-  "HANDOFF",
-  "On success, build this handoff object and serialize it as the string argument to agent.done:",
-  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\",\"read-only evidence only\"],\"unresolved\":[],\"sharedContractChanges\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"machine-readable path\",\"description\":\"what changed\",\"from\":\"optional old value\",\"to\":\"optional new value\"}],\"requestedScope\":\"#broader-scope-or-empty\"}",
-  "Required form: return agent.done(JSON.stringify(handoff)); Do not call agent.done(handoff).",
-  "Report sharedContractChanges only when the manager declared a contractChange and this worker actually applied part of it; otherwise return an empty array.",
-  "If the task needs ownership outside ASSIGNED SCOPE, do not edit there. Return status=blocked with requestedScope and explain the dependency in unresolved.",
-  "Keep it compact."
-].join("\n");
-
-const MANAGER_VERIFY_SYSTEM = [
-  "You are the coding manager performing final integration verification.",
-  "Return JSON only:",
-  "{\"ok\":boolean,\"summary\":\"short user-safe summary\",\"unresolved\":[\"specific unmet integration or acceptance criterion\"]}",
-  "",
-  "Judge from the technical intent, shared contracts, worker handoffs, compact final app outline, and deterministic CURRENT SCOPE EVIDENCE.",
-  "Worker handoff status is diagnostic history, not authoritative truth about the current app. When a handoff says blocked/failed but current deterministic evidence shows the scope exists, has meaningful UI, is not building, and has no runtime-only interaction wiring, evaluate the current evidence instead of repeating the stale handoff label.",
-  "Never claim a component is absent or unbuilt when CURRENT SCOPE EVIDENCE says it exists and has meaningful UI.",
-  "Do not request worker transcripts.",
-  "The summary is shown to the user. Use ordinary product language and never mention workers, handoffs, regions, or verification.",
-  "Mark ok=false when an acceptance criterion is not supported by the evidence or a component remains missing/building."
-].join("\n");
-
 const SIMPLE_SCOPE = /^#[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const TASK_ID = /^[A-Za-z][A-Za-z0-9_-]{0,63}$/;
 const STORE_NAMESPACE = /^[A-Za-z_$][A-Za-z0-9_$]{0,63}$/;
@@ -303,7 +211,7 @@ export class CodingOrchestrator {
       const planned = await this.providers.generate({
         purpose: "coding manager plan",
         model: options.managerProfile.modelConfig,
-        system: MANAGER_PLAN_SYSTEM,
+        system: CODING_MANAGER_PLAN_PROMPT,
         messages: [{ role: "user", content: managerPlanInput(options, initialOutline) }],
         trace: options.managerTrace,
         signal: controller.signal,
@@ -480,7 +388,7 @@ export class CodingOrchestrator {
       const verified = await this.providers.generate({
         purpose: "coding manager integration verification",
         model: options.managerProfile.modelConfig,
-        system: MANAGER_VERIFY_SYSTEM,
+        system: CODING_MANAGER_VERIFY_PROMPT,
         messages: [{
           role: "user",
           content: managerVerificationInput(options, plan, handoffs, finalOutline, verificationEvidence),
@@ -574,7 +482,7 @@ export class CodingOrchestrator {
         trigger: workerTaskInput(plan, task, dependencyHandoffs),
         persistTrigger: false,
         model: profile.modelConfig,
-        systemPrompt: WORKER_SYSTEM,
+        systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
         history: isolatedHistory,
         scopeSelector: task.scope,
         includeRawCompletionMessage: true,

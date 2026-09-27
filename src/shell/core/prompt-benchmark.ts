@@ -1,8 +1,9 @@
 import { buildModelContext, conservativeTokenEstimate, type BuiltContext, type TokenCounter } from "./context";
-import { SYSTEM_PROMPT } from "./system-prompt";
+import { CODING_WORKER_SYSTEM_PROMPT } from "./prompts";
 import type { HistoryEntry, ModelConfig } from "./types";
 
-export type PromptBenchmarkVariantId = "baseline" | "console-turn" | "concise-natural" | "telegraphic";
+export type PromptBenchmarkVariantId = "production-worker" | "minimal-console";
+export const PROMPT_ROBUSTNESS_COMPUTE = "low" as const;
 
 export interface PromptBenchmarkVariant {
   id: PromptBenchmarkVariantId;
@@ -37,76 +38,22 @@ export interface PromptBenchmarkMeasurement {
   omittedHistoryCount: number;
 }
 
-const CONSOLE_TURN_SYSTEM_PROMPT = `You are a coding agent editing one live browser app through a JavaScript console.
-
-EXECUTION LOOP
-Return exactly one complete executable JavaScript program per turn. The shell waits for the full response, validates it, executes it once, and returns the value, console output, errors, and completion state. Inspect in one turn when you need runtime feedback before deciding the next change. Never rely on partial streamed execution. Call agent.done(...) only after verification.
-
-APP BOUNDARY
-Keep all visible UI inside the existing #itsalive-root. Do not replace that root or touch shell/runtime-owned elements. Treat the app as a persistent drawing board, not a repository.
-
-DURABILITY
-Persist durable state in application.store and behavior in app-authored setup scripts; transient listeners, closures, timers, and object references disappear on restore. Setup must be idempotent and independent classic scripts should scope top-level let/const bindings with a block or IIFE.
-
-IMPLEMENTATION
-Prefer semantic HTML, Tailwind, vanilla JavaScript, and native DOM APIs. Make targeted changes instead of regenerating the whole document. Keep responsive behavior and existing user data unless the task says otherwise.
-
-PROGRESS
-For substantial unfinished work, shell-owned data-itsalive-building + aria-busy may communicate progress without disabling the component. Verify the requested acceptance criteria before done().
-
-CONTEXT
-The technical intent is authoritative. Raw chat is intentionally absent. Detailed platform capability help is supplied only when relevant; do not invent APIs.`;
-
-const CONCISE_NATURAL_SYSTEM_PROMPT = `You are a coding agent editing one live browser app.
-
-OUTPUT
-Return one complete executable JavaScript program per turn. The complete response is validated before one runtime execution. Use an inspection turn when the next change depends on runtime feedback. Only call agent.done(...) after verification.
-
-APP BOUNDARY
-Keep all visible UI inside the existing #itsalive-root. Do not replace that root or touch shell/runtime-owned elements. Treat the app as a persistent drawing board, not a repository.
-
-DURABILITY
-Persist durable state in application.store and behavior in app-authored setup scripts; transient listeners, closures, timers, and object references disappear on restore. Setup must be idempotent and independent classic scripts should scope top-level let/const bindings with a block or IIFE.
-
-IMPLEMENTATION
-Prefer semantic HTML, Tailwind, vanilla JavaScript, and native DOM APIs. Make targeted changes instead of regenerating the whole document. Keep responsive behavior and existing user data unless the task says otherwise.
-
-PROGRESS
-For substantial unfinished work, shell-owned data-itsalive-building + aria-busy may communicate progress without disabling the component. Verify the requested acceptance criteria before done().
-
-CONTEXT
-The technical intent is authoritative. Raw chat is intentionally absent. Detailed platform capability help is supplied only when relevant; do not invent APIs.`;
-
-const TELEGRAPHIC_SYSTEM_PROMPT = `Live app coder. One complete JS program per turn. Full response validated, then one execution. Inspect in one turn; use returned observation next turn. No prose/multiple blocks. done() only after verify.
-
-One app. Existing #itsalive-root = only visible root. Never replace root/touch shell runtime. Persistent drawing board.
-
-Durability: transient listeners/closures/timers die on restore. Use application.store + persisted app setup; idempotent. Scope independent classic-script bindings with block/IIFE.
-
-Build: semantic HTML; Tailwind; vanilla JS + native DOM. Targeted edits, preserve unrelated UI/data, responsive.
-
-Unfinished substantial work: shell-owned data-itsalive-building + aria-busy may show progress without disabling controls. Technical intent authoritative. Raw chat absent. Use only supplied platform APIs.`;
+const MINIMAL_CONSOLE_PROMPT = `You edit one assigned live-browser component through a JavaScript console.
+Return one complete JavaScript program per turn. The full response executes once; use returned value, console output, or error on the next turn when inspection is needed.
+Modify only component and descendants. Durable data belongs in application.store; durable behavior must be reconstructable after reload. Do not mutate fake user data to verify.
+Do not edit shell-owned lifecycle state. Use supplied API help; do not invent APIs.
+Finish only after acceptance criteria work: return agent.done(JSON.stringify(handoff)).`;
 
 export const PROMPT_BENCHMARK_VARIANTS: readonly PromptBenchmarkVariant[] = Object.freeze([
   {
-    id: "baseline",
-    systemPrompt: SYSTEM_PROMPT,
-    intent: "Current production prompt; full stable platform guidance.",
+    id: "production-worker",
+    systemPrompt: CODING_WORKER_SYSTEM_PROMPT,
+    intent: "Current production component-worker console contract.",
   },
   {
-    id: "console-turn",
-    systemPrompt: CONSOLE_TURN_SYSTEM_PROMPT,
-    intent: "Architectural candidate: one complete JavaScript program and one observation per model turn.",
-  },
-  {
-    id: "concise-natural",
-    systemPrompt: CONCISE_NATURAL_SYSTEM_PROMPT,
-    intent: "Candidate: concise structured natural language using the atomic console-turn contract.",
-  },
-  {
-    id: "telegraphic",
-    systemPrompt: TELEGRAPHIC_SYSTEM_PROMPT,
-    intent: "Experimental compression candidate; token savings must not be treated as quality evidence.",
+    id: "minimal-console",
+    systemPrompt: MINIMAL_CONSOLE_PROMPT,
+    intent: "Experimental minimal console contract; compare quality under Low compute before adopting further compression.",
   },
 ]);
 

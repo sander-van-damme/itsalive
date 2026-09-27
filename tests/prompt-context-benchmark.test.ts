@@ -3,8 +3,10 @@ import { AGENT_CONTEXT_CONTRACTS, compactWorkerHandoff } from "../src/shell/core
 import {
   PROMPT_BENCHMARK_SCENARIOS,
   PROMPT_BENCHMARK_VARIANTS,
+  PROMPT_ROBUSTNESS_COMPUTE,
   measurePromptBenchmarkMatrix,
 } from "../src/shell/core/prompt-benchmark";
+import { agentProfile } from "../src/shell/core/agent-profiles";
 
 describe("agent prompt/context benchmark contract", () => {
   it("covers the five required benchmark scenarios", () => {
@@ -17,35 +19,23 @@ describe("agent prompt/context benchmark contract", () => {
     ]);
   });
 
-  it("compares production and console-turn prompt candidates on identical scenarios", () => {
+  it("compares the production worker contract with one minimal console candidate on identical scenarios", () => {
     expect(PROMPT_BENCHMARK_VARIANTS.map(variant => variant.id)).toEqual([
-      "baseline",
-      "console-turn",
-      "concise-natural",
-      "telegraphic",
+      "production-worker",
+      "minimal-console",
     ]);
 
     const matrix = measurePromptBenchmarkMatrix(value => value.length);
-    expect(matrix).toHaveLength(PROMPT_BENCHMARK_SCENARIOS.length * PROMPT_BENCHMARK_VARIANTS.length);
+    expect(matrix).toHaveLength(PROMPT_BENCHMARK_SCENARIOS.length * 2);
 
     for (const scenario of PROMPT_BENCHMARK_SCENARIOS) {
       const rows = matrix.filter(row => row.scenario === scenario.id);
-      const baseline = rows.find(row => row.variant === "baseline")!;
-      const consoleTurn = rows.find(row => row.variant === "console-turn")!;
-      const concise = rows.find(row => row.variant === "concise-natural")!;
-      const telegraphic = rows.find(row => row.variant === "telegraphic")!;
+      const production = rows.find(row => row.variant === "production-worker")!;
+      const minimal = rows.find(row => row.variant === "minimal-console")!;
 
-      // Only the stable system wording changes in this matrix; task context stays identical.
-      expect(baseline.mandatoryTokens).toBe(consoleTurn.mandatoryTokens);
-      expect(consoleTurn.mandatoryTokens).toBe(concise.mandatoryTokens);
-      expect(concise.mandatoryTokens).toBe(telegraphic.mandatoryTokens);
-      expect(baseline.historyTokens).toBe(consoleTurn.historyTokens);
-      expect(consoleTurn.historyTokens).toBe(concise.historyTokens);
-      expect(concise.historyTokens).toBe(telegraphic.historyTokens);
-
-      expect(consoleTurn.systemTokens).toBeLessThan(baseline.systemTokens);
-      expect(concise.systemTokens).toBeLessThan(consoleTurn.systemTokens);
-      expect(telegraphic.systemTokens).toBeLessThan(concise.systemTokens);
+      expect(production.mandatoryTokens).toBe(minimal.mandatoryTokens);
+      expect(production.historyTokens).toBe(minimal.historyTokens);
+      expect(minimal.systemTokens).toBeLessThan(production.systemTokens);
 
       for (const row of rows) {
         expect(row.estimatedInputTokens).toBe(
@@ -60,21 +50,22 @@ describe("agent prompt/context benchmark contract", () => {
     }
   });
 
-  it("includes an explicit console-turn architecture without streamed command delimiters", () => {
-    const consoleTurn = PROMPT_BENCHMARK_VARIANTS.find(variant => variant.id === "console-turn")!;
-    expect(consoleTurn.intent).toMatch(/one complete JavaScript program/i);
-    expect(consoleTurn.systemPrompt).toContain("executes it once");
-    expect(consoleTurn.systemPrompt).toContain("console output");
+  it("benchmarks the same atomic console architecture rather than the removed streamed protocol", () => {
+    const production = PROMPT_BENCHMARK_VARIANTS.find(variant => variant.id === "production-worker")!;
+    const minimal = PROMPT_BENCHMARK_VARIANTS.find(variant => variant.id === "minimal-console")!;
+    expect(production.systemPrompt).toContain("JavaScript console");
+    expect(production.systemPrompt).toContain("executes it once");
+    expect(minimal.systemPrompt).toContain("JavaScript console");
+    expect(minimal.systemPrompt).toContain("full response executes once");
     for (const variant of PROMPT_BENCHMARK_VARIANTS) {
       expect(variant.systemPrompt).not.toContain("/* itsalive:command */");
       expect(variant.systemPrompt).not.toContain("/* itsalive:end */");
     }
   });
 
-  it("keeps telegraphic wording experimental rather than a production recommendation", () => {
-    const telegraphic = PROMPT_BENCHMARK_VARIANTS.find(variant => variant.id === "telegraphic")!;
-    expect(telegraphic.intent).toMatch(/Experimental compression candidate/);
-    expect(telegraphic.intent).toMatch(/must not be treated as quality evidence/);
+  it("uses Low compute as the explicit robustness probe for component workers", () => {
+    expect(PROMPT_ROBUSTNESS_COMPUTE).toBe("low");
+    expect(agentProfile("component-worker").compute).toBe("low");
   });
 
   it("defines role-specific context boundaries before orchestration exists", () => {
@@ -88,7 +79,7 @@ describe("agent prompt/context benchmark contract", () => {
 
     const worker = AGENT_CONTEXT_CONTRACTS["component-worker"];
     expect(worker.dynamic).toContain("Assigned component/scope.");
-    expect(worker.justInTime).toContain("Selected capability help needed by this task.");
+    expect(worker.justInTime).toContain("Selected platform API help.");
     expect(worker.neverRepeat).toContain("Raw user conversation.");
     expect(worker.neverRepeat).toContain("Whole-app HTML by default.");
 

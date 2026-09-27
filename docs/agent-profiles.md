@@ -25,7 +25,7 @@ These are testable hypotheses, not permanent policy:
 
 All currently use `openrouter/auto`. The important change is that this is centralized; later experiments can move one role without editing orchestration code.
 
-## Prompt and capability policy
+## Prompt and API-documentation policy
 
 Every profile declares a stable `promptId` and API-documentation exposure policy.
 
@@ -33,7 +33,7 @@ Every profile declares a stable `promptId` and API-documentation exposure policy
 - `selected`: inject detailed help only for selected API groups.
 - `none`: do not inject platform API documentation.
 
-The actual manager/worker prompts are introduced with the orchestration issues; profile IDs already give them a stable lookup key.
+Role-owned prompts live under `src/shell/core/prompts/`. The user-intent and coding-manager profiles receive the compact API index; component/repair workers receive only selected detailed API help. The component and repair profiles share the same console-execution prompt identity because the task/profile context, not duplicated system prose, distinguishes repair work.
 
 ## Budgets
 
