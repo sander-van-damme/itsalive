@@ -1,43 +1,33 @@
 import { describe, expect, it } from "vitest";
 import { buildModelContext, conservativeTokenEstimate } from "../src/shell/core/context";
-import { SYSTEM_PROMPT } from "../src/shell/core/system-prompt";
 
 const model = { provider: "test", model: "test", maxContextTokens: 8_000, outputHeadroomTokens: 200, historyContextTokens: 1_000 };
+const TEST_SYSTEM_PROMPT = "You are the explicit test-role coding prompt.";
 
 describe("shell context builder", () => {
-  it("teaches only the application and coding-agent APIs", () => {
-    for (const current of ["agent.done", "agent.screenshot", "application.store", "application.ai.text", "application.ai.choose", "application.ai.score", "application.ai.decide", "application.ai.probability", "application.escalate"]) {
-      expect(SYSTEM_PROMPT).toContain(current);
-    }
-    expect(SYSTEM_PROMPT).not.toContain("itsalive.done");
-    expect(SYSTEM_PROMPT).not.toContain("itsalive.history");
-    expect(SYSTEM_PROMPT).not.toContain("itsalive.logs");
-    expect(SYSTEM_PROMPT).not.toContain("itsalive.components");
-    expect(SYSTEM_PROMPT).toContain("native browser IndexedDB");
-    expect(SYSTEM_PROMPT).toContain("own browser origin");
+  it("uses the explicit role-owned system prompt supplied by the caller", () => {
+    const result = buildModelContext({
+      systemPrompt: TEST_SYSTEM_PROMPT,
+      model,
+      appPrompt: "A violin coach",
+      trigger: "Help me",
+      history: [],
+    });
+    expect(result.system).toBe(TEST_SYSTEM_PROMPT);
   });
 
-  it("defines an atomic console-turn drawing-board contract", () => {
-    expect(SYSTEM_PROMPT).toContain("exactly one complete executable JavaScript program per model turn");
-    expect(SYSTEM_PROMPT).toContain("waits for the complete model response");
-    expect(SYSTEM_PROMPT).toContain("executes it exactly once");
-    expect(SYSTEM_PROMPT).toContain("No partial response is executed");
-    expect(SYSTEM_PROMPT).toContain("captured console output");
-    expect(SYSTEM_PROMPT).not.toContain("/* itsalive:command */");
-    expect(SYSTEM_PROMPT).not.toContain("/* itsalive:end */");
-    expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
-    expect(SYSTEM_PROMPT).toContain("Tailwind CSS as the default styling language");
-    expect(SYSTEM_PROMPT).toContain("ordinary browser JavaScript for behavior");
-    expect(SYSTEM_PROMPT).toContain("Custom Elements are optional, not required");
-    expect(SYSTEM_PROMPT).toContain("Classic <script> elements share a global lexical environment");
-    expect(SYSTEM_PROMPT).not.toContain("Alpine");
-    expect(SYSTEM_PROMPT).toContain("Chart, d3, THREE");
-    expect(SYSTEM_PROMPT).toMatch(/Apps must be responsive/);
-    expect(SYSTEM_PROMPT).toMatch(/one column on narrow\/mobile layouts/);
+  it("rejects an empty role prompt instead of falling back to generic coding guidance", () => {
+    expect(() => buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT,
+      systemPrompt: "   ",
+      model,
+      appPrompt: "A violin coach",
+      trigger: "Help me",
+      history: [],
+    })).toThrow(/role-owned system prompt is required/);
   });
 
   it("includes behavioral evidence only when it was selected for the current task", () => {
-    const result = buildModelContext({
+    const result = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT,
       model,
       appPrompt: "A violin coach",
       behaviorSummary: "Old mandatory summary that should no longer be injected.",
@@ -56,8 +46,8 @@ describe("shell context builder", () => {
   });
 
   it("always includes immutable app context and the current technical intent", () => {
-    const result = buildModelContext({ model, appPrompt: "A violin coach", trigger: "Help me", history: [] });
-    expect(result.system).toBe(SYSTEM_PROMPT);
+    const result = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT, model, appPrompt: "A violin coach", trigger: "Help me", history: [] });
+    expect(result.system).toBe(TEST_SYSTEM_PROMPT);
     expect(result.messages.at(-1)?.content).toContain("A violin coach");
     expect(result.messages.at(-1)?.content).toContain("Help me");
   });
@@ -70,7 +60,7 @@ describe("shell context builder", () => {
       { id: 2, appId: "app", timestamp: 2, role: "agent" as const, kind: "javascript" as const, content: "return 1;" },
       { id: 3, appId: "app", timestamp: 3, role: "observation" as const, kind: "error" as const, content: observation },
     ];
-    const result = buildModelContext({ model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger, observation, history });
+    const result = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT, model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger, observation, history });
     const joined = result.messages.map(message => message.content).join("\n");
 
     expect(joined.split(trigger)).toHaveLength(2);
@@ -80,9 +70,9 @@ describe("shell context builder", () => {
   });
 
   it("keeps newest fitting technical history rather than a fixed message count", () => {
-    const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(SYSTEM_PROMPT) + 440, outputHeadroomTokens: 100, observationHeadroomTokens: 100 };
+    const tinyModel = { ...model, maxContextTokens: conservativeTokenEstimate(TEST_SYSTEM_PROMPT) + 440, outputHeadroomTokens: 100, observationHeadroomTokens: 100 };
     const history = Array.from({ length: 20 }, (_, index) => ({ id: index, appId: "550e8400-e29b-41d4-a716-446655440006", timestamp: index, role: "agent" as const, kind: "javascript" as const, content: `command-${index} ${"x".repeat(80)}` }));
-    const result = buildModelContext({ model: tinyModel, appPrompt: "coach", trigger: "go", history });
+    const result = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT, model: tinyModel, appPrompt: "coach", trigger: "go", history });
     expect(result.omittedHistoryCount).toBeGreaterThan(0);
     expect(result.includedHistoryIds).toContain(19);
     expect(result.includedHistoryIds).not.toContain(0);
@@ -97,14 +87,14 @@ describe("shell context builder", () => {
       kind: "javascript" as const,
       content: `command-${index} ${"x".repeat(80)}`,
     }));
-    const small = buildModelContext({
+    const small = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT,
       model: { ...model, maxContextTokens: 128_000, historyContextTokens: 220 },
       appPrompt: "coach",
       trigger: "follow-up",
       history,
       countTokens: value => value.length,
     });
-    const large = buildModelContext({
+    const large = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT,
       model: { ...model, maxContextTokens: 128_000, historyContextTokens: 660 },
       appPrompt: "coach",
       trigger: "follow-up",
@@ -127,7 +117,7 @@ describe("shell context builder", () => {
       { id: 3, appId: "app", timestamp: 3, role: "agent" as const, kind: "javascript" as const, content: "return document.body;" },
       { id: 4, appId: "app", timestamp: 4, role: "observation" as const, kind: "error" as const, content: "ReferenceError: missing state" },
     ];
-    const result = buildModelContext({ model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger: "TECHNICAL INTENT\nFix the missing state", history });
+    const result = buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT, model: { ...model, maxContextTokens: 12_000 }, appPrompt: "coach", trigger: "TECHNICAL INTENT\nFix the missing state", history });
     const joined = result.messages.map(message => message.content).join("\n");
     expect(joined).not.toContain("I thought the page was loaded already.");
     expect(joined).not.toContain("Thanks for explaining.");
@@ -138,6 +128,6 @@ describe("shell context builder", () => {
   });
 
   it("rejects mandatory context that cannot fit rather than truncating system prompt", () => {
-    expect(() => buildModelContext({ model: { ...model, maxContextTokens: 50 }, appPrompt: "app", trigger: "go", history: [] })).toThrow(/Mandatory context/);
+    expect(() => buildModelContext({ systemPrompt: TEST_SYSTEM_PROMPT, model: { ...model, maxContextTokens: 50 }, appPrompt: "app", trigger: "go", history: [] })).toThrow(/Mandatory context/);
   });
 });
