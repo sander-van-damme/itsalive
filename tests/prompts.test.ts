@@ -37,7 +37,8 @@ describe("role-owned agent prompts", () => {
     expect(CODING_MANAGER_PLAN_PROMPT).toContain("Plan implementation and coordination");
     expect(CODING_MANAGER_PLAN_PROMPT).toContain("Do not write DOM mutation code");
     expect(CODING_MANAGER_PLAN_PROMPT).toContain("ESTABLISHED APP CONTRACT");
-    expect(CODING_MANAGER_PLAN_PROMPT).toContain("canonical shared contract");
+    expect(CODING_MANAGER_PLAN_PROMPT).toContain("ESTABLISHED APP CONTRACT");
+    expect(CODING_MANAGER_PLAN_PROMPT).toContain("Preserve it unless");
     expect(CODING_MANAGER_PLAN_PROMPT).toContain("component-worker");
     expect(CODING_MANAGER_PLAN_PROMPT).toContain("repair-worker");
     expect(CODING_MANAGER_PLAN_PROMPT).not.toContain("return agent.done");
