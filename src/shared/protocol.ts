@@ -56,6 +56,12 @@ export type LogLevel = "debug" | "info" | "warn" | "error";
 export type RuntimeStatus = "ready";
 
 export interface LogRecord { timestamp: number; level: LogLevel; source: string; message: string; details?: unknown; }
+
+export type ExecutionConsoleLevel = "debug" | "log" | "info" | "warn" | "error";
+export interface ExecutionConsoleEntry {
+  level: ExecutionConsoleLevel;
+  args: unknown[];
+}
 export interface InteractionTarget { tag: string; id?: string; value?: string; state?: Record<string, string | boolean>; }
 export interface InteractionSnapshot { seq: number; at: string; type: string; target: InteractionTarget; actualTarget: InteractionTarget; key?: string; }
 export interface InteractionPatternSample {
@@ -92,10 +98,10 @@ export type ShellToAppPayload =
   | { type: "jev.response"; probability: number; escalated: boolean; error?: SerializedError };
 
 export type AppToShellPayload =
-  | { type: "result"; result?: unknown; done?: boolean; message?: string }
+  | { type: "result"; result?: unknown; done?: boolean; message?: string; logs?: ExecutionConsoleEntry[] }
   | { type: "document.request" }
   | { type: "document.save"; document: AppDocumentSnapshot }
-  | { type: "execution.error"; error: SerializedError }
+  | { type: "execution.error"; error: SerializedError; logs?: ExecutionConsoleEntry[] }
   | { type: "wake"; reason?: string }
   | { type: "llm.request"; prompt: string }
   | { type: "ai.decision.request"; decision: ApplicationAiDecisionRequest }
@@ -246,7 +252,13 @@ export function isBridgeMessage(value: unknown): value is BridgeMessage {
       && (value.error === undefined || isSerializedError(value.error));
     case "jev.request": return isInteractionObservation(value.state);
     case "jev.response": return typeof value.probability === "number" && value.probability >= 0 && value.probability <= 1 && typeof value.escalated === "boolean" && (value.error === undefined || isSerializedError(value.error));
-    case "execution.error": return isSerializedError(value.error);
+    case "result": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId", "result", "done", "message", "logs"])
+      && (value.done === undefined || typeof value.done === "boolean")
+      && (value.message === undefined || typeof value.message === "string")
+      && (value.logs === undefined || isExecutionConsoleEntries(value.logs));
+    case "execution.error": return hasOnly(value, ["protocol", "version", "type", "appId", "requestId", "error", "logs"])
+      && isSerializedError(value.error)
+      && (value.logs === undefined || isExecutionConsoleEntries(value.logs));
     case "log": return isLogRecord(value.record);
     case "status": return value.status === "ready";
     default: return true;
@@ -285,6 +297,16 @@ export const isAppToShellMessage = (value: unknown): value is BridgeMessage<AppT
 
 export function isSerializedError(value: unknown): value is SerializedError {
   return isObject(value) && typeof value.name === "string" && typeof value.message === "string" && (value.stack === undefined || typeof value.stack === "string");
+}
+
+function isExecutionConsoleEntries(value: unknown): value is ExecutionConsoleEntry[] {
+  return Array.isArray(value) && value.length <= 100 && value.every(entry =>
+    isObject(entry)
+    && hasOnly(entry, ["level", "args"])
+    && ["debug", "log", "info", "warn", "error"].includes(String(entry.level))
+    && Array.isArray(entry.args)
+    && entry.args.length <= 20
+  );
 }
 
 export function isLogRecord(value: unknown): value is LogRecord {
