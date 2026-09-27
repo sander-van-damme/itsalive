@@ -10,13 +10,22 @@ import type { ProviderRegistry } from "./providers";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
 import { createAgentTimeout } from "./run-lifecycle";
 import { createLlmTraceIdentity } from "./llm-trace";
+import {
+  contractChangeCoversDiff,
+  normalizeAppTechnicalContract,
+  sharedContractDiff,
+  sharedContractsEqual,
+  technicalContractForPlan,
+  type AppSharedContract,
+  type AppTechnicalContract,
+  type CodingContractChange,
+  type SharedContractChange,
+  type SharedContractChangeKind,
+} from "./app-contract";
 import type { Credential, LlmTraceIdentity } from "./types";
 
-export interface CodingManagerSharedContracts {
-  ref: string;
+export interface CodingManagerSharedContracts extends AppSharedContract {
   design: string[];
-  state: string[];
-  stores: string[];
 }
 
 export interface WorkerBudgetOverride {
@@ -42,6 +51,7 @@ export interface CodingWorkerTask {
 export interface CodingManagerPlan {
   shared: CodingManagerSharedContracts;
   tasks: CodingWorkerTask[];
+  contractChange?: CodingContractChange;
   alivePolicy?: AlivePolicyProposal;
 }
 
@@ -126,11 +136,15 @@ export interface CodingOrchestratorOptions {
   contextRelevanceAssessor?: ContextRelevanceAssessor;
   /** Current shell-owned app policy supplied to the manager for controlled revision. */
   alivePolicy?: AlivePolicy;
+  /** Canonical shared state/store contract already established for this live app. */
+  technicalContract?: AppTechnicalContract;
   /** Bounded JEV routing hint. The manager still owns decomposition and final worker choice. */
   preferredWorkerProfile?: "component-worker" | "repair-worker";
   triggerRoute?: string;
   /** User-controlled compact cross-app preferences. Never raw behavior/history. */
   portablePreferences?: Array<{ id: string; label: string; context: string }>;
+  /** Persists an initial or explicitly revised technical contract before workers run. */
+  onTechnicalContractProposal?: (contract: AppTechnicalContract, change?: CodingContractChange) => Promise<void>;
   /** Called only after successful integration verification. */
   onAlivePolicyProposal?: (proposal: AlivePolicyProposal) => Promise<void>;
 }
@@ -149,29 +163,38 @@ const MANAGER_PLAN_SYSTEM = [
   "Plan implementation; do not write DOM mutation code.",
   "",
   "Return JSON only:",
-  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"...\"],\"stores\":[\"sharedStore\"]},\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
+  "{\"shared\":{\"ref\":\"shared-v1\",\"design\":[\"...\"],\"state\":[\"application.store.sharedStore.movies: array of movie records\"],\"stores\":[\"sharedStore\"],\"stableDomIds\":[\"movie-night-app\",\"movie-shortlist\"],\"semantics\":[\"durationMin is an integer number of minutes\"]},\"contractChange\":null,\"alivePolicy\":{\"meaningfulEvents\":[{\"id\":\"event-id\",\"description\":\"...\",\"match\":{\"interactionTypes\":[\"click\"],\"targetIds\":[\"stable-id\"],\"targetHints\":[\"Exact accessible label\"]}}],\"repeatableInteractions\":[],\"successSignals\":[\"...\"],\"safeReactions\":[{\"id\":\"reaction-id\",\"label\":\"...\",\"kind\":\"suggest|highlight|offer-existing-action\"}],\"invariants\":[\"...\"],\"clarificationSignals\":[\"...\"],\"agentSignals\":[\"...\"],\"retainEvidence\":[\"...\"]},\"tasks\":[{\"id\":\"short-id\",\"goal\":\"...\",\"scope\":\"#component-id\",\"acceptanceCriteria\":[\"...\"],\"dependencies\":[\"earlier-task-id\"],\"capabilityIds\":[\"valid-id\"],\"profile\":\"component-worker|repair-worker\",\"sharedContractRef\":\"shared-v1\",\"parallel\":true,\"budget\":{\"maxDurationMs\":120000,\"maxCostUsd\":null}}]}",
+  "When changing an established app contract, replace contractChange=null with: {\"reason\":\"why this is necessary\",\"affectedScopes\":[\"#component-id\"],\"changes\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"application.store.sharedStore.field or #stable-id\",\"from\":\"old meaning/type\",\"to\":\"new meaning/type\",\"description\":\"concrete change\"}]}.",
   "",
   "Rules:",
   "- Use the supplied TECHNICAL INTENT as authoritative. Raw chat is intentionally absent.",
-  "- Shared design/state contracts are written once here, then referenced by workers.",
+  "- ESTABLISHED APP CONTRACT is shell-owned canonical technical state. It is null only before the first plan.",
+  "- When ESTABLISHED APP CONTRACT is non-null, preserve its shared.ref, shared.state, shared.stores, shared.stableDomIds, and shared.semantics exactly unless the current technical intent genuinely requires changing them.",
+  "- shared.design may evolve without a contract change. Any change to canonical shared fields requires non-null contractChange with a concrete reason, affected task scopes, and machine-readable change entries that cover every changed category.",
+  "- When ESTABLISHED APP CONTRACT is null, create the initial shared contract and leave contractChange null/omitted. The shell owns revision numbers.",
+  "- Do not introduce compatibility aliases, duplicate old/new fields, or migrations merely to preserve obsolete beta internals. If a contract change is genuinely required, make one explicit coherent change.",
+  "- shared.state names stable shared application.store fields with their meaning/type. Reuse those exact field names in later modifications and repairs.",
   "- shared.stores lists only application.store namespaces intentionally shared across worker scopes; omit ordinary local state from it.",
+  "- shared.stableDomIds contains stable id values without #. Preserve existing ids and add/remove them only through an explicit contract change.",
+  "- shared.semantics records compact cross-worker meanings that must stay stable, for example units or enum meanings.",
+  "- application.store values are JSON-like only: null, booleans, finite numbers, strings, arrays, and plain objects. Never design a shared contract that relies on undefined, functions, class instances, or circular references.",
   "- Use one ordered task for a truly atomic change; use 2+ tasks when distinct components/work units exist.",
   "- Every scope must be a simple #id selector using letters, numbers, _ or -.",
-  "- Reuse an existing component id from APP OUTLINE when it clearly owns the work; otherwise choose a new stable id.",
+  "- Reuse an existing stable component id from ESTABLISHED APP CONTRACT or APP OUTLINE when it owns the work; otherwise choose a new stable id and declare a contract change when a contract already exists.",
   "- Local DOM/store names are derived deterministically from each scope by the orchestrator and supplied to workers; do not spend manager output on local prefixes/namespaces.",
   "- When alivePolicy targetIds refer to new worker-created elements, use ids compatible with the owning scope prefix (<scope-id>-...). If the exact id is not known, omit targetIds and use exact targetHints instead of inventing an unrelated id.",
   "- Cross-scope state sharing belongs only in shared.stores.",
   "- Dependencies may reference only earlier task ids.",
-  "- shared.ref is a compact version/reference. Every task must repeat that exact value in sharedContractRef.",
+  "- shared.ref is the persistent contract reference. Every task must repeat that exact value in sharedContractRef.",
   "- Set parallel=true only when the task can safely overlap other dependency-ready tasks on a different scope.",
   "- Use parallel=false for manager-ordered/shared-state-sensitive work.",
   "- Worker budget overrides may only tighten maxDurationMs/maxCostUsd; profile defaults remain the ceiling.",
-  "- component-worker is the default. Use repair-worker only when the task is primarily diagnosis/repair.",
+  "- component-worker is the default. Use repair-worker when the task is primarily diagnosis/repair; repairs should preserve the established contract unless changing it is unavoidable.",
   "- A ROUTING HINT is advisory bounded classification, not technical intent. If preferredWorkerProfile=repair-worker and the task is genuinely diagnosis/repair, prefer repair-worker; never distort the task merely to match the hint.",
   "- PORTABLE SHELL PREFERENCES are user-controlled cross-app hints. Apply them only when compatible with the explicit technical intent, app purpose, accessibility, and existing app behavior. Never infer additional user traits.",
   "- capabilityIds may contain only platform capability ids relevant to that worker.",
   "- Keep tasks non-overlapping. A worker owns only its assigned scope.",
-  "- The manager owns decomposition, shared contracts, ordering and final integration verification.",
+  "- The manager owns decomposition, the canonical shared contract, ordering and final integration verification.",
   "- alivePolicy is declarative app-specific context, never executable code and never permission for silent mutation.",
   "- Use stable ids/exact semantic target hints for app-specific meaningful/repeatable interactions; do not encode generic shell heuristics.",
   "- safeReactions must describe only reversible suggestions/highlights/existing actions. User confirmation and shell invariants remain authoritative.",
@@ -207,7 +230,8 @@ const WORKER_SYSTEM = [
   "",
   "HANDOFF",
   "On success, the final done payload must be JSON only with:",
-  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[],\"requestedScope\":\"#broader-scope-or-empty\"}",
+  "{\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"observable checks\"],\"unresolved\":[],\"sharedContractChanges\":[{\"kind\":\"reference|store|state|dom|semantic\",\"path\":\"machine-readable path\",\"description\":\"what changed\",\"from\":\"optional old value\",\"to\":\"optional new value\"}],\"requestedScope\":\"#broader-scope-or-empty\"}",
+  "Report sharedContractChanges only when the manager declared a contractChange and this worker actually applied part of it; otherwise return an empty array.",
   "If the task needs ownership outside ASSIGNED SCOPE, do not edit there. Return status=blocked with requestedScope and explain the dependency in unresolved.",
   "Keep it compact."
 ].join("\n");
@@ -269,7 +293,17 @@ export class CodingOrchestrator {
       }, options.credential);
       const planningStop = rootBudget.recordUsage(planned.usage?.cost);
       if (planningStop) return stopResult(planningStop, handoffs, workerTurns);
-      const plan = parseCodingManagerPlan(planned.text);
+      const plan = parseCodingManagerPlan(planned.text, options.technicalContract);
+      const technicalContract = technicalContractForPlan(options.technicalContract, plan.shared);
+      if (technicalContract !== options.technicalContract) {
+        console.info("App technical contract established", {
+          revision: technicalContract.revision,
+          changed: Boolean(options.technicalContract),
+          contractChange: plan.contractChange,
+        });
+        await options.onTechnicalContractProposal?.(technicalContract, plan.contractChange);
+      }
+      await validateDeclaredSharedStores(this.executor, options.appId, plan.shared.stores, controller.signal);
 
       const maxParallelWorkers = normalizeParallelism(options.maxParallelWorkers);
       const uniqueScopes = [...new Set(plan.tasks.map(task => task.scope))];
@@ -535,7 +569,7 @@ export class CodingOrchestrator {
       runStatus = result.status;
       message = result.message;
       await stateWrites;
-      handoff = workerHandoff(task, result.status, result.rawMessage, result.message);
+      handoff = workerHandoff(plan, task, result.status, result.rawMessage, result.message);
       status = handoff.status === "done" ? result.status : "blocked";
       const terminalState: ComponentBuildState = handoff.status === "done"
         ? (revealOnSuccess ? "ready" : "queued")
@@ -735,6 +769,7 @@ function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown):
     "APP PURPOSE\n" + options.appPrompt.trim(),
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
     "CURRENT ALIVE POLICY\n" + JSON.stringify(options.alivePolicy ?? null),
+    "ESTABLISHED APP CONTRACT\n" + JSON.stringify(options.technicalContract ? normalizeAppTechnicalContract(options.technicalContract) : null),
     options.triggerRoute || options.preferredWorkerProfile
       ? "ROUTING HINT\n" + JSON.stringify({
           route: options.triggerRoute ?? null,
@@ -763,6 +798,9 @@ function managerVerificationInput(
     "SHARED DESIGN\n" + list(plan.shared.design),
     "SHARED STATE\n" + list(plan.shared.state),
     "SHARED STORES\n" + list(plan.shared.stores),
+    "STABLE DOM IDS\n" + list(plan.shared.stableDomIds),
+    "SHARED SEMANTICS\n" + list(plan.shared.semantics),
+    "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "WORKER HANDOFFS\n" + (handoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
     "FINAL APP OUTLINE\n" + JSON.stringify(outline),
   ].join("\n\n");
@@ -785,6 +823,9 @@ function workerTaskInput(
     "SHARED CONTRACT REF\n" + task.sharedContractRef,
     "SHARED DESIGN CONTRACT\n" + list(plan.shared.design),
     "SHARED STATE CONTRACT\n" + list(plan.shared.state),
+    "STABLE DOM IDS\n" + list(plan.shared.stableDomIds),
+    "SHARED SEMANTICS\n" + list(plan.shared.semantics),
+    "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "DEPENDENCY HANDOFFS\n" + (dependencyHandoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
     "RELEVANT PLATFORM CAPABILITIES\n" + platformCapabilityHelp(task.capabilityIds),
   ].join("\n\n");
@@ -823,29 +864,87 @@ function stripFence(value: string): string {
   return match ? match[2]!.trim() : trimmed;
 }
 
-export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
+function parseSharedContractChange(value: unknown): SharedContractChange | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const kind = record.kind;
+  const allowedKinds: SharedContractChangeKind[] = ["reference", "store", "state", "dom", "semantic"];
+  if (typeof kind !== "string" || !allowedKinds.includes(kind as SharedContractChangeKind)) return undefined;
+  const path = typeof record.path === "string" ? record.path.trim().slice(0, 240) : "";
+  const description = typeof record.description === "string" ? record.description.trim().slice(0, 500) : "";
+  if (!path || !description) return undefined;
+  const from = typeof record.from === "string" && record.from.trim() ? record.from.trim().slice(0, 500) : undefined;
+  const to = typeof record.to === "string" && record.to.trim() ? record.to.trim().slice(0, 500) : undefined;
+  return {
+    kind: kind as SharedContractChangeKind,
+    path,
+    description,
+    ...(from ? { from } : {}),
+    ...(to ? { to } : {}),
+  };
+}
+
+function parseCodingContractChange(value: unknown, taskScopes: ReadonlySet<string>): CodingContractChange | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
+  const record = value as Record<string, unknown>;
+  const reason = typeof record.reason === "string" ? record.reason.trim().slice(0, 1_000) : "";
+  const affectedScopes = [...new Set(stringArray(record.affectedScopes, 16))];
+  const changes = Array.isArray(record.changes)
+    ? record.changes.map(parseSharedContractChange).filter((entry): entry is SharedContractChange => Boolean(entry)).slice(0, 24)
+    : [];
+  if (!reason || !affectedScopes.length || !changes.length) return undefined;
+  if (affectedScopes.some(scope => !SIMPLE_SCOPE.test(scope) || !taskScopes.has(scope))) {
+    throw new Error("Coding manager contractChange affectedScopes must reference task scopes in the current plan");
+  }
+  return { reason, affectedScopes, changes };
+}
+
+export function parseCodingManagerPlan(raw: string, establishedContract?: AppTechnicalContract): CodingManagerPlan {
   let parsed: unknown;
   try { parsed = JSON.parse(stripFence(raw)); }
   catch { throw new Error("Coding manager returned invalid JSON"); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Coding manager returned an invalid plan");
   const record = parsed as Record<string, unknown>;
+  const established = establishedContract ? normalizeAppTechnicalContract(establishedContract) : undefined;
   const sharedRaw = record.shared;
   const sharedRecord = sharedRaw && typeof sharedRaw === "object" && !Array.isArray(sharedRaw)
     ? sharedRaw as Record<string, unknown>
     : {};
-  const sharedRef = typeof sharedRecord.ref === "string" && TASK_ID.test(sharedRecord.ref.trim())
-    ? sharedRecord.ref.trim()
-    : "shared-v1";
-  const sharedStores = [...new Set(stringArray(sharedRecord.stores, 16))];
+
+  const explicitRef = typeof sharedRecord.ref === "string" ? sharedRecord.ref.trim() : "";
+  const sharedRef = explicitRef || established?.shared.ref || "shared-v1";
+  if (!TASK_ID.test(sharedRef)) throw new Error("Coding manager shared contract ref is invalid");
+
+  const sharedStores = Array.isArray(sharedRecord.stores)
+    ? [...new Set(stringArray(sharedRecord.stores, 16))]
+    : [...(established?.shared.stores ?? [])];
   if (sharedStores.some(store => !STORE_NAMESPACE.test(store))) {
     throw new Error("Coding manager shared stores must be JavaScript identifier names");
   }
+
+  const sharedState = Array.isArray(sharedRecord.state)
+    ? stringArray(sharedRecord.state, 32)
+    : [...(established?.shared.state ?? [])];
+  const stableDomIdsExplicit = Array.isArray(sharedRecord.stableDomIds);
+  const stableDomIds = stableDomIdsExplicit
+    ? [...new Set(stringArray(sharedRecord.stableDomIds, 48))]
+    : [...(established?.shared.stableDomIds ?? [])];
+  if (stableDomIds.some(id => !TASK_ID.test(id))) {
+    throw new Error("Coding manager stableDomIds must be plain stable id values without #");
+  }
+  const semantics = Array.isArray(sharedRecord.semantics)
+    ? stringArray(sharedRecord.semantics, 32)
+    : [...(established?.shared.semantics ?? [])];
+
   const shared: CodingManagerSharedContracts = {
     ref: sharedRef,
     design: stringArray(sharedRecord.design, 16),
-    state: stringArray(sharedRecord.state, 16),
+    state: sharedState,
     stores: sharedStores,
+    stableDomIds,
+    semantics,
   };
+
   if (!Array.isArray(record.tasks) || record.tasks.length < 1 || record.tasks.length > 8) {
     throw new Error("Coding manager must return between 1 and 8 tasks");
   }
@@ -904,8 +1003,38 @@ export function parseCodingManagerPlan(raw: string): CodingManagerPlan {
       ...(budget ? { budget } : {}),
     };
   });
+
+  if (!established && !stableDomIdsExplicit) {
+    shared.stableDomIds = [...new Set(tasks.map(task => task.scope.slice(1)))];
+  }
+
+  const taskScopes = new Set(tasks.map(task => task.scope));
+  const contractChange = parseCodingContractChange(record.contractChange, taskScopes);
+  if (!established) {
+    if (record.contractChange != null) {
+      throw new Error("Initial coding manager plan must establish the contract without contractChange");
+    }
+  } else {
+    const diff = sharedContractDiff(established.shared, shared);
+    const changed = !sharedContractsEqual(established.shared, shared);
+    if (changed && !contractChange) {
+      throw new Error("Coding manager changed the established app contract without a valid contractChange");
+    }
+    if (!changed && record.contractChange != null) {
+      throw new Error("Coding manager declared contractChange but preserved the established app contract");
+    }
+    if (changed && contractChange && !contractChangeCoversDiff(contractChange, diff)) {
+      throw new Error("Coding manager contractChange does not cover every changed contract category");
+    }
+  }
+
   const alivePolicy = normalizeAlivePolicyProposal(record.alivePolicy);
-  return { shared, tasks, ...(alivePolicy ? { alivePolicy } : {}) };
+  return {
+    shared,
+    tasks,
+    ...(contractChange ? { contractChange } : {}),
+    ...(alivePolicy ? { alivePolicy } : {}),
+  };
 }
 
 export function parseManagerVerification(raw: string): ManagerVerification {
@@ -923,6 +1052,7 @@ export function parseManagerVerification(raw: string): ManagerVerification {
 }
 
 function workerHandoff(
+  plan: CodingManagerPlan,
   task: CodingWorkerTask,
   status: RunResult["status"],
   rawMessage: string | undefined,
@@ -944,11 +1074,30 @@ function workerHandoff(
       if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
         const record = parsed as Record<string, unknown>;
         const unresolved = stringArray(record.unresolved, 12);
-        const sharedContractChanges = stringArray(record.sharedContractChanges, 12);
+        const rawContractChanges = Array.isArray(record.sharedContractChanges) ? record.sharedContractChanges : [];
+        const sharedContractChanges = rawContractChanges
+          .map(parseSharedContractChange)
+          .filter((entry): entry is SharedContractChange => Boolean(entry))
+          .slice(0, 24);
+        if (rawContractChanges.length !== sharedContractChanges.length) {
+          unresolved.push("Worker returned malformed sharedContractChanges; contract coordination requires structured change entries.");
+        }
+
+        if (sharedContractChanges.length && !plan.contractChange) {
+          unresolved.push("Worker reported an undeclared app-contract change; replan with an explicit manager contractChange before applying it.");
+        } else if (sharedContractChanges.length && plan.contractChange) {
+          const declared = new Set(plan.contractChange.changes.map(change => change.kind + ":" + change.path));
+          const undeclared = sharedContractChanges.filter(change => !declared.has(change.kind + ":" + change.path));
+          if (undeclared.length) {
+            unresolved.push("Worker reported contract changes that were not declared by the coding manager: "
+              + undeclared.map(change => change.kind + ":" + change.path).join(", "));
+          }
+        }
+
         const requestedScope = typeof record.requestedScope === "string" && record.requestedScope.trim()
           ? record.requestedScope.trim()
           : undefined;
-        const handoffStatus = record.status === "blocked" || requestedScope ? "blocked" : "done";
+        const handoffStatus = record.status === "blocked" || requestedScope || unresolved.length ? "blocked" : "done";
         return {
           status: handoffStatus,
           scope: task.scope,
@@ -969,6 +1118,44 @@ function workerHandoff(
     changed: ["Completed scoped task: " + task.goal],
     verified: task.acceptanceCriteria,
   };
+}
+
+async function validateDeclaredSharedStores(
+  executor: AppExecutor,
+  appId: string,
+  stores: readonly string[],
+  signal: AbortSignal,
+): Promise<void> {
+  if (!stores.length) return;
+  const code = [
+    "/* itsalive:validate-shared-store-json */",
+    "const namespaces = " + JSON.stringify(stores) + ";",
+    "const isPlainObject = value => { const proto = Object.getPrototypeOf(value); return proto === Object.prototype || proto === null; };",
+    "const validate = (value, path, stack = new Set()) => {",
+    "  if (value === null || typeof value === 'string' || typeof value === 'boolean') return;",
+    "  if (typeof value === 'number') { if (!Number.isFinite(value)) throw new TypeError(path + ' must contain only finite numbers'); return; }",
+    "  if (typeof value !== 'object') throw new TypeError(path + ' must contain only JSON-like values');",
+    "  if (stack.has(value)) throw new TypeError(path + ' cannot contain circular references');",
+    "  if (!Array.isArray(value) && !isPlainObject(value)) throw new TypeError(path + ' must contain only arrays and plain objects');",
+    "  stack.add(value);",
+    "  if (Array.isArray(value)) value.forEach((entry, index) => validate(entry, path + '[' + index + ']', stack));",
+    "  else Object.entries(value).forEach(([key, entry]) => validate(entry, path + '.' + key, stack));",
+    "  stack.delete(value);",
+    "};",
+    "const present = [];",
+    "for (const namespace of namespaces) {",
+    "  if (!Object.prototype.hasOwnProperty.call(application.store, namespace)) continue;",
+    "  validate(application.store[namespace], 'application.store.' + namespace);",
+    "  present.push(namespace);",
+    "}",
+    "return { ok: true, present };",
+  ].join("\n");
+  const result = await executor.execute(appId, code, { signal, timeoutMs: 5_000 });
+  if (result.error) {
+    throw new Error("Declared shared application.store values failed JSON-like validation: " + result.error.message);
+  }
+  const value = result.value as { ok?: boolean } | undefined;
+  if (!value?.ok) throw new Error("Could not validate declared shared application.store values");
 }
 
 async function inspectAppOutline(executor: AppExecutor, appId: string, signal: AbortSignal): Promise<unknown> {

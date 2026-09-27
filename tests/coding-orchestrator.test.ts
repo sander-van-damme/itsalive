@@ -3,6 +3,7 @@ import { CodingOrchestrator, parseCodingManagerPlan, parseManagerVerification } 
 import { resolveAgentProfile, type AgentProfileId } from "../src/shell/core/agent-profiles";
 import type { GenerateRequest } from "../src/shell/core/types";
 import type { ExecutionResult } from "../src/shell/core/agent-runner";
+import { technicalContractForPlan, type AppTechnicalContract } from "../src/shell/core/app-contract";
 
 const appId = "550e8400-e29b-41d4-a716-446655440000";
 
@@ -84,6 +85,118 @@ describe("coding manager and scoped workers", () => {
     }));
     expect(normalized.tasks.map(task => task.storeNamespace)).toEqual(["counter_2", "same_name", "same_name_2"]);
     expect(normalized.tasks.map(task => task.idPrefix)).toEqual(["counter-", "same-name-", "same_name-"]);
+  });
+
+  it("preserves the Movie Night contract across sequential modifications and a repair, and rejects silent field drift", () => {
+    const shared = {
+      ref: "movie-v1",
+      design: ["Warm cinematic cards"],
+      stores: ["sharedStore"],
+      state: [
+        "application.store.sharedStore.movies: array of { id, title, genre, durationMin }",
+        "application.store.sharedStore.tonightId: movie id or null",
+      ],
+      stableDomIds: ["movie-night-app", "add-movie-form", "movie-shortlist", "tonight-section"],
+      semantics: ["durationMin is a whole number of minutes"],
+    };
+    const makePlan = (goal: string, profile: "component-worker" | "repair-worker" = "component-worker") => JSON.stringify({
+      shared,
+      contractChange: null,
+      tasks: [{
+        id: "movie",
+        goal,
+        scope: "#movie-night-app",
+        acceptanceCriteria: ["Movie planner works"],
+        dependencies: [],
+        capabilityIds: [],
+        profile,
+        sharedContractRef: "movie-v1",
+        parallel: false,
+      }],
+    });
+
+    const initial = parseCodingManagerPlan(makePlan("Build the movie planner"));
+    let established: AppTechnicalContract = technicalContractForPlan(undefined, initial.shared);
+    expect(established).toMatchObject({
+      revision: 1,
+      shared: {
+        ref: "movie-v1",
+        stores: ["sharedStore"],
+        stableDomIds: expect.arrayContaining(["movie-night-app", "movie-shortlist", "tonight-section"]),
+      },
+    });
+
+    const completed = parseCodingManagerPlan(makePlan("Complete the app"), established);
+    expect(technicalContractForPlan(established, completed.shared)).toBe(established);
+
+    const ratings = parseCodingManagerPlan(makePlan("Add ratings and sorting without changing shared schema"), established);
+    expect(technicalContractForPlan(established, ratings.shared)).toBe(established);
+
+    const repaired = parseCodingManagerPlan(makePlan("Repair the broken buttons", "repair-worker"), established);
+    expect(technicalContractForPlan(established, repaired.shared)).toBe(established);
+    expect(repaired.tasks[0]?.profile).toBe("repair-worker");
+
+    const drifted = {
+      ...shared,
+      state: [
+        "application.store.movieStore.movies: array of { id, title, genre, durationMinutes }",
+        "application.store.movieStore.tonightPickId: movie id or null",
+      ],
+      stores: ["movieStore"],
+    };
+    expect(() => parseCodingManagerPlan(JSON.stringify({
+      shared: drifted,
+      contractChange: null,
+      tasks: [{
+        id: "movie",
+        goal: "Repair it",
+        scope: "#movie-night-app",
+        acceptanceCriteria: ["works"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "repair-worker",
+        sharedContractRef: "movie-v1",
+      }],
+    }), established)).toThrow(/changed the established app contract without a valid contractChange/);
+
+    const explicitChange = parseCodingManagerPlan(JSON.stringify({
+      shared: {
+        ...shared,
+        state: [...shared.state, "application.store.sharedStore.ratings: object keyed by movie id"],
+        semantics: [...shared.semantics, "rating is an integer from 1 to 5"],
+      },
+      contractChange: {
+        reason: "Ratings need durable shared state used by shortlist and stats.",
+        affectedScopes: ["#movie-night-app"],
+        changes: [
+          {
+            kind: "state",
+            path: "application.store.sharedStore.ratings",
+            description: "Add durable ratings map",
+            to: "object keyed by movie id",
+          },
+          {
+            kind: "semantic",
+            path: "rating",
+            description: "Define the rating scale",
+            to: "integer 1..5",
+          },
+        ],
+      },
+      tasks: [{
+        id: "movie",
+        goal: "Add ratings",
+        scope: "#movie-night-app",
+        acceptanceCriteria: ["ratings persist"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "movie-v1",
+      }],
+    }), established);
+    established = technicalContractForPlan(established, explicitChange.shared);
+    expect(established.revision).toBe(2);
+    expect(explicitChange.contractChange?.changes.map(change => change.kind)).toEqual(["state", "semantic"]);
   });
 
   it("accepts raw and common Markdown JSON fences without accepting trailing prose", () => {
@@ -960,6 +1073,9 @@ function isolatedDb() {
 function parallelExecutor(ensured: Set<string>) {
   return {
     execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes("itsalive:validate-shared-store-json")) {
+        return { value: { ok: true, present: ["sharedApp"] } };
+      }
       if (code.includes("const selectors = ") && code.includes("const overlaps = []")) return { value: [] };
       if (code.includes("childCount: root.children.length")) {
         return {

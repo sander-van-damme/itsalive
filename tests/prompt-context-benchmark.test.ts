@@ -104,7 +104,11 @@ describe("agent prompt/context benchmark contract", () => {
       changed: ["Added reset control"],
       verified: ["Existing start/pause controls still work"],
       unresolved: ["Shared timer store needs a reset() method"],
-      sharedContractChanges: ["Manager must expose timer.reset()"],
+      sharedContractChanges: [{
+        kind: "state",
+        path: "application.store.timer.reset",
+        description: "Manager must expose a durable reset contract",
+      }],
     });
 
     expect(JSON.parse(handoff)).toEqual({
@@ -113,7 +117,11 @@ describe("agent prompt/context benchmark contract", () => {
       changed: ["Added reset control"],
       verified: ["Existing start/pause controls still work"],
       unresolved: ["Shared timer store needs a reset() method"],
-      sharedContractChanges: ["Manager must expose timer.reset()"],
+      sharedContractChanges: [{
+        kind: "state",
+        path: "application.store.timer.reset",
+        description: "Manager must expose a durable reset contract",
+      }],
     });
     expect(handoff).not.toContain("transcript");
   });

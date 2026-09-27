@@ -2,6 +2,7 @@ import type { AppScriptSnapshot } from "../../shared";
 import type { AlivePolicy } from "./alive-policy";
 import type { ActiveAdaptation, AdaptationHistoryEntry } from "./adaptation";
 import type { AccessibilityDismissal } from "./accessibility-friction";
+import type { AppTechnicalContract } from "./app-contract";
 
 export type HistoryRole = "user" | "assistant" | "agent" | "observation" | "system";
 
@@ -14,6 +15,7 @@ export interface AppRecord {
   behaviorSummary?: string;
   behaviorSummaryUpdatedAt?: number;
   alivePolicy?: AlivePolicy;
+  technicalContract?: AppTechnicalContract;
   activeAdaptation?: ActiveAdaptation;
   adaptationHistory?: AdaptationHistoryEntry[];
   accessibilityDismissals?: AccessibilityDismissal[];

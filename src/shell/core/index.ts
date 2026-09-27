@@ -8,6 +8,7 @@ export * from "./agent-history";
 export * from "./agent-profiles";
 export * from "./app-metadata";
 export * from "./app-creation";
+export * from "./app-contract";
 export * from "./app-deletion";
 export * from "./behavior";
 export * from "./behavior-episodes";
