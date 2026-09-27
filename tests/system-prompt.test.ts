@@ -10,6 +10,14 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).not.toMatch(/\b[A-Za-z_$][\w$]*\?\s*[,}]/);
   });
 
+  it('requires a complete atomic JavaScript program rather than streamed delimiters', () => {
+    expect(SYSTEM_PROMPT).toContain('exactly one complete executable JavaScript program per model turn');
+    expect(SYSTEM_PROMPT).toContain('No partial response is executed');
+    expect(SYSTEM_PROMPT).toContain('captured console output');
+    expect(SYSTEM_PROMPT).not.toContain('/* itsalive:command */');
+    expect(SYSTEM_PROMPT).not.toContain('/* itsalive:end */');
+  });
+
   it('requires completion messages to use plain user-facing language', () => {
     expect(SYSTEM_PROMPT).toContain('shown directly to the user');
     expect(SYSTEM_PROMPT).toContain('Do not mention implementation details');
@@ -41,7 +49,7 @@ describe('SYSTEM_PROMPT code examples', () => {
     expect(SYSTEM_PROMPT).toContain('inert');
     expect(SYSTEM_PROMPT).toContain('data-itsalive-build-owner="shell"');
     expect(SYSTEM_PROMPT).toContain('aria-busy');
-    expect(SYSTEM_PROMPT).toContain('visible inert scaffold → primary behavior');
+    expect(SYSTEM_PROMPT).toContain('inspect → make one coherent change → inspect/verify');
     expect(SYSTEM_PROMPT).toContain('min-height: 100dvh');
   });
 

@@ -190,6 +190,38 @@ describe("injected app runtime namespaces", () => {
     expect(state.posts.some(({ requestId, payload }) => requestId === "after-nested-done" && payload.done === true)).toBe(false);
   });
 
+  it("returns bounded console output with each agent execution result", async () => {
+    emit({
+      type: "execute",
+      code: 'console.log("inspection", { ready: true }); return null;',
+      requestId: "console-inspection",
+    });
+    await nextTask();
+
+    const response = state.posts.find(({ requestId }) => requestId === "console-inspection");
+    expect(response?.payload).toEqual({
+      type: "result",
+      result: null,
+      logs: [{ level: "log", args: ["inspection", { ready: true }] }],
+    });
+  });
+
+  it("returns console output alongside the current execution error", async () => {
+    emit({
+      type: "execute",
+      code: 'console.warn("before failure", 42); throw new Error("boom");',
+      requestId: "console-error",
+    });
+    await nextTask();
+
+    const response = state.posts.find(({ requestId }) => requestId === "console-error");
+    expect(response?.payload.type).toBe("execution.error");
+    expect(response?.payload).toEqual(expect.objectContaining({
+      logs: [{ level: "warn", args: ["before failure", 42] }],
+      error: expect.objectContaining({ name: "Error", message: "boom" }),
+    }));
+  });
+
   it("tracks listeners installed only by transient agent commands", async () => {
     emit({
       type: "execute",

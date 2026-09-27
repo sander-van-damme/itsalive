@@ -111,7 +111,7 @@ describe('AgentRunner lifecycle', () => {
     });
   });
 
-  it('executes complete commands while the same model response is still streaming', async () => {
+  it('waits for the complete streamed response before executing one validated program', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
       add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
@@ -120,36 +120,25 @@ describe('AgentRunner lifecycle', () => {
     const events: string[] = [];
     const progress: string[] = [];
     const executionSteps: number[] = [];
-    let releaseFirst!: () => void;
-    const firstExecuted = new Promise<void>(resolve => { releaseFirst = resolve; });
-    const first = '/* itsalive:command */\ndocument.body.dataset.first = "yes";\n/* itsalive:end */\n';
-    const second = '/* itsalive:command */\nreturn agent.done("ready");\n/* itsalive:end */';
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
+      events.push('execute:program');
+      expect(code).toContain('dataset.first');
+      expect(code).toContain('agent.done');
+      return { done: true, message: 'ready' };
+    }) };
     const providers = {
       generateStreaming: vi.fn(async (_request: unknown, onText: (delta: string) => void) => {
         events.push('emit:first');
-        onText('/* itsalive:com');
-        onText(first.slice('/* itsalive:com'.length));
-        await firstExecuted;
+        onText('document.body.dataset.first = "yes";\n');
+        await Promise.resolve();
+        expect(executor.execute).not.toHaveBeenCalled();
         events.push('emit:second');
-        onText('/* itsalive:command */\nreturn agent.');
-        onText('done("ready");\n/* itsalive:end */');
-        return { text: first + second };
+        onText('return agent.done("ready");');
+        return { text: 'document.body.dataset.first = "yes";\nreturn agent.done("ready");' };
       }),
       generate: vi.fn(),
     };
-    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
-      if (code.includes('rootCount')) return { value: { rootHtml: '<main>Ready</main>', rootCount: 1, outsideUiCount: 0 } };
-      if (code.includes('dataset.first')) {
-        events.push('execute:first');
-        releaseFirst();
-        return { value: null };
-      }
-      if (code.includes('agent.done')) {
-        events.push('execute:done');
-        return { done: true, message: 'ready' };
-      }
-      return { value: null };
-    }) };
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
@@ -164,32 +153,29 @@ describe('AgentRunner lifecycle', () => {
     });
 
     expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
-    expect(events.indexOf('execute:first')).toBeGreaterThan(events.indexOf('emit:first'));
-    expect(events.indexOf('execute:first')).toBeLessThan(events.indexOf('emit:second'));
-    expect(events).toEqual(['emit:first', 'execute:first', 'emit:second', 'execute:done']);
+    expect(events).toEqual(['emit:first', 'emit:second', 'execute:program']);
     expect(progress).toEqual(expect.arrayContaining(['generating', 'executing', 'verifying', 'finishing']));
-    expect(executionSteps).toEqual([1, 2]);
+    expect(executionSteps).toEqual([1]);
     const milestones = info.mock.calls.filter(call => call[0] === 'Timing milestone').map(call => (call[1] as { milestone: string }).milestone);
-    expect(milestones).toEqual(expect.arrayContaining(['request-started', 'first-stream-text', 'first-complete-command', 'first-runtime-execution']));
+    expect(milestones).toEqual(expect.arrayContaining(['request-started', 'first-stream-text', 'first-complete-program', 'first-runtime-execution']));
     const timingSummary = info.mock.calls.find(call => call[0] === 'Timing summary')?.[1] as Record<string, number | undefined>;
     expect(timingSummary).toMatchObject({
       totalMs: expect.any(Number),
       firstStreamTextMs: expect.any(Number),
-      firstCompleteCommandMs: expect.any(Number),
+      firstCompleteProgramMs: expect.any(Number),
       firstExecutionMs: expect.any(Number),
       lastProgressMs: expect.any(Number),
     });
-    expect(timingSummary.firstCompleteCommandMs!).toBeGreaterThanOrEqual(timingSummary.firstStreamTextMs!);
-    expect(timingSummary.firstExecutionMs!).toBeGreaterThanOrEqual(timingSummary.firstCompleteCommandMs!);
+    expect(timingSummary.firstCompleteProgramMs!).toBeGreaterThanOrEqual(timingSummary.firstStreamTextMs!);
+    expect(timingSummary.firstExecutionMs!).toBeGreaterThanOrEqual(timingSummary.firstCompleteProgramMs!);
     expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual([
-      'document.body.dataset.first = "yes";',
-      'return agent.done("ready");',
+      'document.body.dataset.first = "yes";\nreturn agent.done("ready");',
     ]);
   });
 
-  it('extracts a single JavaScript fence even when the model adds prose', async () => {
+  it('accepts one JavaScript fence only when it contains the whole response', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
-    const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nconst view = document.body;\nreturn view;\n```' })) };
+    const providers = { generate: vi.fn(async () => ({ text: '```js\nconst view = document.body;\nreturn view;\n```' })) };
     const executor = { execute: vi.fn(async (): Promise<ExecutionResult> => ({ value: 'ok' })) };
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
@@ -202,6 +188,56 @@ describe('AgentRunner lifecycle', () => {
 
     expect(executor.execute).toHaveBeenCalledTimes(1);
     expect((executor.execute.mock.calls as unknown[][])[0]?.[1]).toBe('const view = document.body;\nreturn view;');
+  });
+
+  it('rejects trailing prose after streamed JavaScript before any executor side effect', async () => {
+    const entries: HistoryEntry[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const executor = { execute: vi.fn() };
+    const providers = {
+      generateStreaming: vi.fn(async (_request: unknown, onText: (delta: string) => void) => {
+        onText('document.body.dataset.partial = "must-not-run";\n');
+        await Promise.resolve();
+        expect(executor.execute).not.toHaveBeenCalled();
+        onText('I am done now.');
+        return { text: 'document.body.dataset.partial = "must-not-run";\nI am done now.' };
+      }),
+      generate: vi.fn(),
+    };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Build it', model, budget: { emergencyTurnCeiling: 1 },
+    });
+
+    expect(result).toMatchObject({ status: 'emergency-ceiling', turns: 1 });
+    expect(executor.execute).not.toHaveBeenCalled();
+    expect(entries).toEqual(expect.arrayContaining([
+      expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('Generated JavaScript did not parse') }),
+    ]));
+  });
+
+  it('rejects prose around a fenced program before execution', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'I will inspect first.\n\n```js\nreturn document.body;\n```' })) };
+    const executor = { execute: vi.fn() };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect it', model, budget: { emergencyTurnCeiling: 1 },
+    });
+
+    expect(result).toMatchObject({ status: 'emergency-ceiling', turns: 1 });
+    expect(executor.execute).not.toHaveBeenCalled();
   });
 
   it('rejects syntax-invalid generated JavaScript before calling the executor', async () => {
@@ -395,6 +431,93 @@ describe('AgentRunner lifecycle', () => {
     expect(entries).toEqual(expect.arrayContaining([
       expect.objectContaining({ role: 'observation', kind: 'error', content: expect.stringContaining('runtime-only event listener') }),
     ]));
+  });
+
+  it('carries console inspection output into the next turn even when the return value is null', async () => {
+    const entries: HistoryEntry[] = [];
+    const requests: import('../src/shell/core/types').GenerateRequest[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const providers = { generate: vi.fn(async (request: import('../src/shell/core/types').GenerateRequest) => {
+      requests.push(structuredClone(request));
+      return requests.length === 1
+        ? { text: 'console.log("scope", document.querySelector("#itsalive-root")?.outerHTML);' }
+        : { text: 'return agent.done("ready");' };
+    }) };
+    let executions = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0 } };
+      }
+      executions++;
+      if (executions === 1) {
+        return {
+          value: null,
+          logs: [{ level: 'log', args: ['scope', '<main id="itsalive-root"><button>Decide</button></main>'] }],
+        };
+      }
+      return { done: true, message: 'ready' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect then finish', model, budget: { emergencyTurnCeiling: 3 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 2 });
+    expect(providers.generate).toHaveBeenCalledTimes(2);
+    const secondContext = requests[1]!.messages.map(message => message.content).join('\n');
+    expect(secondContext).toContain('<button>Decide</button>');
+    expect(entries).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: 'error', content: expect.stringContaining('low-signal') }),
+    ]));
+  });
+
+  it('supports a predictable inspect-modify-verify console workflow across model turns', async () => {
+    const entries: HistoryEntry[] = [];
+    const requests: import('../src/shell/core/types').GenerateRequest[] = [];
+    const db = { history: {
+      add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
+      forApp: vi.fn(async () => entries),
+    } };
+    const programs = [
+      'return document.querySelector("#itsalive-root")?.textContent;',
+      'document.querySelector("#itsalive-root").innerHTML = "<button>Ready</button>"; return "installed";',
+      'return agent.done("ready");',
+    ];
+    const providers = { generate: vi.fn(async (request: import('../src/shell/core/types').GenerateRequest) => {
+      requests.push(structuredClone(request));
+      return { text: programs[requests.length - 1]! };
+    }) };
+    let turnExecution = 0;
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) {
+        return { value: { rootHtml: '<main><button>Ready</button></main>', rootCount: 1, outsideUiCount: 0 } };
+      }
+      turnExecution++;
+      if (turnExecution === 1) return { value: 'empty app' };
+      if (turnExecution === 2) return { value: 'installed' };
+      return { done: true, message: 'ready' };
+    }) };
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Inspect, build, and verify', model, budget: { emergencyTurnCeiling: 4 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'ready', turns: 3 });
+    expect(providers.generate).toHaveBeenCalledTimes(3);
+    expect(turnExecution).toBe(3);
+    expect(requests[1]!.messages.map(message => message.content).join('\n')).toContain('empty app');
+    expect(requests[2]!.messages.map(message => message.content).join('\n')).toContain('installed');
+    expect(entries.filter(entry => entry.role === 'agent').map(entry => entry.content)).toEqual(programs);
   });
 
   it('stops a repeated low-signal verification loop after one diagnostic repair turn', async () => {

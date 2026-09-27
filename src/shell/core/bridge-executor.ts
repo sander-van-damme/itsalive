@@ -13,7 +13,9 @@ export class PostMessageExecutor implements AppExecutor {
     if (!pending) return;
     clearTimeout(pending.timer);
     this.pending.delete(message.requestId);
-    pending.resolve(message.type === "execution.error" ? { error: message.error } : { value: message.result, done: message.done, message: message.message });
+    pending.resolve(message.type === "execution.error"
+      ? { error: message.error, logs: message.logs }
+      : { value: message.result, done: message.done, message: message.message, logs: message.logs });
   };
 
   constructor(private readonly port: MessagePort, private readonly appId: string) {

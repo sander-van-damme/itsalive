@@ -17,12 +17,14 @@ describe("shell context builder", () => {
     expect(SYSTEM_PROMPT).toContain("own browser origin");
   });
 
-  it("defines a streamed multi-command drawing-board contract", () => {
-    expect(SYSTEM_PROMPT).toContain("one model response containing one or more independently executable JavaScript commands");
-    expect(SYSTEM_PROMPT).toContain("/* itsalive:command */");
-    expect(SYSTEM_PROMPT).toContain("/* itsalive:end */");
-    expect(SYSTEM_PROMPT).toContain("executes each command as soon as its closing delimiter arrives");
-    expect(SYSTEM_PROMPT).toContain("Commands later in the same response cannot use the return value of an earlier command");
+  it("defines an atomic console-turn drawing-board contract", () => {
+    expect(SYSTEM_PROMPT).toContain("exactly one complete executable JavaScript program per model turn");
+    expect(SYSTEM_PROMPT).toContain("waits for the complete model response");
+    expect(SYSTEM_PROMPT).toContain("executes it exactly once");
+    expect(SYSTEM_PROMPT).toContain("No partial response is executed");
+    expect(SYSTEM_PROMPT).toContain("captured console output");
+    expect(SYSTEM_PROMPT).not.toContain("/* itsalive:command */");
+    expect(SYSTEM_PROMPT).not.toContain("/* itsalive:end */");
     expect(SYSTEM_PROMPT).toContain("Treat it as a drawing board");
     expect(SYSTEM_PROMPT).toContain("Tailwind CSS as the default styling language");
     expect(SYSTEM_PROMPT).toContain("ordinary browser JavaScript for behavior");

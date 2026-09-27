@@ -17,9 +17,10 @@ describe("agent prompt/context benchmark contract", () => {
     ]);
   });
 
-  it("compares production, concise-natural, and telegraphic prompt candidates on identical scenarios", () => {
+  it("compares production and console-turn prompt candidates on identical scenarios", () => {
     expect(PROMPT_BENCHMARK_VARIANTS.map(variant => variant.id)).toEqual([
       "baseline",
+      "console-turn",
       "concise-natural",
       "telegraphic",
     ]);
@@ -30,16 +31,20 @@ describe("agent prompt/context benchmark contract", () => {
     for (const scenario of PROMPT_BENCHMARK_SCENARIOS) {
       const rows = matrix.filter(row => row.scenario === scenario.id);
       const baseline = rows.find(row => row.variant === "baseline")!;
+      const consoleTurn = rows.find(row => row.variant === "console-turn")!;
       const concise = rows.find(row => row.variant === "concise-natural")!;
       const telegraphic = rows.find(row => row.variant === "telegraphic")!;
 
       // Only the stable system wording changes in this matrix; task context stays identical.
-      expect(baseline.mandatoryTokens).toBe(concise.mandatoryTokens);
+      expect(baseline.mandatoryTokens).toBe(consoleTurn.mandatoryTokens);
+      expect(consoleTurn.mandatoryTokens).toBe(concise.mandatoryTokens);
       expect(concise.mandatoryTokens).toBe(telegraphic.mandatoryTokens);
-      expect(baseline.historyTokens).toBe(concise.historyTokens);
+      expect(baseline.historyTokens).toBe(consoleTurn.historyTokens);
+      expect(consoleTurn.historyTokens).toBe(concise.historyTokens);
       expect(concise.historyTokens).toBe(telegraphic.historyTokens);
 
-      expect(concise.systemTokens).toBeLessThan(baseline.systemTokens);
+      expect(consoleTurn.systemTokens).toBeLessThan(baseline.systemTokens);
+      expect(concise.systemTokens).toBeLessThan(consoleTurn.systemTokens);
       expect(telegraphic.systemTokens).toBeLessThan(concise.systemTokens);
 
       for (const row of rows) {
@@ -52,6 +57,17 @@ describe("agent prompt/context benchmark contract", () => {
           + row.historyTokens,
         );
       }
+    }
+  });
+
+  it("includes an explicit console-turn architecture without streamed command delimiters", () => {
+    const consoleTurn = PROMPT_BENCHMARK_VARIANTS.find(variant => variant.id === "console-turn")!;
+    expect(consoleTurn.intent).toMatch(/one complete JavaScript program/i);
+    expect(consoleTurn.systemPrompt).toContain("executes it once");
+    expect(consoleTurn.systemPrompt).toContain("console output");
+    for (const variant of PROMPT_BENCHMARK_VARIANTS) {
+      expect(variant.systemPrompt).not.toContain("/* itsalive:command */");
+      expect(variant.systemPrompt).not.toContain("/* itsalive:end */");
     }
   });
 

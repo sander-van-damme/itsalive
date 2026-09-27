@@ -85,11 +85,25 @@ describe("bridge protocol", () => {
     expect(isValidId(requestId)).toBe(true);
     const execute = createBridgeMessage(APP_ID, requestId, { type: "execute", code: "return 1" });
     const result = createBridgeMessage(APP_ID, requestId, { type: "result", result: 1 });
+    const loggedResult = createBridgeMessage(APP_ID, requestId, {
+      type: "result",
+      result: null,
+      logs: [{ level: "log", args: ["inspection", { ready: true }] }],
+    });
+    const loggedError = createBridgeMessage(APP_ID, requestId, {
+      type: "execution.error",
+      error: { name: "Error", message: "boom" },
+      logs: [{ level: "warn", args: ["before failure"] }],
+    });
     expect(isBridgeMessage(execute)).toBe(true);
     expect(isBridgeMessage({ ...execute, version: 2 })).toBe(false);
     expect(isShellToAppMessage(execute)).toBe(true);
     expect(isAppToShellMessage(execute)).toBe(false);
     expect(isAppToShellMessage(result)).toBe(true);
+    expect(isAppToShellMessage(loggedResult)).toBe(true);
+    expect(isAppToShellMessage(loggedError)).toBe(true);
+    expect(isBridgeMessage({ ...loggedResult, logs: [{ level: "verbose", args: [] }] })).toBe(false);
+    expect(isBridgeMessage({ ...loggedResult, logs: Array.from({ length: 101 }, () => ({ level: "log", args: [] })) })).toBe(false);
   });
 
   it("validates split shell-owned document request, save, and response messages", () => {
