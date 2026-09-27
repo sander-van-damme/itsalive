@@ -36,7 +36,7 @@ export const AGENT_CONTEXT_CONTRACTS: Readonly<Record<AgentRole, AgentContextCon
       "Selected interaction telemetry when relevant.",
     ],
     justInTime: [
-      "Compact platform API index for capabilities the user request may need.",
+      "Compact platform API index so the model can discover the full public API surface.",
     ],
     neverRepeat: [
       "Coding-agent transcript.",
@@ -111,7 +111,7 @@ export const AGENT_CONTEXT_CONTRACTS: Readonly<Record<AgentRole, AgentContextCon
     justInTime: [
       "Recent bounded logs.",
       "Focused DOM/state inspection.",
-      "Selected platform capability help.",
+      "Selected platform API help.",
     ],
     neverRepeat: [
       "Raw chat transcript.",
