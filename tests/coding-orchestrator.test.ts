@@ -202,9 +202,11 @@ describe("coding manager and scoped workers", () => {
           return {
             value: {
               html: scope === "timer" ? "<button>Start</button><button>Pause</button>" : "<ol><li>Lap 1</li></ol>",
-              buildingCount: 0,
-              inert: false,
-              ariaBusy: "false",
+              buildingCount: 1,
+              nestedBuildingCount: 0,
+              buildOwner: "shell",
+              inert: true,
+              ariaBusy: "true",
             },
           };
         }
@@ -256,6 +258,7 @@ describe("coding manager and scoped workers", () => {
     vi.spyOn(console, "groupEnd").mockImplementation(() => undefined);
     vi.spyOn(console, "info").mockImplementation(() => undefined);
     vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const completionAssessor = vi.fn(async () => ({ action: "uncertain" as const, reason: "evidence-uncertain" }));
 
     const result = await new CodingOrchestrator(db as never, providers as never, executor).run({
       appId,
@@ -266,6 +269,7 @@ describe("coding manager and scoped workers", () => {
       managerTrace,
       triggerRoute: "debug",
       preferredWorkerProfile: "repair-worker",
+      completionAssessor,
       portablePreferences: [{
         id: "pref-keyboard",
         label: "Keyboard-first interaction",
@@ -338,6 +342,8 @@ describe("coding manager and scoped workers", () => {
     expect(verifyContext).toContain("Lap list built");
     expect(verifyContext).not.toContain("SECRET_WORKER_A_TRANSCRIPT");
 
+    expect(completionAssessor).toHaveBeenCalledTimes(2);
+    expect(completionAssessor.mock.calls.map(([state]) => state.evidence.buildingCount)).toEqual([0, 0]);
     expect(db.history.forApp).not.toHaveBeenCalled();
     expect(db.history.add).not.toHaveBeenCalled();
   });
