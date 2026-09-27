@@ -5,7 +5,7 @@ import { IsolatedAgentHistory } from "./agent-history";
 import { compactWorkerHandoff, type WorkerHandoff } from "./agent-context";
 import type { ShellDatabase } from "./database";
 import { platformApiIndex, platformCapabilityHelp, isPlatformCapabilityId, type PlatformCapabilityId } from "./capabilities";
-import { CODING_MANAGER_PLAN_PROMPT, CODING_MANAGER_VERIFY_PROMPT, CODING_CODING_WORKER_SYSTEM_PROMPT_PROMPT } from "./prompts";
+import { CODING_MANAGER_PLAN_PROMPT, CODING_MANAGER_VERIFY_PROMPT, CODING_WORKER_SYSTEM_PROMPT } from "./prompts";
 import type { AgentProfileId, ResolvedAgentProfile } from "./agent-profiles";
 import type { ProviderRegistry } from "./providers";
 import { RunBudgetController, runBudgetMessage, type RunBudgetLimits, type RunBudgetStopKind } from "./run-budget";
