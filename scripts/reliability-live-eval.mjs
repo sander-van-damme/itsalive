@@ -1,3 +1,4 @@
+/* global console */
 const scenarios = [
   {
     id: "simple-initial-build",
