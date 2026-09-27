@@ -290,6 +290,12 @@ describe("coding manager and scoped workers", () => {
     const executedWorkerCode: string[] = [];
     const executor = {
       execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+        if (code.includes("itsalive:integration-scope-evidence")) {
+          return { value: [
+            { scope: "#timer-controls", exists: true, meaningfulUi: true, nestedBuildingCount: 0, buildOwner: null, rootBuilding: false, ariaBusy: null, durabilityAvailable: true, runtimeOnlyEventListenerCount: 0 },
+            { scope: "#lap-list", exists: true, meaningfulUi: true, nestedBuildingCount: 0, buildOwner: null, rootBuilding: false, ariaBusy: null, durabilityAvailable: true, runtimeOnlyEventListenerCount: 0 },
+          ] };
+        }
         if (code.includes("const selectors = ") && code.includes("const overlaps = []")) {
           return { value: [] };
         }
@@ -1075,6 +1081,21 @@ function parallelExecutor(ensured: Set<string>) {
     execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
       if (code.includes("itsalive:validate-shared-store-json")) {
         return { value: { ok: true, present: ["sharedApp"] } };
+      }
+      if (code.includes("itsalive:integration-scope-evidence")) {
+        const match = code.match(/const scopes = (\[[^;]+\]);/);
+        const scopes = match ? JSON.parse(match[1]!) as string[] : [];
+        return { value: scopes.map(scope => ({
+          scope,
+          exists: true,
+          meaningfulUi: true,
+          nestedBuildingCount: 0,
+          buildOwner: null,
+          rootBuilding: false,
+          ariaBusy: null,
+          durabilityAvailable: true,
+          runtimeOnlyEventListenerCount: 0,
+        })) };
       }
       if (code.includes("const selectors = ") && code.includes("const overlaps = []")) return { value: [] };
       if (code.includes("childCount: root.children.length")) {
