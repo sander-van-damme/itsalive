@@ -832,7 +832,7 @@ describe('AgentRunner lifecycle', () => {
   });
 
 
-  it('accepts scoped completion while the shell still owns the root busy/inert state without exposing that marker to semantic completion', async () => {
+  it('accepts scoped completion while the shell still owns visual busy state without exposing that marker to semantic completion', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
     const providers = { generate: vi.fn(async () => ({ text: 'return agent.done("ready");' })) };
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
@@ -844,7 +844,7 @@ describe('AgentRunner lifecycle', () => {
             buildingCount: 1,
             nestedBuildingCount: 0,
             buildOwner: 'shell',
-            inert: true,
+            inert: false,
             ariaBusy: 'true',
           },
         };
@@ -898,7 +898,7 @@ describe('AgentRunner lifecycle', () => {
             buildingCount: inspections === 1 ? 2 : 1,
             nestedBuildingCount: inspections === 1 ? 1 : 0,
             buildOwner: 'shell',
-            inert: true,
+            inert: false,
             ariaBusy: 'true',
           },
         };
