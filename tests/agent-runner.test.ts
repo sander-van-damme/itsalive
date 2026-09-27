@@ -709,7 +709,7 @@ describe('AgentRunner lifecycle', () => {
   });
 
 
-  it('accepts scoped completion while the shell still owns the root busy/inert state', async () => {
+  it('accepts scoped completion while the shell still owns the root busy/inert state without exposing that marker to semantic completion', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
     const providers = { generate: vi.fn(async () => ({ text: 'return agent.done("ready");' })) };
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
@@ -728,9 +728,13 @@ describe('AgentRunner lifecycle', () => {
       }
       throw new Error('Unexpected scoped test command');
     }) };
+    const completionAssessor = vi.fn(async (state: import('../src/shell/core/agent-runner').CompletionAssessmentState) => {
+      void state;
+      return { action: 'uncertain' as const, reason: 'evidence-uncertain' };
+    });
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
-    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
 
     const result = await new AgentRunner(db as never, providers as never, executor).run({
       appId,
@@ -738,10 +742,17 @@ describe('AgentRunner lifecycle', () => {
       trigger: 'Finish the scoped component',
       model,
       scopeSelector: '#panel',
+      completionAssessor,
       budget: { emergencyTurnCeiling: 1 },
     });
 
     expect(result).toEqual({ status: 'done', message: 'ready', turns: 1 });
+    expect(completionAssessor).toHaveBeenCalledTimes(1);
+    expect(completionAssessor.mock.calls[0]![0].evidence.buildingCount).toBe(0);
+    expect(info).toHaveBeenCalledWith(
+      'Completion assessment disagreed with deterministic completion; accepting deterministic result',
+      expect.objectContaining({ deterministicCompletion: 'accepted' }),
+    );
   });
 
   it('still rejects scoped completion when a nested unfinished region remains', async () => {
@@ -843,7 +854,7 @@ describe('AgentRunner lifecycle', () => {
     expect(JSON.stringify(state)).not.toContain('<main>');
   });
 
-  it('allows exactly one completion-assessment repair turn before succeeding', async () => {
+  it('allows exactly one strong completion-assessment repair turn before succeeding', async () => {
     const entries: HistoryEntry[] = [];
     const db = { history: {
       add: vi.fn(async (entry: HistoryEntry) => { entries.push(entry); return entries.length; }),
@@ -857,7 +868,7 @@ describe('AgentRunner lifecycle', () => {
       return { done: true, message: code.includes('ready') ? 'ready' : 'candidate' };
     }) };
     const completionAssessor = vi.fn()
-      .mockResolvedValueOnce({ action: 'uncertain' as const, reason: 'evidence-uncertain' })
+      .mockResolvedValueOnce({ action: 'continue' as const, reason: 'obvious-failure-remains' })
       .mockResolvedValueOnce({ action: 'finish' as const, reason: 'supported' });
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
@@ -877,7 +888,7 @@ describe('AgentRunner lifecycle', () => {
     ]));
   });
 
-  it('does not loop when completion remains uncertain after the bounded repair', async () => {
+  it('accepts deterministic completion immediately when semantic completion remains uncertain', async () => {
     const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
     const providers = { generate: vi.fn(async () => ({ text: 'return agent.done("candidate");' })) };
     const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
@@ -885,6 +896,31 @@ describe('AgentRunner lifecycle', () => {
       return { done: true, message: 'candidate' };
     }) };
     const completionAssessor = vi.fn(async () => ({ action: 'uncertain' as const, reason: 'evidence-uncertain' }));
+    vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
+    vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
+    vi.spyOn(console, 'info').mockImplementation(() => undefined);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+
+    const result = await new AgentRunner(db as never, providers as never, executor).run({
+      appId, appPrompt: 'Maintain it', trigger: 'Finish the requested behavior', model,
+      completionAssessor,
+      maxCompletionAssessmentRepairs: 1,
+      budget: { emergencyTurnCeiling: 10 },
+    });
+
+    expect(result).toEqual({ status: 'done', message: 'candidate', turns: 1 });
+    expect(providers.generate).toHaveBeenCalledTimes(1);
+    expect(completionAssessor).toHaveBeenCalledTimes(1);
+  });
+
+  it('stops after one bounded repair when strong semantic failure evidence remains', async () => {
+    const db = { history: { add: vi.fn(async () => 1), forApp: vi.fn(async () => []) } };
+    const providers = { generate: vi.fn(async () => ({ text: 'return agent.done("candidate");' })) };
+    const executor = { execute: vi.fn(async (_id: string, code: string): Promise<ExecutionResult> => {
+      if (code.includes('rootCount')) return { value: { rootHtml: '<main><button>Candidate</button></main>', rootCount: 1, outsideUiCount: 0, buildingCount: 0 } };
+      return { done: true, message: 'candidate' };
+    }) };
+    const completionAssessor = vi.fn(async () => ({ action: 'continue' as const, reason: 'obvious-failure-remains' }));
     vi.spyOn(console, 'groupCollapsed').mockImplementation(() => undefined);
     vi.spyOn(console, 'groupEnd').mockImplementation(() => undefined);
     vi.spyOn(console, 'info').mockImplementation(() => undefined);

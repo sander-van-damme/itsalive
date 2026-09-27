@@ -46,6 +46,11 @@ export interface CompletionAssessmentState {
   evidence: CompletionEvidence;
 }
 
+/**
+ * Semantic completion advice layered on top of deterministic verification.
+ * Deterministic checks remain authoritative for facts the runtime can prove.
+ * "uncertain" is advisory and must not veto an otherwise valid completion.
+ */
 export interface CompletionAssessmentDecision {
   action: "finish" | "continue" | "uncertain";
   reason: string;
@@ -522,7 +527,12 @@ export class AgentRunner {
                 assessment = { action: "finish", reason: "assessor-unavailable-deterministic-fallback" };
               }
               console.info('Completion assessment', sanitizeDiagnostic(assessment));
-              if (assessment.action !== "finish") {
+              if (assessment.action === "uncertain") {
+                console.info('Completion assessment disagreed with deterministic completion; accepting deterministic result', {
+                  deterministicCompletion: "accepted",
+                  semanticAssessment: sanitizeDiagnostic(assessment),
+                });
+              } else if (assessment.action === "continue") {
                 const maxRepairs = Math.max(0, Math.floor(options.maxCompletionAssessmentRepairs ?? 1));
                 const assessmentObservation = JSON.stringify({
                   completionAssessment: {
@@ -532,14 +542,20 @@ export class AgentRunner {
                     maxRepairs,
                   },
                 });
+                console.warn('Completion assessment disagreed with deterministic completion; using bounded semantic repair', {
+                  deterministicCompletion: "accepted",
+                  semanticAssessment: sanitizeDiagnostic(assessment),
+                  repairAttempt: completionAssessmentRepairs + 1,
+                  maxRepairs,
+                });
                 if (completionAssessmentRepairs >= maxRepairs) {
                   await historyStore.append({ appId: options.appId, role: "observation", kind: "error", content: assessmentObservation });
-                  console.warn('Completion assessment remained unresolved after bounded repair', sanitizeDiagnostic(assessment));
+                  console.warn('Strong completion failure evidence remained after bounded repair', sanitizeDiagnostic(assessment));
                   return budgetStopResult(
                     "verification-failure",
                     turn,
                     budget,
-                    "I stopped because the final observable result still did not support completion after a bounded repair attempt. Changes already applied were kept.",
+                    "I stopped because strong observable failure evidence remained after a bounded repair attempt. Changes already applied were kept.",
                   );
                 }
                 completionAssessmentRepairs++;
@@ -886,7 +902,10 @@ return component ? {
     evidence: completionEvidence(html, {
       inspectionAvailable: true,
       scopeSelector: selector,
-      buildingCount: typeof value.buildingCount === "number" ? value.buildingCount : 0,
+      // The shell deliberately keeps the assigned root marked busy/inert until
+      // orchestration reveals it. That lifecycle marker is not worker-owned
+      // unfinished work and must not bias the semantic completion assessor.
+      buildingCount: shellOwned ? 0 : (typeof value.buildingCount === "number" ? value.buildingCount : 0),
     }),
   };
 }
