@@ -22,7 +22,7 @@ export const CODING_MANAGER_PLAN_PROMPT = [
   "- Worker budget overrides may tighten, never expand, profile limits.",
   "- ROUTING HINT is advisory. PORTABLE SHELL PREFERENCES are user-controlled hints and apply only when compatible with explicit intent.",
   "- Keep tasks non-overlapping. The manager owns decomposition, canonical contracts, ordering, and integration verification.",
-  "- alivePolicy is declarative context, never permission for silent mutation. Keep target ids/hints stable and reactions reversible.",
+  "- alivePolicy is declarative context, never permission for silent mutation. For new worker-created elements, targetIds must use the owning scope prefix; if the exact id is unknown, omit targetIds and use exact targetHints. Keep reactions reversible.",
   "- Preserve CURRENT ALIVE POLICY when it still matches the resulting app; revise it only when app semantics change."
 ].join("\n");
 
