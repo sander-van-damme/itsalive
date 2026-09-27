@@ -5,7 +5,7 @@ import { captureScreenshot, formatScreenshotUnavailable } from "./screenshot";
 import type { RuntimeOptions } from "./types";
 import type { AgentRuntimeApi, ApplicationAiApi, ApplicationRuntimeApi } from "./globals";
 import { createApplicationStore } from "./application-store";
-import type { ApplicationAiDecisionRequest, ApplicationAiDecisionResult, BridgeMessage, ShellToAppPayload } from "../shared";
+import type { ApplicationAiDecisionRequest, ApplicationAiDecisionResult, BridgeMessage, ExecutionConsoleEntry, ShellToAppPayload } from "../shared";
 import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, isApplicationAiDecisionRequest, serializeError } from "../shared";
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
@@ -52,6 +52,52 @@ function bounded(value: unknown, maxBytes: number): unknown {
     catch { return value; }
   }
   return { truncated: true, size: new Blob([json]).size, preview: json.slice(0, Math.max(0, maxBytes - 200)) };
+}
+
+const MAX_EXECUTION_CONSOLE_ENTRIES = 100;
+const MAX_EXECUTION_CONSOLE_ARG_BYTES = 8_000;
+
+function executionConsoleArg(value: unknown): unknown {
+  if (value instanceof Error) return serializeError(value);
+  return bounded(value, MAX_EXECUTION_CONSOLE_ARG_BYTES);
+}
+
+function installExecutionConsoleCapture(entries: ExecutionConsoleEntry[]): () => void {
+  const originals = {
+    debug: console.debug,
+    log: console.log,
+    info: console.info,
+    warn: console.warn,
+    error: console.error,
+  };
+  const wrap = (level: ExecutionConsoleEntry["level"], original: (...args: unknown[]) => void) =>
+    (...args: unknown[]) => {
+      if (entries.length < MAX_EXECUTION_CONSOLE_ENTRIES) {
+        entries.push({ level, args: args.slice(0, 20).map(executionConsoleArg) });
+      }
+      original.call(console, ...args);
+    };
+  const wrappers = {
+    debug: wrap("debug", originals.debug),
+    log: wrap("log", originals.log),
+    info: wrap("info", originals.info),
+    warn: wrap("warn", originals.warn),
+    error: wrap("error", originals.error),
+  };
+
+  console.debug = wrappers.debug;
+  console.log = wrappers.log;
+  console.info = wrappers.info;
+  console.warn = wrappers.warn;
+  console.error = wrappers.error;
+
+  return () => {
+    if (console.debug === wrappers.debug) console.debug = originals.debug;
+    if (console.log === wrappers.log) console.log = originals.log;
+    if (console.info === wrappers.info) console.info = originals.info;
+    if (console.warn === wrappers.warn) console.warn = originals.warn;
+    if (console.error === wrappers.error) console.error = originals.error;
+  };
 }
 
 export async function startAppRuntime(options: RuntimeOptions) {
@@ -150,7 +196,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   installAgentApi(window, agentApi);
   const durability = installAgentDurabilityAudit();
 
-  const run = async (code: string): Promise<{ value: unknown; completion?: DoneSignal }> => {
+  const run = async (code: string, executionLogs: ExecutionConsoleEntry[]): Promise<{ value: unknown; completion?: DoneSignal }> => {
     let completion: DoneSignal | undefined;
     const executionAgent: AgentRuntimeApi = Object.freeze({
       memory,
@@ -161,9 +207,14 @@ export async function startAppRuntime(options: RuntimeOptions) {
         return signal;
       },
     });
-    const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
-    const value = await new AsyncFunction("agent", `"use strict";\n${code}`).call(window, executionAgent);
-    return { value, ...(completion ? { completion } : {}) };
+    const restoreConsole = installExecutionConsoleCapture(executionLogs);
+    try {
+      const AsyncFunction = Object.getPrototypeOf(async function () {}).constructor;
+      const value = await new AsyncFunction("agent", `"use strict";\n${code}`).call(window, executionAgent);
+      return { value, ...(completion ? { completion } : {}) };
+    } finally {
+      restoreConsole();
+    }
   };
 
   const listener = async (event: MessageEvent<unknown>) => {
@@ -178,11 +229,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
         bridge.post({ type: "result", result: { document } }, message.requestId);
       }
     } else if (message.type === "execute") {
+      const executionLogs: ExecutionConsoleEntry[] = [];
       try {
         ensureCanonicalAppRoot();
         let execution: { value: unknown; completion?: DoneSignal };
         try {
-          execution = await durability.runAgentCommand(() => run(message.code));
+          execution = await durability.runAgentCommand(() => run(message.code, executionLogs));
         } catch (error) {
           try {
             enforceCanonicalAppRootAfterAgentCommand();
@@ -194,11 +246,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
         enforceCanonicalAppRootAfterAgentCommand();
         const returnedCompletion = isDoneSignal(execution.value) ? execution.value : undefined;
         const completion = returnedCompletion ?? execution.completion;
-        if (completion) bridge.post({ type: "result", done: true, message: completion.message }, message.requestId);
-        else bridge.post({ type: "result", result: bounded(execution.value, options.maxResultBytes ?? 256_000) }, message.requestId);
+        const consolePayload = executionLogs.length ? { logs: executionLogs } : {};
+        if (completion) bridge.post({ type: "result", done: true, message: completion.message, ...consolePayload }, message.requestId);
+        else bridge.post({ type: "result", result: bounded(execution.value, options.maxResultBytes ?? 256_000), ...consolePayload }, message.requestId);
       } catch (error) {
         logs.add("error", ["Agent execution failed", error], "agent", error instanceof Error ? error.stack : undefined);
-        bridge.post({ type: "execution.error", error: serializeError(error) }, message.requestId);
+        bridge.post({ type: "execution.error", error: serializeError(error), ...(executionLogs.length ? { logs: executionLogs } : {}) }, message.requestId);
       }
     }
   };
