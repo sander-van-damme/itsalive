@@ -770,6 +770,7 @@ function managerPlanInput(options: CodingOrchestratorOptions, outline: unknown):
     "APP PURPOSE\n" + options.appPrompt.trim(),
     "TECHNICAL INTENT\n" + options.technicalIntent.trim(),
     "CURRENT ALIVE POLICY\n" + JSON.stringify(options.alivePolicy ?? null),
+    "ESTABLISHED APP CONTRACT\n" + JSON.stringify(options.technicalContract ? normalizeAppTechnicalContract(options.technicalContract) : null),
     options.triggerRoute || options.preferredWorkerProfile
       ? "ROUTING HINT\n" + JSON.stringify({
           route: options.triggerRoute ?? null,
@@ -798,6 +799,9 @@ function managerVerificationInput(
     "SHARED DESIGN\n" + list(plan.shared.design),
     "SHARED STATE\n" + list(plan.shared.state),
     "SHARED STORES\n" + list(plan.shared.stores),
+    "STABLE DOM IDS\n" + list(plan.shared.stableDomIds),
+    "SHARED SEMANTICS\n" + list(plan.shared.semantics),
+    "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "WORKER HANDOFFS\n" + (handoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
     "FINAL APP OUTLINE\n" + JSON.stringify(outline),
   ].join("\n\n");
@@ -820,6 +824,9 @@ function workerTaskInput(
     "SHARED CONTRACT REF\n" + task.sharedContractRef,
     "SHARED DESIGN CONTRACT\n" + list(plan.shared.design),
     "SHARED STATE CONTRACT\n" + list(plan.shared.state),
+    "STABLE DOM IDS\n" + list(plan.shared.stableDomIds),
+    "SHARED SEMANTICS\n" + list(plan.shared.semantics),
+    "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "DEPENDENCY HANDOFFS\n" + (dependencyHandoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
     "RELEVANT PLATFORM CAPABILITIES\n" + platformCapabilityHelp(task.capabilityIds),
   ].join("\n\n");
