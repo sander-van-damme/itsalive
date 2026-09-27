@@ -1,7 +1,13 @@
 export interface AppSharedContract {
   ref: string;
+  /** Stable cross-scope application.store fields with compact type/meaning descriptions. */
   state: string[];
+  /** application.store namespaces intentionally shared across worker scopes. */
   stores: string[];
+  /** Stable DOM ids that later modifications/repairs should reuse rather than reinvent. */
+  stableDomIds: string[];
+  /** Other cross-worker semantics that must remain stable across replans. */
+  semantics: string[];
 }
 
 export interface AppTechnicalContract {
@@ -13,6 +19,7 @@ export type SharedContractChangeKind = "reference" | "store" | "state" | "dom" |
 
 export interface SharedContractChange {
   kind: SharedContractChangeKind;
+  /** Machine-readable target such as application.store.sharedStore.movies or #movie-shortlist. */
   path: string;
   description: string;
   from?: string;
@@ -29,6 +36,8 @@ export interface SharedContractDiff {
   reference: boolean;
   state: boolean;
   stores: boolean;
+  dom: boolean;
+  semantic: boolean;
 }
 
 function normalizedList(values: readonly string[]): string[] {
@@ -44,6 +53,15 @@ export function normalizeAppSharedContract(contract: AppSharedContract): AppShar
     ref: contract.ref.trim(),
     state: normalizedList(contract.state),
     stores: [...new Set(normalizedList(contract.stores))],
+    stableDomIds: [...new Set(normalizedList(contract.stableDomIds))],
+    semantics: normalizedList(contract.semantics),
+  };
+}
+
+export function normalizeAppTechnicalContract(contract: AppTechnicalContract): AppTechnicalContract {
+  return {
+    revision: Math.max(1, Math.floor(contract.revision)),
+    shared: normalizeAppSharedContract(contract.shared),
   };
 }
 
@@ -57,6 +75,8 @@ export function sharedContractDiff(
     reference: left.ref !== right.ref,
     state: JSON.stringify(comparableList(left.state)) !== JSON.stringify(comparableList(right.state)),
     stores: JSON.stringify(comparableList(left.stores)) !== JSON.stringify(comparableList(right.stores)),
+    dom: JSON.stringify(comparableList(left.stableDomIds)) !== JSON.stringify(comparableList(right.stableDomIds)),
+    semantic: JSON.stringify(comparableList(left.semantics)) !== JSON.stringify(comparableList(right.semantics)),
   };
 }
 
@@ -65,7 +85,7 @@ export function sharedContractsEqual(
   proposed: AppSharedContract,
 ): boolean {
   const diff = sharedContractDiff(established, proposed);
-  return !diff.reference && !diff.state && !diff.stores;
+  return !diff.reference && !diff.state && !diff.stores && !diff.dom && !diff.semantic;
 }
 
 export function technicalContractForPlan(
@@ -74,8 +94,9 @@ export function technicalContractForPlan(
 ): AppTechnicalContract {
   const shared = normalizeAppSharedContract(proposed);
   if (!established) return { revision: 1, shared };
-  if (sharedContractsEqual(established.shared, shared)) return established;
-  return { revision: Math.max(1, Math.floor(established.revision)) + 1, shared };
+  const normalizedEstablished = normalizeAppTechnicalContract(established);
+  if (sharedContractsEqual(normalizedEstablished.shared, shared)) return established;
+  return { revision: normalizedEstablished.revision + 1, shared };
 }
 
 export function contractChangeCoversDiff(
@@ -85,5 +106,7 @@ export function contractChangeCoversDiff(
   const kinds = new Set(change.changes.map(entry => entry.kind));
   return (!diff.reference || kinds.has("reference"))
     && (!diff.state || kinds.has("state"))
-    && (!diff.stores || kinds.has("store"));
+    && (!diff.stores || kinds.has("store"))
+    && (!diff.dom || kinds.has("dom"))
+    && (!diff.semantic || kinds.has("semantic"));
 }
