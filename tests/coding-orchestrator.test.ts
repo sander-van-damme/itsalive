@@ -212,24 +212,30 @@ describe("coding manager and scoped workers", () => {
   });
 
   it("accepts fenced manager integration verification", () => {
-    const verification = '{"ok":true,"summary":"Ready","unresolved":[]}';
-    expect(parseManagerVerification(`\`\`\`json\n${verification}\n\`\`\``)).toEqual({
-      ok: true,
+    const verification = '{"summary":"Ready","concerns":[]}';
+    expect(parseManagerVerification("~~~json\n" + verification + "\n~~~")).toEqual({
       summary: "Ready",
-      unresolved: [],
+      concerns: [],
     });
-    expect(parseManagerVerification(`~~~json\n${verification}\n~~~`)).toEqual({
-      ok: true,
+    expect(parseManagerVerification("   " + verification + "   ")).toEqual({
       summary: "Ready",
-      unresolved: [],
+      concerns: [],
     });
   });
 
-  it("parses manager integration verification separately from worker results", () => {
-    expect(parseManagerVerification('{"ok":true,"summary":"Ready","unresolved":[]}')).toEqual({
-      ok: true,
-      summary: "Ready",
-      unresolved: [],
+  it("parses semantic and deterministic verification concerns separately", () => {
+    expect(parseManagerVerification(JSON.stringify({
+      summary: "Needs one behavior check.",
+      concerns: [
+        { kind: "semantic", criterionId: "form:1", reason: "The submit behavior is unsupported." },
+        { kind: "deterministic", scope: "#form", fact: "durability", reason: "A runtime-only listener remains." },
+      ],
+    }))).toEqual({
+      summary: "Needs one behavior check.",
+      concerns: [
+        { kind: "semantic", criterionId: "form:1", reason: "The submit behavior is unsupported." },
+        { kind: "deterministic", scope: "#form", fact: "durability", reason: "A runtime-only listener remains." },
+      ],
     });
   });
 
@@ -270,7 +276,7 @@ describe("coding manager and scoped workers", () => {
           return { text: JSON.stringify(plan), usage: { cost: 0.001 } };
         }
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"Stopwatch is ready.","unresolved":[]}', usage: { cost: 0.001 } };
+          return { text: '{"summary":"Stopwatch is ready.","concerns":[]}', usage: { cost: 0.001 } };
         }
         workerRequest++;
         if (workerRequest === 1) {
@@ -500,7 +506,15 @@ describe("coding manager and scoped workers", () => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
           return {
-            text: '{"ok":false,"summary":"The app is not ready for final integration verification.","unresolved":["false negative"]}',
+            text: JSON.stringify({
+              summary: "The form is ready.",
+              concerns: [{
+                kind: "deterministic",
+                scope: "#movie-form",
+                fact: "exists",
+                reason: "The component is absent.",
+              }],
+            }),
             usage: { cost: 0 },
           };
         }
@@ -526,8 +540,8 @@ describe("coding manager and scoped workers", () => {
     });
 
     expect(result).toMatchObject({
-      status: "manager-verification-failed",
-      message: "The app still needs work before it’s ready.",
+      status: "done",
+      message: "The form is ready.",
       handoffs: [expect.objectContaining({ status: "done", scope: "#movie-form" })],
     });
 
@@ -543,6 +557,168 @@ describe("coding manager and scoped workers", () => {
     expect(workerRequest?.system).toContain("shell owns build/progress attributes");
     expect(workerRequest?.system).not.toContain("region is inert");
     expect(workerRequest?.system).not.toContain("setAttribute(\"inert\")");
+  });
+
+  it("keeps a real semantic acceptance concern authoritative when deterministic scope evidence is healthy", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [], stores: [] },
+      tasks: [{
+        id: "panel",
+        goal: "Build a panel with a working submit action",
+        scope: "#panel",
+        acceptanceCriteria: ["Submitting the form updates the result"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "shared-v1",
+        parallel: false,
+      }],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return {
+            text: JSON.stringify({
+              summary: "The submit behavior still needs work.",
+              concerns: [{
+                kind: "semantic",
+                criterionId: "panel:1",
+                reason: "Current evidence does not establish that submitting updates the result.",
+              }],
+            }),
+            usage: { cost: 0 },
+          };
+        }
+        return { text: 'return agent.done(JSON.stringify({status:"done",changed:["panel rendered"],verified:["panel visible"]}));', usage: { cost: 0 } };
+      }),
+    };
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set())).run({
+      appId,
+      appPrompt: "A form panel",
+      technicalIntent: "Build the panel and make submit update the result.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+    });
+
+    expect(result).toMatchObject({
+      status: "manager-verification-failed",
+      message: "The submit behavior still needs work.",
+      verificationEvidence: [expect.objectContaining({ scope: "#panel", ok: true })],
+    });
+  });
+
+  it("blocks completion when deterministic scope evidence is unhealthy even if the verifier is optimistic", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [], stores: [] },
+      tasks: [{
+        id: "panel",
+        goal: "Build the panel",
+        scope: "#panel",
+        acceptanceCriteria: ["Panel is usable"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "shared-v1",
+        parallel: false,
+      }],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return { text: '{"summary":"Everything looks ready.","concerns":[]}', usage: { cost: 0 } };
+        }
+        return { text: 'return agent.done(JSON.stringify({status:"done",changed:["panel built"],verified:["panel usable"]}));', usage: { cost: 0 } };
+      }),
+    };
+    const base = parallelExecutor(new Set<string>());
+    const executor = {
+      execute: vi.fn(async (id: string, code: string, options: { signal: AbortSignal; timeoutMs: number }): Promise<ExecutionResult> => {
+        if (code.includes("itsalive:integration-scope-evidence")) {
+          return { value: [{
+            scope: "#panel",
+            exists: true,
+            meaningfulUi: true,
+            nestedBuildingCount: 0,
+            buildOwner: null,
+            rootBuilding: false,
+            ariaBusy: null,
+            durabilityAvailable: true,
+            runtimeOnlyEventListenerCount: 1,
+          }] };
+        }
+        void options;
+        return base.execute(id, code);
+      }),
+    };
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, executor).run({
+      appId,
+      appPrompt: "A panel",
+      technicalIntent: "Build a usable panel.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+    });
+
+    expect(result).toMatchObject({
+      status: "manager-verification-failed",
+      message: "The app still needs work before it’s ready.",
+      verificationEvidence: [expect.objectContaining({
+        scope: "#panel",
+        ok: false,
+        runtimeOnlyEventListenerCount: 1,
+      })],
+    });
+  });
+
+  it("does not turn a deterministically healthy app into a false negative when verifier output is malformed", async () => {
+    const plan = {
+      shared: { ref: "shared-v1", design: [], state: [], stores: [] },
+      tasks: [{
+        id: "panel",
+        goal: "Build the panel",
+        scope: "#panel",
+        acceptanceCriteria: ["Panel is usable"],
+        dependencies: [],
+        capabilityIds: [],
+        profile: "component-worker",
+        sharedContractRef: "shared-v1",
+        parallel: false,
+      }],
+    };
+    const providers = {
+      generate: vi.fn(async (request: GenerateRequest) => {
+        if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
+        if (request.purpose === "coding manager integration verification") {
+          return { text: "I think this is probably ready.", usage: { cost: 0 } };
+        }
+        return { text: 'return agent.done(JSON.stringify({status:"done",changed:["panel built"],verified:["panel usable"]}));', usage: { cost: 0 } };
+      }),
+    };
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+
+    const result = await new CodingOrchestrator(isolatedDb() as never, providers as never, parallelExecutor(new Set())).run({
+      appId,
+      appPrompt: "A panel",
+      technicalIntent: "Build a usable panel.",
+      managerProfile: profile("coding-manager"),
+      resolveProfile: async id => profile(id),
+      managerTrace: managerTrace(),
+    });
+
+    expect(result).toMatchObject({
+      status: "done",
+      message: "Done — it’s ready.",
+      verificationEvidence: [expect.objectContaining({ scope: "#panel", ok: true })],
+    });
+    expect(warn).toHaveBeenCalledWith(
+      "Coding manager verification was malformed; falling back to deterministic integration evidence",
+      expect.any(Error),
+    );
   });
 
   it("lets current deterministic scope evidence override a stale blocked handoff when final verification confirms the app works", async () => {
@@ -566,7 +742,7 @@ describe("coding manager and scoped workers", () => {
         requests.push(structuredClone(request));
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"The grocery list is ready.","unresolved":[]}', usage: { cost: 0 } };
+          return { text: '{"summary":"The grocery list is ready.","concerns":[]}', usage: { cost: 0 } };
         }
         return {
           text: 'return agent.done(JSON.stringify({status:"blocked",changed:["UI is present"],verified:["Current controls render"],unresolved:["completion transport was interrupted"]}));',
@@ -655,7 +831,7 @@ describe("coding manager and scoped workers", () => {
         requests.push(structuredClone(request));
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0.001 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"Parallel build ready.","unresolved":[]}', usage: { cost: 0.001 } };
+          return { text: '{"summary":"Parallel build ready.","concerns":[]}', usage: { cost: 0.001 } };
         }
         const scope = request.trace?.scope;
         if (scope === "#component-a") {
@@ -757,7 +933,7 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"ready","unresolved":[]}', usage: { cost: 0 } };
+          return { text: '{"summary":"ready","concerns":[]}', usage: { cost: 0 } };
         }
         const taskText = request.messages.map(message => message.content).join("\n");
         if (taskText.includes("TASK ID\nfirst")) {
@@ -807,7 +983,13 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":false,"summary":"One component failed.","unresolved":["bad"]}', usage: { cost: 0 } };
+          return {
+            text: JSON.stringify({
+              summary: "One component still needs work.",
+              concerns: [{ kind: "semantic", criterionId: "bad:1", reason: "The requested bad behavior was not completed." }],
+            }),
+            usage: { cost: 0 },
+          };
         }
         if (request.trace?.scope === "#bad") throw new Error("worker B exploded");
         return { text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"good survived\\"]}");', usage: { cost: 0 } };
@@ -825,7 +1007,7 @@ describe("coding manager and scoped workers", () => {
       onLifecycle: summary => lifecycles.push(structuredClone(summary) as unknown as Record<string, number | string>),
     });
 
-    expect(result).toMatchObject({ status: "manager-verification-failed", message: "One component failed." });
+    expect(result).toMatchObject({ status: "manager-verification-failed", message: "One component still needs work." });
     expect(result.handoffs).toEqual(expect.arrayContaining([
       expect.objectContaining({ status: "done", scope: "#good", changed: ["good survived"] }),
       expect.objectContaining({ status: "failed", scope: "#bad", unresolved: ["worker B exploded"] }),
@@ -1070,7 +1252,7 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"ready","unresolved":[]}', usage: { cost: 0 } };
+          return { text: '{"summary":"ready","concerns":[]}', usage: { cost: 0 } };
         }
         return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),
@@ -1114,7 +1296,13 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":false,"summary":"not ready","unresolved":["missing integration"]}', usage: { cost: 0 } };
+          return {
+            text: JSON.stringify({
+              summary: "The panel still needs work.",
+              concerns: [{ kind: "semantic", criterionId: "panel:1", reason: "The requested behavior is not supported." }],
+            }),
+            usage: { cost: 0 },
+          };
         }
         return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),

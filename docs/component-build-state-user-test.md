@@ -1,6 +1,8 @@
 # Component-scoped build-state UX validation
 
-Issue #90 changes unfinished-app feedback from the previous full/frosted **Building…** treatment to shell-owned component lifecycle states. This checklist is the human validation step; automated tests cover state wiring, accessibility attributes, partial readiness, failure localization, and reduced-motion CSS.
+Issue #90 moved unfinished-app feedback away from the old full-page frosted **Building…** treatment. #141 later simplified the lifecycle further: shell progress is component-scoped, but lifecycle state must not make already-rendered controls inert or block pointer/keyboard interaction.
+
+This checklist validates the current behavior. Automated tests cover lifecycle wiring, partial readiness, failure localization, copy, and reduced-motion CSS.
 
 Keep these constants for the round:
 
@@ -11,23 +13,23 @@ Keep these constants for the round:
 - no manual DOM edits during a run;
 - export logs after each test.
 
-## Test 1 — Independent regions reveal as they finish
+## Test 1 — Independent parts become ready progressively
 
-**Scenario:** Create an app with at least three visibly distinct regions, where two can be built independently and a third depends on both. A dashboard with controls, visualization, and history is suitable.
+**Scenario:** Create an app with at least three visibly distinct parts, where two can be built independently and a third depends on both. A dashboard with controls, visualization, and history is suitable.
 
 **Probe:** Partial readiness and localized build treatment.
 
 **Observe:**
 
-- unfinished regions alone have the quiet lifecycle treatment;
-- a verified region becomes fully visible and interactive while another region is still working;
+- unfinished parts alone have the quiet lifecycle treatment;
+- a completed part remains visible and interactive while another part is still working;
 - no whole-page frosted overlay or technical **Building…** label appears;
-- shell progress reports a partial count such as “1/3 regions ready” rather than implying the whole app is blocked;
-- final completion waits for manager integration verification.
+- shell progress uses product-facing copy such as “1 of 3 parts complete” and does not expose “regions”, workers, handoffs, or verification jargon;
+- final completion is reported only after current integration evidence and semantic acceptance criteria are reconciled.
 
-**Informative result:** We should be able to use a finished region before the entire app is complete without mistaking unfinished controls for usable controls.
+**Informative result:** Finished UI should remain usable while other parts continue, without making the whole app look blocked.
 
-## Test 2 — One component fails while a sibling succeeds
+## Test 2 — One part fails while a sibling succeeds
 
 **Scenario:** Use a task likely to exercise two independent components, then deliberately provoke or retain a failure in one component while another completes.
 
@@ -35,32 +37,33 @@ Keep these constants for the round:
 
 **Observe:**
 
-- the successful region stays usable;
-- only the affected scope remains inert and visually unfinished/failed;
-- shell progress says one region needs attention instead of presenting a whole-app failure;
-- follow-up repair work is scoped to the failed region where practical;
-- final manager verification does not declare the app complete while that region remains unresolved.
+- the successful part stays usable;
+- the affected scope may retain shell lifecycle styling, but the shell does not add `inert` to disable it;
+- shell progress says that a part needs attention instead of presenting a whole-app failure;
+- follow-up repair work is scoped to the affected part where practical;
+- unhealthy deterministic integration evidence prevents the app from being declared complete.
 
-**Informative result:** A local worker failure should feel like a local unfinished part, not a reset or failure of already-good work.
+**Informative result:** A local failure should feel like a local problem, not a reset or lockout of already-good work.
 
 ## Test 3 — Reduced motion and readiness clarity
 
-**Scenario:** Repeat a multi-region build with the OS/browser reduced-motion preference enabled.
+**Scenario:** Repeat a multi-part build with the OS/browser reduced-motion preference enabled.
 
 **Probe:** Accessibility and visual quietness.
 
 **Observe:**
 
-- unfinished regions remain distinguishable without motion;
+- unfinished parts remain distinguishable without motion;
 - no pulse/shimmer/frost animation is required to understand readiness;
-- `inert` and `aria-busy` prevent unfinished interaction while work is active;
-- ready regions lose the shell lifecycle attributes and become interactive immediately;
-- failed/blocked regions remain non-interactive but are not reported as still busy.
+- lifecycle overlays do not intercept pointer input;
+- `aria-busy`/build-state attributes describe shell lifecycle without being treated as worker-owned unfinished work;
+- completed parts lose shell lifecycle treatment promptly;
+- failed/blocked parts are reported as needing attention rather than as perpetually “still building”.
 
-**Informative result:** The treatment should communicate “not ready yet” through structure/state rather than animation.
+**Informative result:** Readiness should be communicated through state and copy, not animation or disabled controls.
 
 ## Comparison baseline
 
-Compare these runs against the 2026-09-23 test evidence that motivated #90: the old global frosted **Building…** treatment made substantially complete-looking UI appear blocked and did not communicate which region was actually unfinished.
+Compare against the 2026-09-23 evidence that motivated #90 and the 2026-09-26 reliability run that motivated #141. The old global/inert treatment made substantially complete-looking UI appear unusable and exposed internal “region” language.
 
-Do not close #90 based on automated tests alone. Close it after this human pass confirms the revised treatment is clearer in the real shell/app composition, or file focused follow-up issues for any remaining visual/copy problems.
+When this checklist finds a mismatch, file a focused follow-up issue with the current build, browser, lifecycle/log evidence, and visible user impact.
