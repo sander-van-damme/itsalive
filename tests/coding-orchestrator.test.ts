@@ -270,7 +270,7 @@ describe("coding manager and scoped workers", () => {
           return { text: JSON.stringify(plan), usage: { cost: 0.001 } };
         }
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"Stopwatch is ready.","unresolved":[]}', usage: { cost: 0.001 } };
+          return { text: '{"summary":"Stopwatch is ready.","concerns":[]}', usage: { cost: 0.001 } };
         }
         workerRequest++;
         if (workerRequest === 1) {
@@ -574,7 +574,7 @@ describe("coding manager and scoped workers", () => {
         requests.push(structuredClone(request));
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"The grocery list is ready.","unresolved":[]}', usage: { cost: 0 } };
+          return { text: '{"summary":"The grocery list is ready.","concerns":[]}', usage: { cost: 0 } };
         }
         return {
           text: 'return agent.done(JSON.stringify({status:"blocked",changed:["UI is present"],verified:["Current controls render"],unresolved:["completion transport was interrupted"]}));',
@@ -663,7 +663,7 @@ describe("coding manager and scoped workers", () => {
         requests.push(structuredClone(request));
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0.001 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"Parallel build ready.","unresolved":[]}', usage: { cost: 0.001 } };
+          return { text: '{"summary":"Parallel build ready.","concerns":[]}', usage: { cost: 0.001 } };
         }
         const scope = request.trace?.scope;
         if (scope === "#component-a") {
@@ -765,7 +765,7 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"ready","unresolved":[]}', usage: { cost: 0 } };
+          return { text: '{"summary":"ready","concerns":[]}', usage: { cost: 0 } };
         }
         const taskText = request.messages.map(message => message.content).join("\n");
         if (taskText.includes("TASK ID\nfirst")) {
@@ -1084,7 +1084,7 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":true,"summary":"ready","unresolved":[]}', usage: { cost: 0 } };
+          return { text: '{"summary":"ready","concerns":[]}', usage: { cost: 0 } };
         }
         return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),
