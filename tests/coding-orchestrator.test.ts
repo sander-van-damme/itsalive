@@ -212,24 +212,30 @@ describe("coding manager and scoped workers", () => {
   });
 
   it("accepts fenced manager integration verification", () => {
-    const verification = '{"ok":true,"summary":"Ready","unresolved":[]}';
-    expect(parseManagerVerification(`\`\`\`json\n${verification}\n\`\`\``)).toEqual({
-      ok: true,
+    const verification = '{"summary":"Ready","concerns":[]}';
+    expect(parseManagerVerification(`\`\`json\n${verification}\n\`\`\`)).toEqual({
       summary: "Ready",
-      unresolved: [],
+      concerns: [],
     });
     expect(parseManagerVerification(`~~~json\n${verification}\n~~~`)).toEqual({
-      ok: true,
       summary: "Ready",
-      unresolved: [],
+      concerns: [],
     });
   });
 
-  it("parses manager integration verification separately from worker results", () => {
-    expect(parseManagerVerification('{"ok":true,"summary":"Ready","unresolved":[]}')).toEqual({
-      ok: true,
-      summary: "Ready",
-      unresolved: [],
+  it("parses semantic and deterministic verification concerns separately", () => {
+    expect(parseManagerVerification(JSON.stringify({
+      summary: "Needs one behavior check.",
+      concerns: [
+        { kind: "semantic", criterionId: "form:1", reason: "The submit behavior is unsupported." },
+        { kind: "deterministic", scope: "#form", fact: "durability", reason: "A runtime-only listener remains." },
+      ],
+    }))).toEqual({
+      summary: "Needs one behavior check.",
+      concerns: [
+        { kind: "semantic", criterionId: "form:1", reason: "The submit behavior is unsupported." },
+        { kind: "deterministic", scope: "#form", fact: "durability", reason: "A runtime-only listener remains." },
+      ],
     });
   });
 
