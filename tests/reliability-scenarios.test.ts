@@ -34,7 +34,7 @@ class FixtureProvider {
     }
     if (request.purpose === "coding manager integration verification") {
       return {
-        text: JSON.stringify({ ok: true, summary: this.verificationSummary, unresolved: [] }),
+        text: JSON.stringify({ summary: this.verificationSummary, concerns: [] }),
         usage: { inputTokens: 80, outputTokens: 20, cost: 0.001 },
       };
     }
