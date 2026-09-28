@@ -429,7 +429,8 @@ describe("coding manager and scoped workers", () => {
     expect(workerRequests).toHaveLength(2);
     expect(workerRequests[0]!.system).toContain("JavaScript console");
     expect(workerRequests[0]!.system).toContain("return agent.done(JSON.stringify(handoff))");
-    expect(workerRequests[0]!.system).toContain("Do not verify by inserting");
+    expect(workerRequests[0]!.system).toContain("Prefer read-only verification");
+    expect(workerRequests[0]!.system).toContain("await agent.verify");
     expect(workerRequests[0]!.system).toContain("Durable data belongs in application.store");
     expect(workerRequests[0]!.system).toContain("transient command listeners");
     const firstContext = workerRequests[0]!.messages.map(message => message.content).join("\n");
@@ -439,6 +440,8 @@ describe("coding manager and scoped workers", () => {
     expect(firstContext).toContain("DOM ID PREFIX\ntimer-controls-");
     expect(firstContext).toContain("STORE NAMESPACE\ntimer_controls");
     expect(firstContext).toContain("SELECTED PLATFORM API HELP");
+    expect(firstContext).toContain("agent.verify<T>(work: () => T | Promise<T>): Promise<T>");
+    expect(firstContext).toContain("temporary DOM and application.store mutations are always rolled back");
     expect(secondContext).toContain("ASSIGNED SCOPE\n#lap-list");
     expect(secondContext).toContain("DOM ID PREFIX\nlap-list-");
     expect(secondContext).toContain("STORE NAMESPACE\nlap_list");
