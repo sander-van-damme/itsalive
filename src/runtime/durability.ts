@@ -49,6 +49,7 @@ export function installAgentDurabilityAudit() {
   const originalRemove = EventTarget.prototype.removeEventListener;
   const registrations = new Set<RuntimeListenerRegistration>();
   let agentExecutionDepth = 0;
+  let trackingSuppressionDepth = 0;
 
   const patchedAdd = function (
     this: EventTarget,
@@ -56,7 +57,7 @@ export function installAgentDurabilityAudit() {
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
   ) {
-    if (agentExecutionDepth > 0 && listener && !document.currentScript) {
+    if (agentExecutionDepth > 0 && trackingSuppressionDepth === 0 && listener && !document.currentScript) {
       registrations.add({
         target: this,
         type,
@@ -154,6 +155,14 @@ export function installAgentDurabilityAudit() {
     },
     audit,
     checkpoint,
+    async runWithoutTracking<T>(work: () => Promise<T>): Promise<T> {
+      trackingSuppressionDepth++;
+      try {
+        return await work();
+      } finally {
+        trackingSuppressionDepth--;
+      }
+    },
     destroy() {
       EventTarget.prototype.addEventListener = originalAdd;
       EventTarget.prototype.removeEventListener = originalRemove;
