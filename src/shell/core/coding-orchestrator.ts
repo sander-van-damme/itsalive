@@ -766,7 +766,7 @@ function workerTaskInput(
     "SHARED SEMANTICS\n" + list(plan.shared.semantics),
     "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "DEPENDENCY HANDOFFS\n" + (dependencyHandoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
-    "SELECTED PLATFORM API HELP\n" + platformCapabilityHelp(task.capabilityIds),
+    "SELECTED PLATFORM API HELP\n" + platformCapabilityHelp([...new Set<PlatformCapabilityId>(["verify", ...task.capabilityIds])]),
   ].join("\n\n");
 }
 
