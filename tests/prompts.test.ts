@@ -48,6 +48,9 @@ describe("role-owned agent prompts", () => {
   it("keeps final verification evidence-based and user-safe", () => {
     expect(CODING_MANAGER_VERIFY_PROMPT).toContain("CURRENT SCOPE EVIDENCE");
     expect(CODING_MANAGER_VERIFY_PROMPT).toContain("Current deterministic evidence is authoritative");
+    expect(CODING_MANAGER_VERIFY_PROMPT).toContain("semantic concerns");
+    expect(CODING_MANAGER_VERIFY_PROMPT).toContain("deterministic concerns");
+    expect(CODING_MANAGER_VERIFY_PROMPT).toContain("criterionId");
     expect(CODING_MANAGER_VERIFY_PROMPT).toContain("Handoff status is historical diagnostic evidence");
     expect(CODING_MANAGER_VERIFY_PROMPT).toContain("user-facing product language");
     expect(CODING_MANAGER_VERIFY_PROMPT).not.toContain("write DOM mutation code");
