@@ -18,6 +18,7 @@ export interface ApplicationRuntimeApi {
 export interface AgentRuntimeApi {
   memory(): Promise<string>;
   screenshot: typeof captureScreenshot;
+  verify<T>(work: () => T | Promise<T>): Promise<T>;
   done(message?: string): unknown;
 }
 
