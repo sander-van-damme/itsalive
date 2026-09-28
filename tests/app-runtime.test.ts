@@ -194,6 +194,7 @@ describe("injected app runtime namespaces", () => {
       logs: [{ level: "warn", args: ["probe changed"] }],
       error: expect.objectContaining({ message: "rollback me" }),
     }));
+    delete window.application.store.transactionProbe;
   });
 
   it("rejects structured agent.done objects immediately instead of emitting an invalid result that times out", async () => {
