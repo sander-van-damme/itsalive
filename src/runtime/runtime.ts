@@ -260,6 +260,11 @@ export async function startAppRuntime(options: RuntimeOptions) {
     }
   };
 
+  // Responses to the initial restore request arrive on this same MessagePort.
+  // Install the listener before the first request so AppBridge.acceptResponse()
+  // can settle document.response instead of deadlocking startup.
+  bridge.addMessageListener(listener);
+
   const saved = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "document.request" }, 10_000);
   if (saved.type !== "document.response") throw new Error(`Unexpected document response: ${saved.type}`);
   if (saved.error) throw new Error(saved.error.message);
@@ -290,7 +295,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
       );
     },
   });
-  bridge.addMessageListener(listener);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => {
