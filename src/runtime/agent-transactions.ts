@@ -4,7 +4,6 @@ import { restoreAppDocument, serializeAppDocument } from "./persistence";
 export interface AgentTransactionAutosave {
   suspend(): void;
   resume(): void;
-  schedule(): void;
 }
 
 export interface AgentTransactionDurability {
@@ -79,7 +78,6 @@ export function createAgentTransactionController(
       } finally {
         activeCommandDepth--;
         options.autosave.resume();
-        options.autosave.schedule();
       }
     },
 
