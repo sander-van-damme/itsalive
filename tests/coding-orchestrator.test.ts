@@ -650,7 +650,8 @@ describe("coding manager and scoped workers", () => {
             runtimeOnlyEventListenerCount: 1,
           }] };
         }
-        return base.execute(id, code, options);
+        void options;
+        return base.execute(id, code);
       }),
     };
 
