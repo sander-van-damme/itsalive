@@ -38,6 +38,16 @@ export function createAgentTransactionController(
     rollbackDurability: options.durability.checkpoint(),
   });
 
+  const begin = (): CapturedAgentState => {
+    options.autosave.suspend();
+    try {
+      return capture();
+    } catch (error) {
+      options.autosave.resume();
+      throw error;
+    }
+  };
+
   const rollback = async (captured: CapturedAgentState): Promise<void> => {
     captured.rollbackDurability();
     options.applicationStore.restore(captured.document.store);
@@ -59,8 +69,7 @@ export function createAgentTransactionController(
 
   return {
     async runCommand<T>(work: () => Promise<T>): Promise<T> {
-      options.autosave.suspend();
-      const captured = capture();
+      const captured = begin();
       activeCommandDepth++;
       try {
         return await work();
@@ -79,8 +88,7 @@ export function createAgentTransactionController(
         throw new Error("agent.verify() is available only while an agent command is executing");
       }
 
-      options.autosave.suspend();
-      const captured = capture();
+      const captured = begin();
       let result: T | undefined;
       let failure: unknown;
       try {
