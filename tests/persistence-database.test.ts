@@ -80,12 +80,10 @@ describe("runtime document persistence client", () => {
     expect(persist).not.toHaveBeenCalled();
 
     autosave.resume();
-    autosave.schedule();
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(persist).not.toHaveBeenCalled();
 
     autosave.resume();
-    autosave.schedule();
     await new Promise(resolve => setTimeout(resolve, 10));
     expect(persist).toHaveBeenCalledOnce();
     expect(persist.mock.calls[0]?.[0]).toMatchObject({ html: expect.stringContaining("Changed while nested") });
