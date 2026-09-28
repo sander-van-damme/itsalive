@@ -814,9 +814,9 @@ return component ? {
     evidence: completionEvidence(html, {
       inspectionAvailable: true,
       scopeSelector: selector,
-      // The shell deliberately keeps the assigned root marked busy/inert until
-      // orchestration reveals it. That lifecycle marker is not worker-owned
-      // unfinished work and must not bias the semantic completion assessor.
+      // Shell-owned lifecycle markers may remain on the assigned root while
+      // orchestration is still active. They are not worker-owned unfinished work
+      // and must not bias the semantic completion assessor.
       buildingCount: shellOwned ? 0 : (typeof value.buildingCount === "number" ? value.buildingCount : 0),
       runtimeOnlyEventListenerCount,
     }),
