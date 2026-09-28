@@ -1,1 +1,0 @@
-Intentional no-op source-path change used to verify that the Cloudflare wildcard-app build/deploy is triggered from main.
