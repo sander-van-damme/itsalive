@@ -67,6 +67,30 @@ describe("runtime document persistence client", () => {
     autosave.disconnect();
   });
 
+  it("keeps autosave suspended until every nested transaction resumes", async () => {
+    document.body.innerHTML = '<main id="itsalive-root">Nested</main>';
+    const persist = vi.fn();
+    const autosave = installAutosave(persist, 1);
+
+    autosave.suspend();
+    autosave.suspend();
+    document.getElementById("itsalive-root")!.textContent = "Changed while nested";
+    autosave.schedule();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(persist).not.toHaveBeenCalled();
+
+    autosave.resume();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(persist).not.toHaveBeenCalled();
+
+    autosave.resume();
+    await new Promise(resolve => setTimeout(resolve, 10));
+    expect(persist).toHaveBeenCalledOnce();
+    expect(persist.mock.calls[0]?.[0]).toMatchObject({ html: expect.stringContaining("Changed while nested") });
+
+    autosave.disconnect();
+  });
+
   it("removes every installed autosave listener when disconnected", () => {
     const added = vi.spyOn(window, "addEventListener");
     const removed = vi.spyOn(window, "removeEventListener");

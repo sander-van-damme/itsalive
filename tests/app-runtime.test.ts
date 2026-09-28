@@ -103,7 +103,7 @@ describe("injected app runtime namespaces", () => {
     expect(Object.keys(window.application)).toEqual(["store", "ai", "escalate"]);
     expect(Object.keys(window.application.ai)).toEqual(["text", "choose", "score", "decide", "probability"]);
     expect(Object.isFrozen(window.application.ai)).toBe(true);
-    expect(Object.keys(window.agent)).toEqual(["memory", "screenshot", "done"]);
+    expect(Object.keys(window.agent)).toEqual(["memory", "screenshot", "verify", "done"]);
     expect(Object.isFrozen(window.application)).toBe(true);
     expect(Object.isFrozen(window.agent)).toBe(true);
     expect(window).not.toHaveProperty("itsalive");
@@ -172,6 +172,29 @@ describe("injected app runtime namespaces", () => {
     expect(state.posts).toContainEqual({ payload: { type: "result", result: '<main data-native-dom="yes"><h1>Native DOM</h1></main>' }, requestId: "native-dom" });
     expect(state.posts).toContainEqual({ payload: { type: "result", done: true, message: "ok" }, requestId: "done" });
     expect(state.posts).toContainEqual({ payload: { type: "result", result: "HTML" }, requestId: "screenshot" });
+  });
+
+  it("keeps agent.verify coding-only outside command execution", async () => {
+    await expect(window.agent.verify(() => true)).rejects.toThrow("only while an agent command is executing");
+  });
+
+  it("rolls application.store back when an agent command fails after mutating it", async () => {
+    window.application.store.transactionProbe = { value: "before" };
+    emit({
+      type: "execute",
+      code: 'application.store.transactionProbe.value = "after"; console.warn("probe changed"); throw new Error("rollback me");',
+      requestId: "transaction-rollback",
+    });
+    await nextTask();
+
+    expect((window.application.store.transactionProbe as { value: string }).value).toBe("before");
+    const response = state.posts.find(({ requestId }) => requestId === "transaction-rollback");
+    expect(response?.payload).toEqual(expect.objectContaining({
+      type: "execution.error",
+      logs: [{ level: "warn", args: ["probe changed"] }],
+      error: expect.objectContaining({ message: "rollback me" }),
+    }));
+    delete window.application.store.transactionProbe;
   });
 
   it("rejects structured agent.done objects immediately instead of emitting an invalid result that times out", async () => {

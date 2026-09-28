@@ -10,6 +10,7 @@ import { MAX_SAVED_DOCUMENT_CHARACTERS, appDocumentCharacterSize, isApplicationA
 import { installInteractionObserver } from "./interactions";
 import { ensureCanonicalAppRoot, enforceCanonicalAppRootAfterAgentCommand } from "./app-root";
 import { installAgentDurabilityAudit } from "./durability";
+import { createAgentTransactionController, type AgentTransactionController } from "./agent-transactions";
 
 const DONE = Symbol("agent-done");
 
@@ -182,6 +183,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (response.error) throw new Error(response.error.message);
     return response.memory ?? "";
   };
+  const transactionState: { controller?: AgentTransactionController } = {};
+  const verify = async <T>(work: () => T | Promise<T>): Promise<T> => {
+    if (typeof work !== "function") throw new TypeError("agent.verify(work) requires a verification callback");
+    if (!transactionState.controller) throw new Error("agent.verify() is unavailable until the app runtime is ready");
+    return transactionState.controller.verify(work);
+  };
 
   const applicationApi: ApplicationRuntimeApi = Object.freeze({
     store: applicationStore.store,
@@ -191,6 +198,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
   const agentApi: AgentRuntimeApi = Object.freeze({
     memory,
     screenshot,
+    verify,
     done,
   });
   installApplicationApi(window, applicationApi);
@@ -202,6 +210,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     const executionAgent: AgentRuntimeApi = Object.freeze({
       memory,
       screenshot,
+      verify,
       done: (message?: string) => {
         const signal = doneSignal(message);
         completion = signal;
@@ -233,18 +242,12 @@ export async function startAppRuntime(options: RuntimeOptions) {
       const executionLogs: ExecutionConsoleEntry[] = [];
       try {
         ensureCanonicalAppRoot();
-        let execution: { value: unknown; completion?: DoneSignal };
-        try {
-          execution = await durability.runAgentCommand(() => run(message.code, executionLogs));
-        } catch (error) {
-          try {
-            enforceCanonicalAppRootAfterAgentCommand();
-          } catch (rootError) {
-            logs.add("warn", ["Canonical app root repaired after a failed agent command", rootError], "agent", rootError instanceof Error ? rootError.stack : undefined);
-          }
-          throw error;
-        }
-        enforceCanonicalAppRootAfterAgentCommand();
+        if (!transactionState.controller) throw new Error("Agent execution transaction controller is not ready");
+        const execution = await transactionState.controller.runCommand(async () => {
+          const result = await durability.runAgentCommand(() => run(message.code, executionLogs));
+          enforceCanonicalAppRootAfterAgentCommand();
+          return result;
+        });
         const returnedCompletion = isDoneSignal(execution.value) ? execution.value : undefined;
         const completion = returnedCompletion ?? execution.completion;
         const consolePayload = executionLogs.length ? { logs: executionLogs } : {};
@@ -256,7 +259,6 @@ export async function startAppRuntime(options: RuntimeOptions) {
       }
     }
   };
-  bridge.addMessageListener(listener);
 
   const saved = await bridge.request<BridgeMessage<ShellToAppPayload>>({ type: "document.request" }, 10_000);
   if (saved.type !== "document.response") throw new Error(`Unexpected document response: ${saved.type}`);
@@ -275,6 +277,20 @@ export async function startAppRuntime(options: RuntimeOptions) {
     bridge.post({ type: "document.save", document });
   }, options.autosaveDelay, () => applicationStore.snapshot());
   applicationStore.setOnDirty(autosave.schedule);
+  transactionState.controller = createAgentTransactionController({
+    applicationStore,
+    autosave,
+    durability,
+    onRollbackError: error => {
+      logs.add(
+        "error",
+        ["Agent transaction rollback failed", error],
+        "agent",
+        error instanceof Error ? error.stack : undefined,
+      );
+    },
+  });
+  bridge.addMessageListener(listener);
   const interactions = installInteractionObserver(bridge);
   bridge.post({ type: "status", status: "ready" });
   return { bridge, appId, autosave, destroy: () => {

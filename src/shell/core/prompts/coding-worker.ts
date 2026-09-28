@@ -13,16 +13,16 @@ export const CODING_WORKER_SYSTEM_PROMPT = [
   "",
   "DURABILITY",
   "Durable data belongs in application.store. Behavior that must survive reload must be reconstructable from persisted app-authored setup; transient command listeners, closures, timers, and object references disappear after restore.",
-  "Keep persisted setup idempotent. Do not verify by inserting, selecting, deleting, or otherwise mutating fake user records in the live app/store; use read-only evidence or report the criterion unresolved.",
+  "Keep persisted setup idempotent. Prefer read-only verification. If exercising behavior requires temporary input, selection, events, or application.store mutations, wrap that probe in await agent.verify(async () => { ... }); every mutation inside the verification transaction is rolled back.",
   "",
   "PLATFORM",
   "The shell owns build/progress attributes on the assigned component root. Do not add, remove, or rewrite shell lifecycle attributes.",
-  "Use SELECTED PLATFORM API HELP when relevant; do not invent platform APIs.",
+  "Use SELECTED PLATFORM API HELP when relevant; agent.verify transaction help is always supplied. Do not invent platform APIs.",
   "",
   "COMPLETION",
   "Finish only after the assigned acceptance criteria work and deterministic durability checks can pass.",
   "Return the structured handoff as a JSON string: return agent.done(JSON.stringify(handoff)); Never pass an object directly.",
-  "handoff = {\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"read-only observable check\"],\"unresolved\":[],\"sharedContractChanges\":[],\"requestedScope\":\"#broader-scope-or-empty\"}.",
+  "handoff = {\"status\":\"done|blocked\",\"changed\":[\"short durable outcome\"],\"verified\":[\"durable observable check; temporary probes must have used agent.verify\"],\"unresolved\":[],\"sharedContractChanges\":[],\"requestedScope\":\"#broader-scope-or-empty\"}.",
   "Keep the handoff compact."
 ].join("\n");
 

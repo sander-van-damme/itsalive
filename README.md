@@ -137,10 +137,11 @@ Coding commands also receive a small `agent` global:
 ```ts
 agent.memory(): Promise<string>
 agent.screenshot(input?: { scale?: number }): Promise<string>
+agent.verify<T>(work: () => T | Promise<T>): Promise<T>
 agent.done(message?: string): unknown
 ```
 
-`agent.memory()` exposes curated shell-owned context rather than raw history records. `agent.screenshot()` is best-effort visual verification, while `agent.done()` signals that the current coding task is complete. The naming is intentionally a semantic nudge: persist `application.*` behavior into the app when appropriate; use `agent.*` for coding and inspection.
+`agent.memory()` exposes curated shell-owned context rather than raw history records. `agent.screenshot()` is best-effort visual inspection. `agent.verify()` is a coding-only transaction for behavior checks that need temporary DOM/input/event/store mutations: it returns the callback result but always restores the pre-verification app document and `application.store`, including when the callback throws. Read-only checks are still preferred. `agent.done()` signals that the current coding task is complete. The naming is intentionally a semantic nudge: persist `application.*` behavior into the app when appropriate; use `agent.*` for coding and inspection.
 
 The shell may internally retain richer histories, behavioral summaries, logs, diagnostics, provider response distributions, and model metadata without making those internal schemas part of the generated-app API. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
 

@@ -5,6 +5,8 @@ interface RuntimeListenerRegistration {
   type: string;
   listener: EventListenerOrEventListenerObject;
   capture: boolean;
+  once: boolean;
+  passive: boolean;
   signal?: AbortSignal;
 }
 
@@ -18,6 +20,14 @@ function captureOption(options?: boolean | AddEventListenerOptions): boolean {
 
 function signalOption(options?: boolean | AddEventListenerOptions): AbortSignal | undefined {
   return typeof options === "object" && options ? options.signal ?? undefined : undefined;
+}
+
+function onceOption(options?: boolean | AddEventListenerOptions): boolean {
+  return typeof options === "object" && options ? Boolean(options.once) : false;
+}
+
+function passiveOption(options?: boolean | AddEventListenerOptions): boolean {
+  return typeof options === "object" && options ? Boolean(options.passive) : false;
 }
 
 function isRelevantTarget(target: EventTarget, root: Element | null): boolean {
@@ -39,6 +49,7 @@ export function installAgentDurabilityAudit() {
   const originalRemove = EventTarget.prototype.removeEventListener;
   const registrations = new Set<RuntimeListenerRegistration>();
   let agentExecutionDepth = 0;
+  let trackingSuppressionDepth = 0;
 
   const patchedAdd = function (
     this: EventTarget,
@@ -46,12 +57,14 @@ export function installAgentDurabilityAudit() {
     listener: EventListenerOrEventListenerObject | null,
     options?: boolean | AddEventListenerOptions,
   ) {
-    if (agentExecutionDepth > 0 && listener && !document.currentScript) {
+    if (agentExecutionDepth > 0 && trackingSuppressionDepth === 0 && listener && !document.currentScript) {
       registrations.add({
         target: this,
         type,
         listener,
         capture: captureOption(options),
+        once: onceOption(options),
+        passive: passiveOption(options),
         signal: signalOption(options),
       });
     }
@@ -100,6 +113,37 @@ export function installAgentDurabilityAudit() {
     writable: false,
   });
 
+  const checkpoint = (): (() => void) => {
+    const before = new Set(registrations);
+    return () => {
+      for (const registration of [...registrations]) {
+        if (before.has(registration)) continue;
+        originalRemove.call(
+          registration.target,
+          registration.type,
+          registration.listener,
+          registration.capture,
+        );
+        registrations.delete(registration);
+      }
+      for (const registration of before) {
+        if (registrations.has(registration) || registration.signal?.aborted) continue;
+        originalAdd.call(
+          registration.target,
+          registration.type,
+          registration.listener,
+          {
+            capture: registration.capture,
+            once: registration.once,
+            passive: registration.passive,
+            ...(registration.signal ? { signal: registration.signal } : {}),
+          },
+        );
+        registrations.add(registration);
+      }
+    };
+  };
+
   return {
     async runAgentCommand<T>(work: () => Promise<T>): Promise<T> {
       agentExecutionDepth++;
@@ -110,6 +154,15 @@ export function installAgentDurabilityAudit() {
       }
     },
     audit,
+    checkpoint,
+    async runWithoutTracking<T>(work: () => Promise<T>): Promise<T> {
+      trackingSuppressionDepth++;
+      try {
+        return await work();
+      } finally {
+        trackingSuppressionDepth--;
+      }
+    },
     destroy() {
       EventTarget.prototype.addEventListener = originalAdd;
       EventTarget.prototype.removeEventListener = originalRemove;
