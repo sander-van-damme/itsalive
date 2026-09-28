@@ -10,6 +10,7 @@ const state = vi.hoisted(() => ({
   requests: [] as Record<string, unknown>[],
   screenshotError: undefined as Error | undefined,
   listener: undefined as ((event: MessageEvent<unknown>) => void) | undefined,
+  documentRequestHadListener: false,
 }));
 
 vi.mock("../src/runtime/bridge", () => ({
@@ -33,10 +34,13 @@ vi.mock("../src/runtime/bridge", () => ({
         return { type: "ai.decision.response", result };
       }
       if (payload.type === "memory.request") return { type: "memory.response", memory: "Prefers fast feedback." };
-      if (payload.type === "document.request") return {
-        type: "document.response",
-        document: { html: "<!doctype html><html><body><main>shell saved</main></body></html>", scripts: [], store: "{\"counter\":{\"count\":3}}" },
-      };
+      if (payload.type === "document.request") {
+        state.documentRequestHadListener = Boolean(state.listener);
+        return {
+          type: "document.response",
+          document: { html: "<!doctype html><html><body><main>shell saved</main></body></html>", scripts: [], store: "{\"counter\":{\"count\":3}}" },
+        };
+      }
       throw new Error(`Unexpected request: ${String(payload.type)}`);
     }
   },
@@ -85,6 +89,7 @@ describe("injected app runtime namespaces", () => {
   beforeAll(async () => {
     state.posts.length = 0;
     state.requests.length = 0;
+    state.documentRequestHadListener = false;
     const { startAppRuntime } = await import("../src/runtime/runtime");
     await startAppRuntime({
       rootOrigin: "https://itsalive.test",
@@ -111,6 +116,7 @@ describe("injected app runtime namespaces", () => {
     expect(Object.getOwnPropertyDescriptor(window, "agent")).toMatchObject({ writable: false, configurable: false, enumerable: false });
     expect(state.restoredWithApi).toBe(true);
     expect(state.requests[0]).toEqual({ type: "document.request" });
+    expect(state.documentRequestHadListener).toBe(true);
     expect(state.restoredDocument?.html).toContain("shell saved");
     expect(state.restoredDocument?.store).toBe('{"counter":{"count":3}}');
     expect(state.posts.some(({ payload }) => payload.type === "status" && payload.status === "ready")).toBe(true);
