@@ -1,4 +1,4 @@
-export type PlatformCapabilityId = "done" | "ai" | "escalate" | "memory" | "screenshot" | "store";
+export type PlatformCapabilityId = "done" | "verify" | "ai" | "escalate" | "memory" | "screenshot" | "store";
 
 export interface PlatformApiDoc {
   name: string;
@@ -105,6 +105,16 @@ export const PLATFORM_APIS: readonly PlatformApiDoc[] = Object.freeze([
     notes: "Screenshot unavailability alone is not a reason to fail the task; use DOM evidence instead.",
   },
   {
+    name: "agent.verify",
+    capabilityId: "verify",
+    signature: "agent.verify<T>(work: () => T | Promise<T>): Promise<T>",
+    purpose: "Run a coding-time verification transaction whose temporary DOM and application.store mutations are always rolled back.",
+    parameters: "work is a synchronous or async verification callback. Prefer read-only checks; use this transaction when exercising behavior requires temporary mutations or events.",
+    returns: "The callback result after restoring the exact pre-verification app document/store state. Callback errors are rethrown after rollback.",
+    example: "const observed = await agent.verify(async () => { input.value = 'probe'; button.click(); return result.textContent; });",
+    notes: "Verification transactions are coding-only. Do not use them for implementation changes because all mutations made inside work are intentionally discarded.",
+  },
+  {
     name: "agent.done",
     capabilityId: "done",
     signature: "agent.done(message?: string): unknown",
@@ -117,6 +127,7 @@ export const PLATFORM_APIS: readonly PlatformApiDoc[] = Object.freeze([
 
 export const PLATFORM_CAPABILITIES = Object.freeze([
   { id: "done", purpose: "Finish a coding task with the runtime completion signal." },
+  { id: "verify", purpose: "Exercise behavior in a rollback-only coding verification transaction." },
   { id: "ai", purpose: "Generate text or make bounded AI decisions inside the running app." },
   { id: "escalate", purpose: "Escalate an app-level problem to the external coding agent." },
   { id: "memory", purpose: "Read curated coding context." },
