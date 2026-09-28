@@ -69,24 +69,37 @@ export function installAutosave(
 ) {
   let timer: number | undefined;
   let suspensionDepth = 0;
+  let pendingWhileSuspended = false;
+
+  const queueSave = () => {
+    window.clearTimeout(timer);
+    timer = window.setTimeout(save, delay);
+  };
 
   const save = () => {
     window.clearTimeout(timer);
     timer = undefined;
-    if (suspensionDepth === 0) persist(serializeAppDocument(storeSnapshot()));
+    if (suspensionDepth > 0) {
+      pendingWhileSuspended = true;
+      return;
+    }
+    pendingWhileSuspended = false;
+    persist(serializeAppDocument(storeSnapshot()));
+  };
+
+  const scheduleSave = () => {
+    if (suspensionDepth > 0) {
+      pendingWhileSuspended = true;
+      return;
+    }
+    queueSave();
   };
 
   const observer = new MutationObserver(() => {
-    if (suspensionDepth > 0) return;
-    window.clearTimeout(timer);
-    timer = window.setTimeout(save, delay);
+    scheduleSave();
   });
   observer.observe(document.documentElement, { attributes: true, childList: true, characterData: true, subtree: true });
 
-  const scheduleSave = () => {
-    window.clearTimeout(timer);
-    timer = window.setTimeout(save, delay);
-  };
   const saveOnPageHide = () => save();
 
   addEventListener("input", scheduleSave, true);
@@ -97,7 +110,10 @@ export function installAutosave(
     save,
     schedule: scheduleSave,
     suspend: () => { suspensionDepth++; },
-    resume: () => { suspensionDepth = Math.max(0, suspensionDepth - 1); },
+    resume: () => {
+      suspensionDepth = Math.max(0, suspensionDepth - 1);
+      if (suspensionDepth === 0 && pendingWhileSuspended) queueSave();
+    },
     disconnect: () => {
       observer.disconnect();
       window.clearTimeout(timer);
