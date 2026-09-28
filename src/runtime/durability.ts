@@ -100,6 +100,35 @@ export function installAgentDurabilityAudit() {
     writable: false,
   });
 
+  const checkpoint = (): (() => void) => {
+    const before = new Set(registrations);
+    return () => {
+      for (const registration of [...registrations]) {
+        if (before.has(registration)) continue;
+        originalRemove.call(
+          registration.target,
+          registration.type,
+          registration.listener,
+          registration.capture,
+        );
+        registrations.delete(registration);
+      }
+      for (const registration of before) {
+        if (registrations.has(registration) || registration.signal?.aborted) continue;
+        originalAdd.call(
+          registration.target,
+          registration.type,
+          registration.listener,
+          {
+            capture: registration.capture,
+            ...(registration.signal ? { signal: registration.signal } : {}),
+          },
+        );
+        registrations.add(registration);
+      }
+    };
+  };
+
   return {
     async runAgentCommand<T>(work: () => Promise<T>): Promise<T> {
       agentExecutionDepth++;
@@ -110,6 +139,7 @@ export function installAgentDurabilityAudit() {
       }
     },
     audit,
+    checkpoint,
     destroy() {
       EventTarget.prototype.addEventListener = originalAdd;
       EventTarget.prototype.removeEventListener = originalRemove;
