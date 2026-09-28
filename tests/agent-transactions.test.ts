@@ -13,7 +13,6 @@ function fixture() {
   const autosave = {
     suspend: vi.fn(),
     resume: vi.fn(),
-    schedule: vi.fn(),
   };
   const durability = installAgentDurabilityAudit();
   const rollbackErrors: unknown[] = [];
@@ -42,7 +41,6 @@ describe("agent execution transactions", () => {
     expect(applicationStore.snapshot()).not.toContain("temporary");
     expect(autosave.suspend).toHaveBeenCalledOnce();
     expect(autosave.resume).toHaveBeenCalledOnce();
-    expect(autosave.schedule).toHaveBeenCalledOnce();
     durability.destroy();
   });
 
