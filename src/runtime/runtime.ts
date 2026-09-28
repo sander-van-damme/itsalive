@@ -183,11 +183,11 @@ export async function startAppRuntime(options: RuntimeOptions) {
     if (response.error) throw new Error(response.error.message);
     return response.memory ?? "";
   };
-  let transactions: AgentTransactionController | undefined;
+  const transactionState: { controller?: AgentTransactionController } = {};
   const verify = async <T>(work: () => T | Promise<T>): Promise<T> => {
     if (typeof work !== "function") throw new TypeError("agent.verify(work) requires a verification callback");
-    if (!transactions) throw new Error("agent.verify() is unavailable until the app runtime is ready");
-    return transactions.verify(work);
+    if (!transactionState.controller) throw new Error("agent.verify() is unavailable until the app runtime is ready");
+    return transactionState.controller.verify(work);
   };
 
   const applicationApi: ApplicationRuntimeApi = Object.freeze({
@@ -242,8 +242,8 @@ export async function startAppRuntime(options: RuntimeOptions) {
       const executionLogs: ExecutionConsoleEntry[] = [];
       try {
         ensureCanonicalAppRoot();
-        if (!transactions) throw new Error("Agent execution transaction controller is not ready");
-        const execution = await transactions.runCommand(async () => {
+        if (!transactionState.controller) throw new Error("Agent execution transaction controller is not ready");
+        const execution = await transactionState.controller.runCommand(async () => {
           const result = await durability.runAgentCommand(() => run(message.code, executionLogs));
           enforceCanonicalAppRootAfterAgentCommand();
           return result;
@@ -277,7 +277,7 @@ export async function startAppRuntime(options: RuntimeOptions) {
     bridge.post({ type: "document.save", document });
   }, options.autosaveDelay, () => applicationStore.snapshot());
   applicationStore.setOnDirty(autosave.schedule);
-  transactions = createAgentTransactionController({
+  transactionState.controller = createAgentTransactionController({
     applicationStore,
     autosave,
     durability,
