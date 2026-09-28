@@ -68,16 +68,16 @@ export function installAutosave(
   storeSnapshot: () => string = () => "{}",
 ) {
   let timer: number | undefined;
-  let suspended = false;
+  let suspensionDepth = 0;
 
   const save = () => {
     window.clearTimeout(timer);
     timer = undefined;
-    if (!suspended) persist(serializeAppDocument(storeSnapshot()));
+    if (suspensionDepth === 0) persist(serializeAppDocument(storeSnapshot()));
   };
 
   const observer = new MutationObserver(() => {
-    if (suspended) return;
+    if (suspensionDepth > 0) return;
     window.clearTimeout(timer);
     timer = window.setTimeout(save, delay);
   });
@@ -96,8 +96,8 @@ export function installAutosave(
   return {
     save,
     schedule: scheduleSave,
-    suspend: () => { suspended = true; },
-    resume: () => { suspended = false; },
+    suspend: () => { suspensionDepth++; },
+    resume: () => { suspensionDepth = Math.max(0, suspensionDepth - 1); },
     disconnect: () => {
       observer.disconnect();
       window.clearTimeout(timer);
