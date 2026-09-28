@@ -22,7 +22,8 @@ describe("role-owned agent prompts", () => {
     expect(CODING_WORKER_SYSTEM_PROMPT).toContain("Durable data belongs in application.store");
     expect(CODING_WORKER_SYSTEM_PROMPT).toContain("transient command listeners");
     expect(CODING_WORKER_SYSTEM_PROMPT).toContain("shell owns build/progress attributes");
-    expect(CODING_WORKER_SYSTEM_PROMPT).toContain("Do not verify by inserting");
+    expect(CODING_WORKER_SYSTEM_PROMPT).toContain("Prefer read-only verification");
+    expect(CODING_WORKER_SYSTEM_PROMPT).toContain("await agent.verify");
     expect(CODING_WORKER_SYSTEM_PROMPT).toContain("return agent.done(JSON.stringify(handoff))");
     expect(CODING_WORKER_SYSTEM_PROMPT).toContain("SELECTED PLATFORM API HELP");
     expect(CODING_WORKER_SYSTEM_PROMPT).not.toContain("getElementById");
