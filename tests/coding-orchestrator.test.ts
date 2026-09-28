@@ -500,7 +500,15 @@ describe("coding manager and scoped workers", () => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
           return {
-            text: '{"ok":false,"summary":"The app is not ready for final integration verification.","unresolved":["false negative"]}',
+            text: JSON.stringify({
+              summary: "The form is ready.",
+              concerns: [{
+                kind: "deterministic",
+                scope: "#movie-form",
+                fact: "exists",
+                reason: "The component is absent.",
+              }],
+            }),
             usage: { cost: 0 },
           };
         }
@@ -526,8 +534,8 @@ describe("coding manager and scoped workers", () => {
     });
 
     expect(result).toMatchObject({
-      status: "manager-verification-failed",
-      message: "The app still needs work before it’s ready.",
+      status: "done",
+      message: "The form is ready.",
       handoffs: [expect.objectContaining({ status: "done", scope: "#movie-form" })],
     });
 
@@ -807,7 +815,13 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":false,"summary":"One component failed.","unresolved":["bad"]}', usage: { cost: 0 } };
+          return {
+            text: JSON.stringify({
+              summary: "One component still needs work.",
+              concerns: [{ kind: "semantic", criterionId: "bad:1", reason: "The requested bad behavior was not completed." }],
+            }),
+            usage: { cost: 0 },
+          };
         }
         if (request.trace?.scope === "#bad") throw new Error("worker B exploded");
         return { text: 'return agent.done("{\\"status\\":\\"done\\",\\"changed\\":[\\"good survived\\"]}");', usage: { cost: 0 } };
@@ -825,7 +839,7 @@ describe("coding manager and scoped workers", () => {
       onLifecycle: summary => lifecycles.push(structuredClone(summary) as unknown as Record<string, number | string>),
     });
 
-    expect(result).toMatchObject({ status: "manager-verification-failed", message: "One component failed." });
+    expect(result).toMatchObject({ status: "manager-verification-failed", message: "One component still needs work." });
     expect(result.handoffs).toEqual(expect.arrayContaining([
       expect.objectContaining({ status: "done", scope: "#good", changed: ["good survived"] }),
       expect.objectContaining({ status: "failed", scope: "#bad", unresolved: ["worker B exploded"] }),
@@ -1114,7 +1128,13 @@ describe("coding manager and scoped workers", () => {
       generate: vi.fn(async (request: GenerateRequest) => {
         if (request.purpose === "coding manager plan") return { text: JSON.stringify(plan), usage: { cost: 0 } };
         if (request.purpose === "coding manager integration verification") {
-          return { text: '{"ok":false,"summary":"not ready","unresolved":["missing integration"]}', usage: { cost: 0 } };
+          return {
+            text: JSON.stringify({
+              summary: "The panel still needs work.",
+              concerns: [{ kind: "semantic", criterionId: "panel:1", reason: "The requested behavior is not supported." }],
+            }),
+            usage: { cost: 0 },
+          };
         }
         return { text: 'return agent.done("{\\"status\\":\\"done\\"}");', usage: { cost: 0 } };
       }),
