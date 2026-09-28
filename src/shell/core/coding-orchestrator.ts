@@ -56,10 +56,24 @@ export interface CodingManagerPlan {
   alivePolicy?: AlivePolicyProposal;
 }
 
+export type DeterministicVerificationFact = "exists" | "meaningful-ui" | "lifecycle-ready" | "durability";
+
+export type ManagerVerificationConcern =
+  | {
+      kind: "semantic";
+      criterionId: string;
+      reason: string;
+    }
+  | {
+      kind: "deterministic";
+      scope: string;
+      fact: DeterministicVerificationFact;
+      reason: string;
+    };
+
 export interface ManagerVerification {
-  ok: boolean;
   summary: string;
-  unresolved: string[];
+  concerns: ManagerVerificationConcern[];
 }
 
 export type CodingOrchestratorStatus =
@@ -397,16 +411,24 @@ export class CodingOrchestrator {
         signal: controller.signal,
       }, options.credential);
       const finalCostStop = rootBudget.recordUsage(verified.usage?.cost);
-      const verification = parseManagerVerification(verified.text);
       const deterministicIntegrationOk = verificationEvidence.every(evidence => evidence.ok);
-      if (verification.ok && deterministicIntegrationOk) {
+      let verification: ManagerVerification | undefined;
+      try {
+        verification = parseManagerVerification(verified.text);
+      } catch (error) {
+        console.warn("Coding manager verification was malformed; falling back to deterministic integration evidence", error);
+      }
+      const concerns = verification
+        ? effectiveManagerVerificationConcerns(verification, plan, verificationEvidence)
+        : [];
+      if (deterministicIntegrationOk && concerns.length === 0) {
         if (plan.alivePolicy && options.onAlivePolicyProposal) {
           try { await options.onAlivePolicyProposal(plan.alivePolicy); }
           catch (error) { console.warn("Alive policy proposal was not activated", error); }
         }
         return {
           status: "done",
-          message: userFacingManagerSummary(verification.summary, true),
+          message: userFacingManagerSummary(verification?.summary, true),
           plan,
           handoffs,
           workerTurns,
@@ -418,7 +440,7 @@ export class CodingOrchestrator {
       return {
         status: "manager-verification-failed",
         message: deterministicIntegrationOk
-          ? userFacingManagerSummary(verification.summary, false)
+          ? userFacingManagerSummary(verification?.summary, false)
           : "The app still needs work before it’s ready.",
         plan,
         handoffs,
@@ -740,6 +762,7 @@ function managerVerificationInput(
     "SHARED SEMANTICS\n" + list(plan.shared.semantics),
     "DECLARED CONTRACT CHANGE\n" + JSON.stringify(plan.contractChange ?? null),
     "WORKER HANDOFFS\n" + (handoffs.map(compactWorkerHandoff).join("\n") || "(none)"),
+    "ACCEPTANCE CRITERIA\n" + JSON.stringify(managerAcceptanceCriteria(plan)),
     "CURRENT SCOPE EVIDENCE\n" + JSON.stringify(verificationEvidence),
     "FINAL APP OUTLINE\n" + JSON.stringify(outline),
   ].join("\n\n");
@@ -982,12 +1005,78 @@ export function parseManagerVerification(raw: string): ManagerVerification {
   catch { throw new Error("Coding manager verification returned invalid JSON"); }
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("Coding manager verification returned an invalid result");
   const record = parsed as Record<string, unknown>;
-  if (typeof record.ok !== "boolean") throw new Error("Coding manager verification omitted ok");
+  if (!Array.isArray(record.concerns)) throw new Error("Coding manager verification omitted concerns");
+
+  const concerns = record.concerns.slice(0, 12).map((value, index): ManagerVerificationConcern => {
+    if (!value || typeof value !== "object" || Array.isArray(value)) {
+      throw new Error("Coding manager verification concern " + (index + 1) + " is invalid");
+    }
+    const concern = value as Record<string, unknown>;
+    const reason = typeof concern.reason === "string" ? concern.reason.trim().slice(0, 700) : "";
+    if (!reason) throw new Error("Coding manager verification concern " + (index + 1) + " omitted reason");
+    if (concern.kind === "semantic") {
+      const criterionId = typeof concern.criterionId === "string" ? concern.criterionId.trim().slice(0, 160) : "";
+      if (!criterionId) throw new Error("Semantic verification concern omitted criterionId");
+      return { kind: "semantic", criterionId, reason };
+    }
+    if (concern.kind === "deterministic") {
+      const scope = typeof concern.scope === "string" ? concern.scope.trim() : "";
+      const fact = concern.fact;
+      const allowedFacts: DeterministicVerificationFact[] = ["exists", "meaningful-ui", "lifecycle-ready", "durability"];
+      if (!SIMPLE_SCOPE.test(scope) || typeof fact !== "string" || !allowedFacts.includes(fact as DeterministicVerificationFact)) {
+        throw new Error("Deterministic verification concern has an invalid scope or fact");
+      }
+      return { kind: "deterministic", scope, fact: fact as DeterministicVerificationFact, reason };
+    }
+    throw new Error("Coding manager verification concern has an invalid kind");
+  });
+
   return {
-    ok: record.ok,
     summary: typeof record.summary === "string" ? record.summary.trim().slice(0, 1_000) : "",
-    unresolved: stringArray(record.unresolved, 12),
+    concerns,
   };
+}
+
+function managerAcceptanceCriteria(plan: CodingManagerPlan): Array<{ id: string; scope: string; criterion: string }> {
+  return plan.tasks.flatMap(task => task.acceptanceCriteria.map((criterion, index) => ({
+    id: task.id + ":" + (index + 1),
+    scope: task.scope,
+    criterion,
+  })));
+}
+
+function effectiveManagerVerificationConcerns(
+  verification: ManagerVerification,
+  plan: CodingManagerPlan,
+  evidence: readonly IntegrationScopeEvidence[],
+): ManagerVerificationConcern[] {
+  const validCriterionIds = new Set(managerAcceptanceCriteria(plan).map(entry => entry.id));
+  const evidenceByScope = new Map(evidence.map(entry => [entry.scope, entry]));
+  const effective: ManagerVerificationConcern[] = [];
+
+  for (const concern of verification.concerns) {
+    if (concern.kind === "semantic") {
+      if (validCriterionIds.has(concern.criterionId)) effective.push(concern);
+      else console.warn("Ignoring verification concern for an unknown acceptance criterion", concern);
+      continue;
+    }
+
+    const current = evidenceByScope.get(concern.scope);
+    const supported = current ? deterministicConcernSupported(concern.fact, current) : false;
+    if (supported) effective.push(concern);
+    else console.warn("Ignoring verification claim contradicted by current deterministic evidence", concern);
+  }
+  return effective;
+}
+
+function deterministicConcernSupported(
+  fact: DeterministicVerificationFact,
+  evidence: IntegrationScopeEvidence,
+): boolean {
+  if (fact === "exists") return !evidence.exists;
+  if (fact === "meaningful-ui") return evidence.exists && !evidence.meaningfulUi;
+  if (fact === "lifecycle-ready") return evidence.nestedBuildingCount > 0 || evidence.workerOwnedBusy;
+  return !evidence.durabilityAvailable || evidence.runtimeOnlyEventListenerCount > 0;
 }
 
 function workerHandoff(
