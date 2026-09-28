@@ -8,6 +8,7 @@ export interface AgentTransactionAutosave {
 
 export interface AgentTransactionDurability {
   checkpoint(): () => void;
+  runWithoutTracking<T>(work: () => Promise<T>): Promise<T>;
 }
 
 export interface AgentTransactionOptions {
@@ -50,7 +51,7 @@ export function createAgentTransactionController(
   const rollback = async (captured: CapturedAgentState): Promise<void> => {
     captured.rollbackDurability();
     options.applicationStore.restore(captured.document.store);
-    await restoreAppDocument(captured.document);
+    await options.durability.runWithoutTracking(() => restoreAppDocument(captured.document));
   };
 
   const rollbackPreserving = async (
