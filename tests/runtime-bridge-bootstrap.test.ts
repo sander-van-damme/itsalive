@@ -45,7 +45,7 @@ describe("runtime bridge bootstrap", () => {
       expect(documentRequestIndex).toBeGreaterThanOrEqual(0);
       expect(readyIndex).toBeGreaterThan(documentRequestIndex);
       expect(document.querySelector("[data-itsalive-bootstrap]")).toBeNull();
-      expect(document.getElementById("app")).not.toBeNull();
+      expect(document.getElementById("itsalive-root")).not.toBeNull();
     } finally {
       runtime.destroy();
       channel.port1.close();
