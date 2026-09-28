@@ -213,7 +213,7 @@ describe("coding manager and scoped workers", () => {
 
   it("accepts fenced manager integration verification", () => {
     const verification = '{"summary":"Ready","concerns":[]}';
-    expect(parseManagerVerification(`\`\`json\n${verification}\n\`\`\`)).toEqual({
+    expect(parseManagerVerification(`\`\`\`json\n${verification}\n\`\`\`)).toEqual({
       summary: "Ready",
       concerns: [],
     });
