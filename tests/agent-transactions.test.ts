@@ -6,6 +6,7 @@ import { installAgentDurabilityAudit } from "../src/runtime/durability";
 import { serializeAppDocument } from "../src/runtime/persistence";
 
 function fixture() {
+  document.documentElement.lang = "en";
   document.head.innerHTML = "<title>Transaction test</title>";
   document.body.innerHTML = '<main id="itsalive-root"><section id="feature"><input id="name" value="real"><button id="action">Act</button><p id="result">ready</p></section></main>';
   const applicationStore = createApplicationStore();
