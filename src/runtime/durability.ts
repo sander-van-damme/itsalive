@@ -5,6 +5,8 @@ interface RuntimeListenerRegistration {
   type: string;
   listener: EventListenerOrEventListenerObject;
   capture: boolean;
+  once: boolean;
+  passive: boolean;
   signal?: AbortSignal;
 }
 
@@ -18,6 +20,14 @@ function captureOption(options?: boolean | AddEventListenerOptions): boolean {
 
 function signalOption(options?: boolean | AddEventListenerOptions): AbortSignal | undefined {
   return typeof options === "object" && options ? options.signal ?? undefined : undefined;
+}
+
+function onceOption(options?: boolean | AddEventListenerOptions): boolean {
+  return typeof options === "object" && options ? Boolean(options.once) : false;
+}
+
+function passiveOption(options?: boolean | AddEventListenerOptions): boolean {
+  return typeof options === "object" && options ? Boolean(options.passive) : false;
 }
 
 function isRelevantTarget(target: EventTarget, root: Element | null): boolean {
@@ -52,6 +62,8 @@ export function installAgentDurabilityAudit() {
         type,
         listener,
         capture: captureOption(options),
+        once: onceOption(options),
+        passive: passiveOption(options),
         signal: signalOption(options),
       });
     }
@@ -121,6 +133,8 @@ export function installAgentDurabilityAudit() {
           registration.listener,
           {
             capture: registration.capture,
+            once: registration.once,
+            passive: registration.passive,
             ...(registration.signal ? { signal: registration.signal } : {}),
           },
         );
