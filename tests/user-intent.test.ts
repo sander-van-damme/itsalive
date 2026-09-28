@@ -199,6 +199,10 @@ describe("user-facing intent boundary", () => {
     expect(selected).toContain("Returns:");
     expect(selected).toContain("await application.ai.decide('Is this word English?', { word })");
     expect(selected).toContain("Handle null explicitly");
+    const verification = platformCapabilityHelp(["verify"]);
+    expect(index).toContain("agent.verify<T>(work: () => T | Promise<T>): Promise<T>");
+    expect(verification).toContain("temporary DOM and application.store mutations are always rolled back");
+    expect(verification).toContain("Do not use them for implementation changes");
     expect(selected).not.toContain("Jev");
   });
 
