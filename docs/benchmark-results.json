@@ -1,0 +1,42 @@
+{
+  "measuredAt": "2026-10-21T19:54:19.229Z",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.37 Safari/537.36",
+  "samples": 12,
+  "swc": {
+    "initializationMs": 89.60000000003492,
+    "coldMs": 88.20000000001164,
+    "singleFileMs": [
+      2.2999999999883585, 2, 3.2999999999883585, 1.900000000023283,
+      3.8999999999650754, 1.7000000000116415, 3.7999999999883585, 2, 2,
+      1.7999999999883585, 1.900000000023283, 2.5
+    ],
+    "multiFileMs": [
+      3.5, 3.5, 3.5, 4, 3.400000000023283, 3.099999999976717,
+      3.2999999999883585, 2.7000000000116415, 3.099999999976717, 3,
+      3.599999999976717, 2.8999999999650754
+    ],
+    "transformedModules": [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1]
+  },
+  "esbuild": {
+    "initializationMs": 114.20000000001164,
+    "coldMs": 220.5,
+    "singleFileMs": [
+      20.29999999998836, 19.800000000046566, 9.200000000011642,
+      7.899999999965075, 24.70000000001164, 18.20000000001164,
+      10.599999999976717, 13.699999999953434, 7.7000000000116415,
+      9.600000000034925, 10.199999999953434, 13.200000000011642
+    ],
+    "multiFileMs": [
+      11.5, 11.299999999988358, 28, 9.400000000023283, 14.299999999988358,
+      22.599999999976717, 20.300000000046566, 13.400000000023283,
+      8.899999999965075, 8.200000000011642, 16.20000000001164,
+      13.200000000011642
+    ]
+  },
+  "limitations": [
+    "Both measurements execute real browser WASM. Timings include resolution and compilation but exclude React commit/paint and worker-message transport.",
+    "esbuild has no built-in React Refresh transform: the bundled comparison does not establish state-preserving HMR.",
+    "Initialization is measured when this worker first uses each compiler; HTTP/compiler caches can reduce repeated-run cost.",
+    "This three-file fixture is an engineering benchmark, not a prediction for every application or device."
+  ]
+}

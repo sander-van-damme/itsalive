@@ -1,152 +1,88 @@
-# itsalive.org
+# It's Alive V2
 
-A browser-native platform for applications that keep building themselves while they are used. The root-domain shell owns the AI agent, history, configuration, and credentials. Every app runs as a persistent HTML document on its own wildcard subdomain and browser origin.
+A local-first workspace for applications that evolve while you use them. Describe a tool, work with an assistant, and apply source changes without reloading the running app. Each application runs on its own immutable UUID origin.
 
-## Beta compatibility policy
+V2 is a clean beta rewrite. V1 remains at branch `archive/v1` and tag `archive-v1-2026-10-21`. This development branch does not replace or deploy main automatically.
 
-itsalive.org is currently in beta. Until the project owner explicitly declares that the product is out of beta and ready for release, breaking changes are expected and preferred over compatibility layers. Beta app data, history, settings, database schemas, URLs, bridge messages, and runtime APIs may be reset or changed without migration. Do not add migration code, deprecated aliases, fallback readers, or other backward-compatibility shims unless they are specifically requested for a current product need.
+## Run locally
 
-Once the project owner explicitly declares the product release-ready, compatibility and migration requirements must be reconsidered before making breaking changes.
+Use Node.js 22 or newer.
+
+```sh
+npm ci
+npm run dev
+# In another terminal:
+npm run dev:app
+```
+
+Open **http://itsalive.localhost:4173**. The exact hostname matters: the authenticated bridge rejects other shell origins. Application frames use `http://<uuid>.itsalive.localhost:4174`. Chromium resolves localhost subdomains automatically; other browsers may need local DNS configuration.
+
+Create an app, then use **Source** for direct file edits or **Send → Apply change** for conversational changes. **History** restores an earlier source revision while retaining durable app state. **Settings** selects per-role models, provider keys, request/concurrency/spending limits, observation consent and log detail.
+
+The default **Demo** provider is scripted. It can update a heading or build a working task list through the actual coding tools, browser compiler and revision pipeline. It does not represent general AI capability. Configure OpenAI or OpenRouter for real model calls. No real provider credentials were available during implementation.
+
+**Speak** uses browser speech recognition, with a typed-input fallback when unavailable. Browser recognition may contact the browser vendor's service; the platform does not retain raw audio. **Think deeper** makes an explicit reasoning-model request while ordinary conversation remains available.
 
 ## Architecture
 
-This repository produces two independent static builds:
-
-| Build | Output | Deployment binding | Responsibility |
-| --- | --- | --- | --- |
-| Root shell | `dist-root/` | `itsalive.org` | Platform state, policy, and runtime source: apps, persistent documents, Chat, Settings, histories, provider calls, runtime API, injected app runtime, agent loop |
-| App bootstrap | `dist-app/` | `*.itsalive.org` | Stable cross-origin bootstrap only: authenticate the shell, establish the bridge/channel, execute the shell-supplied runtime |
-
-The only connection between the two origins is a versioned `postMessage` protocol. Every message is checked for its exact origin, source window, immutable app UUID, direction, request ID, and payload shape. Each app UUID is also its permanent wildcard subdomain; display names can be changed independently. Provider credentials remain in root-origin storage and are never sent into app frames.
-
-### Thin app-bootstrap invariant
-
-Keep the wildcard app deployment as close to a dumb puppet as possible. `src/app` should contain only the small, stable bootstrap needed to identify its UUID origin, authenticate/validate the root shell, establish the cross-origin communication channel, and execute a shell-supplied runtime payload. Substantive runtime code is owned, built, and versioned by the root shell even when that code must execute inside the app origin.
-
-This distinction is fundamental: **where code executes does not determine who owns or deploys that code**. DOM access, generated-code execution, interaction capture, screenshots, document serialization/restoration, logging hooks, durability checks, runtime API installation, and app-origin browser operations may execute in the wildcard frame, but their implementation should normally be delivered by the shell at initialization rather than baked into `dist-app`.
-
-The shell initializes each app over the validated bootstrap handshake, transferring a dedicated `MessagePort` for subsequent runtime traffic and supplying only the current runtime payload through the bootstrap. After platform assets/APIs and the authenticated bridge are active, the injected runtime requests the shell-owned saved document, restores the complete markup and then re-executes app-authored setup scripts, starts the required observers/handlers, and reports readiness. A newly mounted app therefore runs the runtime version belonging to the currently loaded shell; changing ordinary runtime behavior should not require redeploying the wildcard app.
-
-Persistent app state remains shell-owned as markup, app-authored setup-script, and application-store snapshots: the injected runtime may normalize/serialize and restore the live DOM because those operations require app-origin document access, but snapshots are sent back for root-origin persistence. Platform/bootstrap assets are excluded from saved markup. Do not add platform-private durable storage to the app origin.
-
-The `window.application` and `window.agent` globals follow the same rule. Their contracts and implementations are shell-owned and delivered by the injected runtime rather than baked into the permanent app bootstrap. `application` is for durable/generated-app capabilities; `agent` is for coding/inspection capabilities. Generated apps otherwise use ordinary browser APIs directly.
-
-## Included capabilities
-
-- Per-app origin isolation with no storage namespaces or shared app database.
-- IndexedDB shell repositories for app metadata, persistent app HTML/state, full history, and logs.
-- Shell-injected runtime initialization over the cross-origin bridge, including persistent HTML restoration/saving, form-control normalization, script re-execution, observation, screenshots, logging, and runtime API installation.
-- JavaScript agent loop with `agent.done()`, bounded observations, time/cost/progress budgets, explicit failure/stall stop reasons, and atomic console-style turns whose complete JavaScript response is validated before one runtime execution.
-- A user-facing intent layer that separates explanation/question/preference handling from explicit change requests and translates authorized changes into compact technical intents.
-- Coding-context budgeting that always retains the immutable system prompt, app prompt, and current technical intent while excluding raw user/assistant chat from automatic worker history.
-- OpenRouter-only provider registry and OpenAI-style HTTP/SSE adapter.
-- Native DOM inspection through ordinary browser APIs and execution results, plus coding-agent screenshot and curated-memory capabilities.
-- App-to-shell AI text generation and bounded Jev-backed decisions, plus explicit escalation to the external coding agent, with canonical capability metadata used for agent help.
-- A minimal generated-app environment: ordinary browser APIs, It's Alive's runtime APIs, and a pinned Tailwind Browser runtime for utility classes generated after build time. No charts/icons/visualization/date/map/etc. libraries are preloaded by default; apps may load ordinary browser resources themselves when a task genuinely needs them.
-- Responsive, accessible shell UI for app creation/switching, chat, prompts, provider setup, reload, deletion, and log export.
-
-## Local development
-
-Requirements: Node.js 20 or newer and npm.
-
-```bash
-npm install
-npm run dev
+```text
+Shell origin: source + immutable revisions + IndexedDB + provider keys
+    ├── SWC WASM compiler worker + shared pinned dependency cache
+    ├── conversation / decisions / bounded file-editing harness
+    ├── disposable candidate origin → deterministic render check
+    └── authenticated MessagePort
+          └── application UUID origin
+              ├── minimal stable bootstrap
+              ├── shell-supplied React Refresh + Zustand runtime
+              └── generated app + ordinary origin storage
 ```
 
-The root domain is fixed to `itsalive.org`. Local wildcard-origin testing therefore requires local DNS overrides for `itsalive.org` and its app subdomains. `npm run dev` serves the shell on port 4173, while `npm run dev:app` serves the app build separately on port 4174 for isolated runtime development.
+Normal app compilation happens in the browser. SWC transforms only changed modules; source projects contain ordinary TS/TSX, CSS, JSON and relative imports. Compatible npm packages are resolved through an ESM gateway, pinned, hashed and cached centrally by the shell. Browser-only packages are supported; Node builtins and unsupported module forms receive actionable diagnostics.
 
-## Commands
+Runtime packages are stable across revisions. Compatible React edits preserve local hook state. Durable JSON state uses a runtime-owned Zustand store, persisted in shell IndexedDB. Applications may also independently use IndexedDB, localStorage, Cache Storage and OPFS.
 
-```bash
-npm run dev          # root shell development server
-npm run dev:app      # app runtime development server
-npm run build        # both production static builds
-npm run build:root   # root shell only
-npm run build:app    # wildcard app site only
-npm run typecheck    # strict TypeScript validation
-npm test             # Vitest suite
-npm run lint         # ESLint
+```tsx
+import { useStore, setState } from "@itsalive/store";
+import { text, decide, choose, score } from "@itsalive/ai";
+
+export default function App() {
+  const count = useStore((state) => Number(state.count ?? 0));
+  return (
+    <button onClick={() => setState({ count: count + 1 })}>{count}</button>
+  );
+}
 ```
 
-## Provider configuration
+Generated code never receives provider credentials or coding capabilities. AI calls cross the authenticated bridge to fixed provider endpoints in the shell. The accounting separates roles and reserves estimated cost before requests. Client-side limits are not provider-enforced financial guarantees; configure provider-side limits for that purpose.
 
-Open **Settings** in the shell, add your OpenRouter API key, and press **Save**. The shell tests the key before saving it. All product LLM requests use OpenRouter's `openrouter/auto` model. The shell does not send a client-side generation-token ceiling; OpenRouter and the routed model determine generation length. The shell loads Auto Router's current context capacity from OpenRouter's authenticated user model catalogue instead of hardcoding it.\n\nFor context experiments, Settings exposes a **History budget (tokens)** value. It controls only how many tokens of prior technical agent history (generated JavaScript, execution observations, and errors) may be included in a coding turn. Raw user/assistant chat is kept for the user-facing conversation but is not automatically inherited by coding sessions. The system prompt, app prompt, current technical intent, and current observations are separate. The effective request remains bounded by the live model context capacity. Diagnostic logs record the configured history budget, selected technical-history tokens, estimated total input, omitted-history count, model capacity, and provider-reported token usage so test runs can be compared.
+## Backup and restore
 
-OpenRouter requests happen directly from root-origin browser JavaScript. Credentials are saved only in root-origin `localStorage`; use the runtime only on a trusted device and origin.
+**Backup & restore** downloads a SHA-256-checked archive containing all source revisions, manifests/locks, cached dependency resources, platform settings/history and supported app-origin storage. The shell visits each app in backup-only mode without executing generated source. Restore validates the archive before modifying data and restores origin data before shell records.
 
-## Cloudflare Workers Static Assets
+The archive reports skipped storage and failures. It excludes shell provider keys, but arbitrary application data can contain secrets. Cookies and inaccessible browser-managed state are not restored. Archives are unencrypted and currently limited to 128 MiB in memory. Close other app tabs; arbitrary concurrent writes, service workers and external network effects prevent universal transactional guarantees. See [backup details](docs/backup.md).
 
-Two Wrangler configurations are included:
+## Validate
 
-```bash
-npx wrangler deploy
-npx wrangler deploy --config wrangler.app.toml
+```sh
+npm run typecheck
+npm test
+npm run build
+npx playwright install --with-deps chromium
+npm run test:e2e
+npm run test:production
+npm run benchmark
 ```
 
-Configure the first Worker route/custom domain for the exact root host and the second for the wildcard host. Configure DNS and certificates for both. The generated assets use SPA fallback so UUID app subdomains serve the same runtime bootstrap.
+Tests use actual Chromium origins, actual WASM compilation, real React updates, deterministic providers and a reproducible npm fixture. Live-provider probes are a separate opt-in path: see [provider documentation](docs/providers.md).
 
-## Runtime API
+`dist-root/` deploys to `https://itsalive.org`; `dist-app/` deploys to `https://*.itsalive.org` using the included Wrangler configurations. Generated apps require JavaScript evaluation and WebAssembly. Deployment/DNS/TLS and live providers were not validated by local tests.
 
-Generated application code uses native browser APIs plus a deliberately small shell-owned `application` global:
+## Evidence and limits
 
-```ts
-type JsonValue = null | boolean | number | string | JsonValue[] | JsonObject;
-type JsonObject = { [key: string]: JsonValue };
+- [Implementation milestones](docs/MILESTONES.md)
+- [Compiler comparison and measurements](docs/compiler.md)
+- [Browser acceptance coverage](docs/acceptance.md)
+- [Provider protocols, limits and speech](docs/providers.md)
+- [Backup formats and limitations](docs/backup.md)
 
-application.store: JsonObject
-application.ai.text(prompt: string): Promise<string>
-application.ai.choose<T extends string>(question: string, options: Record<T, string>, context?: JsonValue): Promise<T | null>
-application.ai.score(question: string, levels: string[], context?: JsonValue): Promise<number | null>
-application.ai.decide(question: string, context?: JsonValue): Promise<boolean | null>
-application.ai.probability(question: string, context?: JsonValue): Promise<number>
-application.escalate(reason: string): void
-```
-
-`application.store` is a durable JSON-like object tree persisted atomically with the app document. Valid values are `null`, booleans, finite numbers, strings, arrays, and plain objects recursively. `undefined`, functions, class instances, accessor properties, non-finite numbers, and circular references are rejected. Ordinary app state can use normal JavaScript property access and initialization such as `application.store.counter ??= { count: 0 }`. Larger, binary, or query-heavy data may still use native IndexedDB directly.
-
-`application.ai` keeps provider/model details out of generated apps:
-
-```js
-await application.ai.text("Name this note")
-// -> "Trip ideas"
-
-await application.ai.choose(
-  "Which route?",
-  { billing: "Payments", technical: "Broken feature" },
-  ticket
-)
-// -> "billing" | null
-
-await application.ai.score("Severity?", ["Low", "Medium", "High"], report)
-// -> 1.2 | null
-
-await application.ai.decide("Is this a refund request?", message)
-// -> true | false | null
-
-await application.ai.probability("Is this a refund request?", message)
-// -> 0.93
-```
-
-`text()` returns generated text. `choose()`, `score()`, and `decide()` return `null` when the platform cannot make a sufficiently confident bounded decision; generated app code should handle that conservatively rather than inventing another confidence threshold. `probability()` returns a number from 0 through 1. Provider/model/scoring details remain shell-owned and are intentionally not part of the generated-app API.
-
-`application.escalate(reason)` hands a problem to the external coding agent; it is not a content-generation call and does not return the agent's work product.
-
-Coding commands also receive a small `agent` global:
-
-```ts
-agent.memory(): Promise<string>
-agent.screenshot(input?: { scale?: number }): Promise<string>
-agent.verify<T>(work: () => T | Promise<T>): Promise<T>
-agent.done(message?: string): unknown
-```
-
-`agent.memory()` exposes curated shell-owned context rather than raw history records. `agent.screenshot()` is best-effort visual inspection. `agent.verify()` is a coding-only transaction for behavior checks that need temporary DOM/input/event/store mutations: it returns the callback result but always restores the pre-verification app document and `application.store`, including when the callback throws. Read-only checks are still preferred. `agent.done()` signals that the current coding task is complete. The naming is intentionally a semantic nudge: persist `application.*` behavior into the app when appropriate; use `agent.*` for coding and inspection.
-
-The shell may internally retain richer histories, behavioral summaries, logs, diagnostics, provider response distributions, and model metadata without making those internal schemas part of the generated-app API. Generated code otherwise uses ordinary browser APIs directly, including the native DOM.
-
-Deleting an app removes its shell-owned metadata, persistent document/store, behavioral summary, and history and then forgets the immutable UUID. Diagnostic logs may outlive app deletion for export/debugging. App-origin browser data is cleanup hygiene rather than part of deletion correctness. The shell may make a best-effort request to a protected wildcard cleanup endpoint that responds with `Clear-Site-Data: "storage", "cache"`; cleanup failure must not block deletion, and UUIDs are never reused.
-
-## Security notes
-
-Generated app JavaScript intentionally has broad control over its own origin and can use browser/device/network APIs. Origin isolation prevents direct access to other apps and the shell. The runtime does not provide a fine-grained capability sandbox. Protect the root origin, avoid parent-domain cookies, and remember that provider credentials belong only to the shell origin and are never passed to generated app code.
+Generated TypeScript is transpiled, not semantically typechecked. Normal updates preserve compatible React state; arbitrary render failures may require a remount. Apps have broad control over their own origin; this is origin isolation, not a complete sandbox from their local runtime. Full offline shell boot, streaming backups, encrypted archives and universal npm compatibility are outside this version.

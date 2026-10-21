@@ -1,0 +1,27 @@
+{
+  "measuredAt": "2026-10-21T20:01:43.988Z",
+  "userAgent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0.7390.37 Safari/537.36",
+  "appId": "eb8383df-a13b-40a0-82be-9d731cd02df5",
+  "initialCreateMs": 370.60000000009313,
+  "acceptedEditMs": [
+    281, 324.9000000000233, 277.5999999999767, 285.5999999999767,
+    294.4000000000233, 301.4000000000233, 268.0999999999767, 267.70000000006985,
+    244.39999999990687, 267.9000000000233, 297.69999999995343,
+    255.80000000004657, 295.29999999993015, 264.60000000009313,
+    285.0999999999767, 266, 264.89999999990687, 272.30000000004657,
+    318.69999999995343, 306.60000000009313, 333.10000000009313, 269,
+    295.80000000004657, 516.6999999999534, 283, 281.80000000004657,
+    273.19999999995343, 297.19999999995343, 281.5, 284.5999999999767
+  ],
+  "heapBefore": {
+    "used": 11200000,
+    "total": 14300000
+  },
+  "heapAfter": {
+    "used": 11200000,
+    "total": 14300000
+  },
+  "scope": "Accepted source edit through state flush, browser compilation, isolated candidate verification and cleanup, live update, revision commit and persistent-state flush.",
+  "memoryCaveat": "Chromium performance.memory is a coarse, process-sharing-dependent heap estimate; no forced garbage collection. Includes UI/history growth. Not a leak or total browser memory measurement.",
+  "reloadToReadyMs": 190.16110899999876
+}

@@ -1,35 +1,43 @@
 {
   "name": "itsalive",
-  "version": "0.1.0",
+  "version": "2.0.0-beta.1",
   "private": true,
   "type": "module",
   "scripts": {
     "dev": "vite --config vite.root.config.ts",
     "dev:app": "vite --config vite.app.config.ts",
-    "build": "npm run build:root && npm run build:app",
-    "build:root": "vite build --config vite.root.config.ts",
-    "build:app": "vite build --config vite.app.config.ts",
-    "test": "vitest run",
-    "test:watch": "vitest",
+    "build:runtime": "node scripts/build-runtime.mjs",
+    "build": "npm run build:runtime && vite build --config vite.root.config.ts && vite build --config vite.app.config.ts",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint .",
-    "preview": "vite preview --config vite.root.config.ts",
-    "benchmark:prompts": "vitest run tests/prompt-context-benchmark.test.ts --reporter=verbose",
-    "test:reliability": "vitest run tests/reliability-scenarios.test.ts --reporter=verbose",
-    "eval:reliability": "node scripts/reliability-live-eval.mjs"
+    "test": "vitest run",
+    "test:e2e": "playwright test",
+    "benchmark": "playwright test e2e/benchmark.spec.ts",
+    "predev": "npm run build:runtime",
+    "pretypecheck": "npm run build:runtime",
+    "test:live": "node scripts/live-provider.mjs",
+    "format": "prettier --write src tests e2e scripts sites *.ts *.json docs README.md AGENTS.md",
+    "test:production": "npm run build && node scripts/production-smoke.mjs"
   },
   "dependencies": {
-    "lucide": "^0.468.0"
+    "@swc/wasm-web": "1.15.3",
+    "esbuild-wasm": "0.25.12",
+    "idb": "8.0.3",
+    "react": "19.2.0",
+    "react-dom": "19.2.0",
+    "react-refresh": "0.18.0",
+    "zustand": "5.0.8"
   },
   "devDependencies": {
-    "@eslint/js": "^9.35.0",
-    "@types/node": "^22.18.3",
-    "eslint": "^9.35.0",
-    "fake-indexeddb": "^6.2.5",
-    "jsdom": "^29.1.1",
-    "typescript": "^5.9.2",
-    "typescript-eslint": "^8.43.0",
-    "vite": "^7.1.5",
-    "vitest": "^3.2.4"
+    "@playwright/test": "1.56.1",
+    "@types/node": "22.18.3",
+    "@types/react": "19.2.2",
+    "@types/react-dom": "19.2.2",
+    "@types/react-refresh": "0.14.3",
+    "esbuild": "0.25.12",
+    "fake-indexeddb": "6.2.5",
+    "prettier": "3.6.2",
+    "typescript": "5.9.3",
+    "vite": "7.3.7",
+    "vitest": "4.1.11"
   }
 }

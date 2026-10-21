@@ -1,0 +1,64 @@
+{
+  "measuredAt": "2026-10-21T20:04:23.395Z",
+  "source": "Fresh HTTPS esm.sh responses through curl with configured environment proxy and CA trust, forwarded into browser fetch with Playwright route. No replayed package responses. This checks real package compatibility/cache, not unmodified browser-to-gateway networking.",
+  "responses": [
+    {
+      "url": "https://esm.sh/nanoid@5.1.6?target=es2022",
+      "bytes": 77
+    },
+    {
+      "url": "https://esm.sh/nanoid@5.1.6/es2022/nanoid.mjs",
+      "bytes": 571
+    }
+  ],
+  "results": [
+    {
+      "appId": "ec6cd55f-cee7-45ca-8668-59b50bde163e",
+      "durationMs": 958.5999999998603,
+      "metrics": {
+        "initializationMs": 76.5,
+        "compileMs": 586.5,
+        "totalMs": 663,
+        "transformedModules": 3,
+        "moduleCount": 3,
+        "networkRequests": 2,
+        "cacheHits": 0,
+        "bytesDownloaded": 648
+      },
+      "applied": {
+        "revisionId": "live-npm-0",
+        "durationMs": 158.4000000001397,
+        "changedModules": 3,
+        "inspection": {
+          "text": "ID YAJdMjoyzAz-",
+          "errors": [],
+          "revisionId": "live-npm-0"
+        }
+      }
+    },
+    {
+      "appId": "beba4fb0-0718-490a-b86e-bf5d8d6e991a",
+      "durationMs": 385.39999999990687,
+      "metrics": {
+        "initializationMs": 82.5,
+        "compileMs": 83.69999999995343,
+        "totalMs": 166.19999999995343,
+        "transformedModules": 3,
+        "moduleCount": 3,
+        "networkRequests": 0,
+        "cacheHits": 2,
+        "bytesDownloaded": 0
+      },
+      "applied": {
+        "revisionId": "live-npm-1",
+        "durationMs": 151.19999999995343,
+        "changedModules": 3,
+        "inspection": {
+          "text": "ID tg1WjZeXZNHh",
+          "errors": [],
+          "revisionId": "live-npm-1"
+        }
+      }
+    }
+  ]
+}
