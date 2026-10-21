@@ -119,6 +119,23 @@ afterEach(async () => {
 });
 
 describe("workspace asynchronous application ownership", () => {
+  it("changes observation consent without remounting the app or rewriting its state", async () => {
+    const work = workspace();
+    const fixture = await app(work, "Practice");
+    const active = frame();
+    select(work, fixture, active);
+    await work.setObservation(true);
+    expect(active.request).toHaveBeenCalledWith("set-observation", true);
+    expect(work.observe).toBe(true);
+    await work.setObservation(false);
+    expect(active.request).toHaveBeenLastCalledWith("set-observation", false);
+    expect(work.observe).toBe(false);
+    expect(active.close).not.toHaveBeenCalled();
+    expect(mocks.mount).not.toHaveBeenCalled();
+    expect(work.frame).toBe(active);
+    expect(work.current?.state).toEqual(fixture.app.state);
+  });
+
   it("persists a delayed snapshot to its originating app after the selection changes", async () => {
     const work = workspace();
     const a = await app(work, "A");

@@ -2,7 +2,9 @@
 
 The shell owns `AIService`, credentials, model routes, accounting and the coding harness. Generated application code receives only `text`, `decide`, `choose` and `score` functions over its authenticated app bridge. App requests cannot choose a role, URL, provider, API key or coding tool. Model output and tool arguments are untrusted input.
 
-`demo` is the initial provider. It is a deterministic demonstration, clearly labeled in the UI, with heading edits and task-list creation. It still runs the actual file tools, compiler, isolated verification, revision commit and runtime. It is not evidence of external model quality. `ScriptedProvider` supplies precise tool calls/errors for deterministic repair, authorization and limit tests.
+AI is unconnected on first run. The default route is OpenAI `gpt-4.1-mini`, with a matching OpenRouter option and estimated prices supplied by the platform. Missing credentials open setup and preserve the user's original request; no provider failure falls back to scripted output. Saving a new connection performs a bounded real API probe before accepting it. Advanced settings retain role-specific routes, limits, prices and an explicitly labeled scripted test provider.
+
+`DemoProvider` and `ScriptedProvider` remain deterministic engineering fixtures. They exercise the actual file tools, compiler, isolated verification, revision commit and runtime, but establish no external-model quality claim. Product acceptance uses intercepted provider HTTP responses with goal-specific fixtures through the same orchestration pipeline.
 
 ## External providers
 
@@ -29,7 +31,7 @@ These are useful client-side controls, not a provider-enforced financial guarant
 
 ## Coding workflow
 
-The conversation agent can propose a technical change request, but the shell requires the user's Apply action before invoking coding. Accepted behavior suggestions follow the same path. No behavior signal invokes a coding tool by itself.
+The conversational companion distinguishes discussion, clarification, explicit changes and requests needing specific risk confirmation. An explicit create/change/repair request authorizes the internal coding workflow without an Apply step. Ordinary questions never authorize coding. Accepted behavior suggestions authorize only the proposed improvement; ignored behavior signals do not. The structured intent is private, while the user sees concise progress and the verified application.
 
 `CodingHarness` receives an immutable project snapshot and base revision. Its bounded tools are `list_files`, `read_files`, `write_file`, `patch_file`, `delete_file`, `set_dependency`, `check`, `inspect`, and `finish`. The tool prompt includes a path list instead of all source. Reads are scoped, patches require one exact match, dependencies require exact versions, and path traversal is rejected. At most 12 model turns and 36 tools run per request. Tool errors and compile/isolated-render diagnostics go back to the model for repair. Ordinary app code has no access to these tools.
 
@@ -41,7 +43,7 @@ Runtime observation is opt-in. `BehaviorAdvisor` filters for repeated-click summ
 
 Diagnostics record provider, role, request identity, latency, token usage and cost without raw message content by default. Content capture requires explicit configuration and runs through key/credential redaction. Redaction is best effort: arbitrary user text can contain unidentified sensitive data, so exported diagnostic privacy still matters.
 
-Speech input uses the browser's `SpeechRecognition`/`webkitSpeechRecognition` after an explicit microphone action. Recognition may use the browser vendor's remote service; browser support and microphone permission vary. Final text populates the composer and does not automatically authorize a source change. Unsupported browsers retain typed input. The code does not currently send recorded audio to OpenAI or OpenRouter; the speech provider route is not an implemented external-transcription claim. This browser path is deterministic-adapter-tested but real microphone recognition requires a supported interactive browser.
+Speech input uses the browser's `SpeechRecognition`/`webkitSpeechRecognition` after an explicit microphone action. Recognition may use the browser vendor's remote service; browser support and microphone permission vary. Final text populates the composer. Transcription does not require a provider key; sending the transcript to AI requires setup and follows the same conversation and authorization rules as typed input. Unsupported browsers retain typed input. The code does not currently send recorded audio to OpenAI or OpenRouter; the speech provider route is not an implemented external-transcription claim. This browser path is deterministic-adapter-tested but real microphone recognition requires a supported interactive browser.
 
 ## Optional live smoke test
 
@@ -49,4 +51,4 @@ Speech input uses the browser's `SpeechRecognition`/`webkitSpeechRecognition` af
 
 Optional `--model=...`, `--input-price=...`, `--output-price=...`, and `--budget=...` adjust the model and its current pricing. Defaults describe GPT-4.1 mini; verify current prices for your account. The CLI rejects budgets above USD 0.10. Client estimates and aborted requests remain subject to the accounting limitations above. A provider-side spend cap is still required for a hard guarantee. This path was verified to refuse unapproved/missing-key execution; no credential-backed run was performed.
 
-The exported `reason()` helper uses the independently configured deeper-reasoning role only when the user asks for it. It has no tools or coding authority, so ordinary chat remains available while that independent request runs. Its output is advice; applying an idea still uses the explicit coding workflow.
+The exported `reason()` helper uses the independently configured deeper-reasoning role only when the user asks for it. It has no tools or coding authority, so ordinary chat remains available while that independent request runs. Its output is advice; changing the app still requires an explicit user request.

@@ -69,16 +69,24 @@ async function appFrame(page: Page): Promise<Frame> {
   await expect(frame.locator("main")).toBeVisible();
   return frame;
 }
+// Architecture fixtures are explicit test data, never the normal first-run app.
 async function create(page: Page, name = "Browser acceptance"): Promise<Frame> {
-  await page.getByRole("button", { name: "New app", exact: true }).click();
-  await page.getByRole("textbox", { name: "App name", exact: true }).fill(name);
-  await page.getByRole("button", { name: "Create app", exact: true }).click();
-  await expect(
-    page
-      .frameLocator('iframe[data-mode="app"]')
-      .getByRole("heading", { name, exact: true }),
-  ).toBeVisible();
-  return appFrame(page);
+  await page.evaluate((name) => window.__itsalive.createApp(name), name);
+  const result = await edit(page, {
+    "src/App.tsx": APP_SOURCE.replace("Living counter", name),
+    "src/components/Counter.tsx": COUNTER_SOURCE,
+  });
+  expect(result.error).toBeNull();
+  const frame = await appFrame(page);
+  await expect(frame.getByRole("heading", { name, exact: true })).toBeVisible();
+  return frame;
+}
+async function developerTools(page: Page) {
+  await page.locator("#more-options > summary").click();
+  await page
+    .getByRole("button", { name: "Developer tools", exact: true })
+    .click();
+  await page.locator("#more-options > summary").click();
 }
 async function edit(
   page: Page,
@@ -148,6 +156,27 @@ async function packageFixture(
 
 test.beforeEach(async ({ page }) => {
   await ready(page);
+  // Explicit test mode is seeded only in this architecture regression suite.
+  await page.evaluate(async (root) => {
+    const { Repository } = await import(`${root}/src/storage/repository.ts`);
+    const { defaultAIConfig } = await import(`${root}/src/ai/types.ts`);
+    const config = defaultAIConfig();
+    config.testProviderEnabled = true;
+    for (const route of Object.values(config.routes) as {
+      provider: string;
+      model: string;
+      inputPerMillion: number;
+      outputPerMillion: number;
+    }[]) {
+      route.provider = "demo";
+      route.model = "demo-v2";
+      route.inputPerMillion = 0;
+      route.outputPerMillion = 0;
+    }
+    await new Repository().setSetting("ai.config", config);
+  }, `/@fs${process.cwd()}`);
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.__itsalive));
 });
 
 test("creates a real multi-file React application on an immutable isolated origin", async ({
@@ -338,7 +367,7 @@ test("generated app text and bounded decisions use the shell provider without cr
   expect(JSON.stringify(diagnostics)).toMatch(/application/);
 });
 
-test("conversation delegates coding only after approval and creates a durable functional task list", async ({
+test("explicit conversation requests automatically create a durable functional task list", async ({
   page,
 }) => {
   await create(page);
@@ -349,9 +378,7 @@ test("conversation delegates coding only after approval and creates a durable fu
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Apply change", exact: true }),
-  ).toBeVisible();
-  expect(await revisionId(page)).toBe(before);
-  await page.getByRole("button", { name: "Apply change", exact: true }).click();
+  ).toHaveCount(0);
   await expect
     .poll(() => revisionId(page), { timeout: 30_000 })
     .not.toBe(before);
@@ -413,12 +440,13 @@ test("meaningful behavior yields a non-blocking suggestion and dismissal or igno
       .getByRole("button", { name: "Save button", exact: true })
       .click();
   await expect(
-    page.getByRole("button", { name: "Apply suggestion", exact: true }),
+    page.getByRole("button", { name: "Try this", exact: true }),
   ).toHaveCount(0);
   await page.getByRole("button", { name: /Settings$/ }).click();
+  await page.getByText("Advanced", { exact: true }).click();
   await page
     .getByRole("checkbox", {
-      name: "Offer occasional suggestions based on repeated clicks",
+      name: "Offer occasional suggestions from repeated clicks",
       exact: true,
     })
     .check();
@@ -426,7 +454,7 @@ test("meaningful behavior yields a non-blocking suggestion and dismissal or igno
     .getByRole("button", { name: "Save settings", exact: true })
     .click();
   await expect(page.getByRole("dialog")).not.toBeVisible();
-  await expect(page.locator('iframe[data-mode="app"]')).not.toHaveAttribute(
+  await expect(page.locator('iframe[data-mode="app"]')).toHaveAttribute(
     "src",
     beforeConsent.url(),
   );
@@ -437,7 +465,7 @@ test("meaningful behavior yields a non-blocking suggestion and dismissal or igno
       .getByRole("button", { name: "Save button", exact: true })
       .click();
   const apply = page.getByRole("button", {
-    name: "Apply suggestion",
+    name: "Try this",
     exact: true,
   });
   await expect(apply).toBeVisible();
@@ -691,6 +719,7 @@ test("a deliberately broken build produces exportable correlated diagnostics", a
   expect(failure?.correlationId).toBeTruthy();
   expect(failure?.timestamp).toBeGreaterThan(0);
   expect(JSON.stringify(diagnostics)).toContain("src/App.tsx");
+  await developerTools(page);
   const downloaded = page.waitForEvent("download");
   await page
     .getByRole("button", { name: "Export diagnostics", exact: true })
@@ -757,8 +786,14 @@ test("speech input places a recognized utterance into the ordinary conversation 
   await page.getByRole("button", { name: "Send", exact: true }).click();
   await expect(
     page.getByRole("button", { name: "Apply change", exact: true }),
+  ).toHaveCount(0);
+  await expect.poll(() => revisionId(page)).not.toBe(before);
+  await expect(
+    (await appFrame(page)).getByRole("heading", {
+      name: "Spoken idea",
+      exact: true,
+    }),
   ).toBeVisible();
-  expect(await revisionId(page)).toBe(before);
 });
 
 test("unsupported speech remains an honest typing-first fallback", async ({
@@ -797,21 +832,29 @@ test("mobile users can reach settings, provider prices, backup and diagnostic ex
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   const settings = page.getByRole("dialog");
   await expect(
-    settings.getByRole("heading", { name: "Make yourself at home." }),
+    settings.getByRole("heading", { name: "AI connection", exact: true }),
   ).toBeVisible();
+  await settings.getByText("Advanced", { exact: true }).click();
+  await settings
+    .getByLabel("Use scripted test provider", { exact: true })
+    .uncheck();
+  await settings
+    .getByLabel("Choose different models by role", { exact: true })
+    .check();
   await expect(
     settings.getByRole("spinbutton", {
-      name: "Conversation Input $/M",
+      name: "Conversation Input price per million tokens (USD)",
       exact: true,
     }),
   ).toBeVisible();
   await expect(
     settings.getByRole("spinbutton", {
-      name: "Conversation Output $/M",
+      name: "Conversation Output price per million tokens (USD)",
       exact: true,
     }),
   ).toBeVisible();
   await settings.getByRole("button", { name: "Cancel", exact: true }).click();
+  await page.locator("#more-options > summary").click();
   await page
     .getByRole("button", { name: "Backup & restore", exact: true })
     .click();
@@ -824,6 +867,7 @@ test("mobile users can reach settings, provider prices, backup and diagnostic ex
     .getByRole("dialog")
     .getByRole("button", { name: "Close", exact: true })
     .click();
+  await developerTools(page);
   const downloaded = page.waitForEvent("download");
   await page
     .getByRole("button", { name: "Export diagnostics", exact: true })
@@ -943,7 +987,7 @@ test("restoring an empty archive clears active app pointers and stays empty afte
   expect(await page.evaluate(() => window.__itsalive.getApp())).toBeNull();
   await expect(page.locator('iframe[data-mode="app"]')).toHaveCount(0);
   await expect(
-    page.getByRole("button", { name: /Create your first app/ }),
+    page.getByRole("button", { name: /Create an app/ }),
   ).toBeVisible();
   await page.reload();
   await page.waitForFunction(() => Boolean(window.__itsalive));

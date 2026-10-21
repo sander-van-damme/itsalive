@@ -1,8 +1,8 @@
 # It's Alive V2
 
-A local-first workspace for applications that evolve while you use them. Describe a tool, work with an assistant, and apply source changes without reloading the running app. Each application runs on its own immutable UUID origin.
+It's Alive is a continuously adaptive AI interface for ordinary users. Describe a goal, use the application it creates, and ask the companion to help or make changes. The application fills the workspace; assistance and app navigation share one compact right sidebar. Technical implementation stays behind the scenes.
 
-V2 is a clean beta rewrite. V1 remains at branch `archive/v1` and tag `archive-v1-2026-10-21`. This development branch does not replace or deploy main automatically.
+The authoritative [product vision](docs/PRODUCT_VISION.md) and [agent contract](AGENTS.md) govern interface and orchestration decisions. V1 remains on the preserved `archive/v1` branch and `archive-v1-2026-10-21` tag.
 
 ## Run locally
 
@@ -17,9 +17,9 @@ npm run dev:app
 
 Open **http://itsalive.localhost:4173**. The exact hostname matters: the authenticated bridge rejects other shell origins. Application frames use `http://<uuid>.itsalive.localhost:4174`. Chromium resolves localhost subdomains automatically; other browsers may need local DNS configuration.
 
-Create an app, then use **Source** for direct file edits or **Send → Apply change** for conversational changes. **History** restores an earlier source revision while retaining durable app state. **Settings** selects per-role models, provider keys, request/concurrency/spending limits, observation consent and log detail.
+Describe what you want to do. If AI is not connected, **Settings** guides you through OpenAI or OpenRouter setup with a compatible model and connection test, then resumes your request. Explicit requests to create, change or repair run automatically; questions stay conversational. Negative feedback continues the conversation so the assistant can help resolve the problem.
 
-The default **Demo** provider is scripted. It can update a heading or build a working task list through the actual coding tools, browser compiler and revision pipeline. It does not represent general AI capability. Configure OpenAI or OpenRouter for real model calls. No real provider credentials were available during implementation.
+**Settings** keeps provider connection and basic limits accessible, with per-role routing and diagnostics under Advanced. Optional **Developer tools** expose source editing and technical history. Scripted providers are explicitly selected test tools, never the default product or a fallback for unavailable AI.
 
 **Speak** uses browser speech recognition, with a typed-input fallback when unavailable. Browser recognition may contact the browser vendor's service; the platform does not retain raw audio. **Think deeper** makes an explicit reasoning-model request while ordinary conversation remains available.
 

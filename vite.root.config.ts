@@ -1,6 +1,7 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
 export default defineConfig({
+  cacheDir: resolve(import.meta.dirname, "node_modules/.vite-root"),
   root: resolve(import.meta.dirname, "sites/root"),
   publicDir: resolve(import.meta.dirname, "public"),
   build: {

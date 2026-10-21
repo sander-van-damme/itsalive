@@ -54,13 +54,30 @@ export class SpeechInput {
         if (pieces.length) options.onText(pieces.join(" "));
       };
       this.recognition.onerror = (event) => {
+        this.listening = false;
+        options.onState?.(false);
+        if (event.error === "aborted") return;
+        const messages: Record<string, string> = {
+          "not-allowed":
+            "Microphone permission was denied. Allow microphone access in your browser settings, then try again. You can continue typing.",
+          "service-not-allowed":
+            "Speech recognition is blocked by this browser. Check its permissions or continue typing.",
+          "audio-capture":
+            "No microphone is available. Check that it is connected and try again, or continue typing.",
+          "no-speech":
+            "I didn't hear any speech. Try again or type your message.",
+          network:
+            "Speech recognition couldn't connect. Check your connection and try again, or continue typing.",
+          "language-not-supported":
+            "Speech recognition doesn't support this language in your browser. You can continue typing.",
+        };
         options.onError(
-          event.error === "not-allowed"
-            ? "Microphone permission was denied. You can continue typing."
-            : `Speech input failed (${event.error}). You can continue typing.`,
+          messages[event.error] ??
+            "Speech recognition stopped. Try again or continue typing.",
         );
       };
       this.recognition.onend = () => {
+        if (!this.listening) return;
         this.listening = false;
         options.onState?.(false);
       };
@@ -75,28 +92,35 @@ export class SpeechInput {
     }
     if (this.listening) return;
     try {
-      this.recognition.start();
       this.listening = true;
       this.options.onState?.(true);
-    } catch (error) {
+      this.recognition.start();
+    } catch {
+      this.listening = false;
+      this.options.onState?.(false);
       this.options.onError(
-        error instanceof Error
-          ? error.message
-          : "Speech input could not start.",
+        "Speech input couldn't start. Check microphone permission and try again, or continue typing.",
       );
     }
   }
   stop(): void {
-    this.recognition?.stop();
-    this.listening = false;
-    this.options.onState?.(false);
+    try {
+      this.recognition?.stop();
+    } catch {
+      this.options.onError(
+        "Speech recognition stopped. You can try again or continue typing.",
+      );
+    } finally {
+      this.listening = false;
+      this.options.onState?.(false);
+    }
   }
   dispose(): void {
-    this.recognition?.abort();
     if (this.recognition) {
       this.recognition.onresult = null;
       this.recognition.onerror = null;
       this.recognition.onend = null;
+      this.recognition.abort();
     }
     this.listening = false;
   }

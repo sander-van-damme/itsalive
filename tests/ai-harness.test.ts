@@ -3,7 +3,7 @@ import {
   AIService,
   CodingHarness,
   ScriptedProvider,
-  defaultAIConfig,
+  demoAIConfig,
 } from "../src/ai";
 import type { AIResponse, ToolCall } from "../src/ai";
 import type { BuildArtifact, BuildResult, Project } from "../src/shared/types";
@@ -87,7 +87,7 @@ describe("file-oriented coding harness", () => {
           },
     );
     const result = await new CodingHarness(
-      new AIService(defaultAIConfig(), { providers: { demo: provider } }),
+      new AIService(demoAIConfig(), { providers: { demo: provider } }),
       host,
     ).run({
       project,
@@ -114,7 +114,7 @@ describe("file-oriented coding harness", () => {
     const provider = new ScriptedProvider([]);
     const host = callbacks();
     const harness = new CodingHarness(
-      new AIService(defaultAIConfig(), { providers: { demo: provider } }),
+      new AIService(demoAIConfig(), { providers: { demo: provider } }),
       host,
     );
     await expect(
@@ -142,7 +142,7 @@ describe("file-oriented coding harness", () => {
       turn(tool("finish", { summary: "Safe edit" })),
     ]);
     const result = await new CodingHarness(
-      new AIService(defaultAIConfig(), { providers: { demo: provider } }),
+      new AIService(demoAIConfig(), { providers: { demo: provider } }),
       callbacks(),
     ).run({
       project,
@@ -171,7 +171,7 @@ describe("file-oriented coding harness", () => {
     host.commit.mockRejectedValue(new Error("Stale revision"));
     await expect(
       new CodingHarness(
-        new AIService(defaultAIConfig(), { providers: { demo: provider } }),
+        new AIService(demoAIConfig(), { providers: { demo: provider } }),
         host,
       ).run({
         project,
@@ -185,7 +185,7 @@ describe("file-oriented coding harness", () => {
   it("runs the demo through real file tools, compilation, verification and commit", async () => {
     const host = callbacks();
     const result = await new CodingHarness(
-      new AIService(defaultAIConfig()),
+      new AIService(demoAIConfig()),
       host,
     ).run({
       project,

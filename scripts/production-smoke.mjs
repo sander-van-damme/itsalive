@@ -2,6 +2,19 @@ import { createServer } from "node:http";
 import { readFile, stat } from "node:fs/promises";
 import { resolve, extname, sep } from "node:path";
 import { chromium, expect } from "@playwright/test";
+import { build } from "esbuild";
+
+// Replay stays in tests; the production app still uses its real HTTP adapter.
+const fixture = await build({
+  entryPoints: ["e2e/fixtures/goal-provider.ts"],
+  bundle: true,
+  write: false,
+  platform: "node",
+  format: "esm",
+});
+const { installGoalProvider } = await import(
+  `data:text/javascript;base64,${Buffer.from(fixture.outputFiles[0].text).toString("base64")}`
+);
 
 const mime = {
   ".html": "text/html",
@@ -53,59 +66,80 @@ try {
       "--no-proxy-server",
     ],
   });
-  const page = await browser.newPage();
+  const context = await browser.newContext();
+  await installGoalProvider(context);
+  const page = await context.newPage();
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("http://itsalive.localhost:4173");
-  await page.getByRole("button", { name: "New app", exact: true }).click();
   await page
-    .getByRole("textbox", { name: "App name", exact: true })
-    .fill("Production fixture");
-  await page.getByRole("button", { name: "Create app", exact: true }).click();
-  const app = page.frameLocator("iframe[data-mode=app]");
-  await expect(
-    app.getByRole("heading", { name: "Production fixture" }),
-  ).toBeVisible({ timeout: 20000 });
-  await app.getByRole("button", { name: "Count: 0", exact: true }).click();
-  await app.getByRole("button", { name: "Saved: 0", exact: true }).click();
-  await page.getByRole("tab", { name: "Source", exact: true }).click();
-  await page
-    .getByLabel("Source file", { exact: true })
-    .selectOption("src/App.tsx");
-  const source = page.getByRole("textbox", {
-    name: "Source code",
-    exact: true,
-  });
-  await source.fill(
-    (await source.inputValue()).replace(
-      "Production fixture",
-      "Production updated",
-    ),
-  );
-  await page.getByRole("button", { name: "Apply source", exact: true }).click();
-  await expect(page.getByRole("status").first()).toHaveText("Changes applied", {
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("I want an app that teaches me violin chords and scales.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(page.locator("#settings-dialog")).toBeVisible();
+  await page.locator("#ai-key").fill("production-deterministic-provider-key");
+  await page.locator("#save-settings").click();
+  await expect(page.locator("#settings-dialog")).not.toBeVisible({
     timeout: 20000,
   });
-  await page.getByRole("tab", { name: "Preview", exact: true }).click();
+  const app = page.frameLocator("iframe[data-mode=app]");
   await expect(
-    app.getByRole("heading", { name: "Production updated" }),
+    app.getByRole("heading", { name: "Violin practice", exact: true }),
+  ).toBeVisible({ timeout: 30000 });
+  await expect(
+    page.getByRole("textbox", { name: "Source code", exact: true }),
+  ).not.toBeVisible();
+  await expect(
+    page.getByRole("button", { name: "Apply change", exact: true }),
+  ).toHaveCount(0);
+  await app
+    .getByRole("button", { name: "Start practice", exact: true })
+    .click();
+  await expect(app.getByRole("status")).toContainText("Play each note slowly");
+  await app
+    .getByRole("button", { name: "Mark practice complete", exact: true })
+    .click();
+  await expect(
+    app.getByText("Practice sessions: 1", { exact: true }),
   ).toBeVisible();
-  await expect(app.getByRole("button", { name: "Count: 1" })).toBeVisible();
+  const origin = await page
+    .locator("iframe[data-mode=app]")
+    .getAttribute("src");
+  await page
+    .getByRole("textbox", { name: "Message", exact: true })
+    .fill("Add a chord progression exercise.");
+  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await expect(
+    app.getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toBeVisible({ timeout: 30000 });
+  expect(await page.locator("iframe[data-mode=app]").getAttribute("src")).toBe(
+    origin,
+  );
+  await expect(app.getByRole("status")).toContainText("Play each note slowly");
+  await expect(
+    app.getByText("Practice sessions: 1", { exact: true }),
+  ).toBeVisible();
   await page.reload();
   await expect(
-    app.getByRole("heading", { name: "Production updated" }),
-  ).toBeVisible({ timeout: 20000 });
-  await expect(app.getByRole("button", { name: "Saved: 1" })).toBeVisible();
+    app.getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toBeVisible({ timeout: 30000 });
+  await expect(
+    app.getByText("Practice sessions: 1", { exact: true }),
+  ).toBeVisible();
   expect(await page.evaluate(() => "__itsalive" in window)).toBe(false);
   expect(errors).toEqual([]);
   console.log(
     JSON.stringify({
       ok: true,
+      provider: "deterministic HTTP replay; no live API credentials",
       checks: [
         "built assets",
+        "first-run request resumption",
         "WASM worker",
         "UUID bootstrap",
-        "source hot update",
+        "goal-specific app generation",
+        "automatic conversational changes",
+        "hidden source editor",
         "React state retention",
         "durable reload",
         "no development hooks",

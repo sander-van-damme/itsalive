@@ -1,3 +1,5 @@
+> Historical V2 implementation report. Its Demo-default and source-editing/approval workflow descriptions are superseded by [PRODUCT_VISION.md](PRODUCT_VISION.md), [PRODUCT_RECOVERY.md](PRODUCT_RECOVERY.md) and current acceptance coverage. Technical measurements below remain historical evidence, not the current product contract.
+
 # It's Alive V2 implementation report
 
 21 October 2026. V2 is implemented on `v2/browser-native` as a clean, reviewable beta rewrite. Main has not been replaced or deployed. V1 is preserved at `archive/v1` and tag `archive-v1-2026-10-21`, both pointing to the original V1 history (`00f1053b278e079ff8172c9f5df1e7949ac87207`).

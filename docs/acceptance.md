@@ -1,93 +1,43 @@
-# Browser acceptance evidence
+# Browser acceptance
 
-Run `npm run test:e2e` after `npm install` and `npx playwright install chromium`.
-Playwright starts the shell on `http://itsalive.localhost:4173` and the wildcard
-bootstrap on `http://<UUID>.itsalive.localhost:4174`. Chromium maps these hostnames
-to loopback. Each application therefore has a real, distinct browser origin;
-these tests do not substitute same-origin frames or a DOM emulator.
+The [product contract](PRODUCT_VISION.md) is enforced through real user journeys, in addition to compiler, runtime, backup and security regressions. Run `npm ci`, `npx playwright install chromium`, then `npm run test:e2e`. Playwright starts the shell at `http://itsalive.localhost:4173` and the bootstrap at UUID subdomains on port 4174. App frames have real distinct origins. Browser compilation, candidate checks and React updates are real.
 
-The tests interact with the creation, conversation and suggestion UI. A development
-only `window.__itsalive` API supplies source edits and backup operations without
-requiring an external AI credential. It calls the same workspace, compiler,
-verification, bridge and repository operations as the UI.
+## Product journeys
 
-## Required scenarios
+`e2e/product-recovery.spec.ts` uses an explicitly installed deterministic HTTP replay from `e2e/fixtures/goal-provider.ts`. The production bundle contains neither its violin nor climbing-knot application fixture. Requests pass through the actual HTTP adapter, conversation intent parser, coding tools, SWC compilation, disposable verification origins, revision commit and live app.
 
-| Requirement                                | Browser coverage                                                                                                                                                                                                                                         |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| 1. Functional multi-file React creation    | UI creates the starter; counter is clicked in its UUID frame; project has multiple source files.                                                                                                                                                         |
-| 2. Fast source hot update                  | Source changes through the real compiler and frame, with the frame URL unchanged; benchmark suite records latency separately.                                                                                                                            |
-| 3. Transient and durable state retention   | React hook counter and Zustand durable counter survive a compatible edit; durable counter survives reload.                                                                                                                                               |
-| 4. Broken source leaves the old app usable | Invalid TSX is rejected; revision ID and live counter remain intact and interactive.                                                                                                                                                                     |
-| 5. Repair applies successfully             | Broken source is repaired and a visible heading change applies without losing state.                                                                                                                                                                     |
-| 6. Add and cache an npm dependency         | Pinned `clsx@2.1.1` resolves a gateway entry and implementation module; hashes are recorded.                                                                                                                                                             |
-| 7. Reuse across application origins        | Second UUID application imports the same package without further module fetches; shell reload also reuses Cache Storage.                                                                                                                                 |
-| 8. Incompatible dependency diagnostics     | `node:fs` import is rejected with a Node/browser diagnostic and no revision change.                                                                                                                                                                      |
-| 9. App text and decision AI                | Generated TSX imports `@itsalive/ai`; user clicks invoke text and bounded boolean calls through the shell's demo provider.                                                                                                                               |
-| 10. Conversation and authorized coding     | Conversation proposes work; source stays unchanged until Apply change; actual coding harness produces a running revision.                                                                                                                                |
-| 11. Meaningful behavior suggestion         | Real iframe clicks generate no suggestion before consent. After enabling observation in Settings, four repeated clicks travel through the runtime collector and bridge to the advisor and display a dismissible suggestion; existing app remains usable. |
-| 12. Rejected/ignored suggestion            | Revision stays unchanged while the suggestion is ignored and after Dismiss.                                                                                                                                                                              |
-| 13. Reload with source and data            | Updated heading and durable counter reappear after shell reload.                                                                                                                                                                                         |
-| 14. Backup and restore in clean context    | Archive is imported into an empty browser context with dependency network requests denied; source, cached npm dependency, shell durable state, localStorage, IndexedDB schema/index/version/typed data, Cache Storage and OPFS are verified.             |
-| 15. Multiple storage origins               | App A's localStorage is absent in B; switching back restores A's value.                                                                                                                                                                                  |
-| 16. Credential/capability boundary         | App frame cannot access shell localStorage due to browser same-origin enforcement; credential sentinel is absent locally; retired privileged globals are absent. Bridge unit tests cover protocol validation.                                            |
-| 17. Useful failure diagnostics             | Deliberately invalid source produces file-specific diagnostics with correlation identity and timestamp; the UI downloads a JSON export containing that failure.                                                                                          |
+- **Onboarding:** clean browser, no provider, goal submission opens setup rather than silently selecting Demo; successful connection resumes the original request.
+- **Useful application:** create violin practice, choose a scale, start an exercise and record practice; never accept the compiler counter fixture as product success.
+- **Conversation and modification:** a chord question returns an answer with no coding calls or version change. An explicit new exercise applies automatically without a second confirmation. Source remains hidden. Compatible transient state and saved practice survive the update, and saved practice survives reload.
+- **Negative feedback:** introduce a broken Start control, attempt repair, choose Not yet, ask for missing detail without rewriting on vague feedback, then clarify and verify a working Start control after another repair. Feedback remains associated with the app, original request and version.
+- **User control:** only accepted suggestions authorize changes. Ignored and dismissed suggestions leave the version intact. Structural requests that require confirmation explain their consequence.
+- **Dialogs:** top-right close, Escape, contained keyboard focus and return, primary provider fields, advanced disclosure, Save/Cancel, validation and provider-error recovery.
+- **Speech:** simulated browser recognition callbacks cover listening, final text, permission errors and typing fallback. Transcription requires no AI key; sending its result does.
+- **Responsive use:** desktop application occupies most of the viewport beside one compact right rail. Mobile switches views without replacing the app frame or losing activity. Another goal creates an interactive knot tutorial, rather than a domain-specific product template.
 
-Additional browser checks reject a runtime-crashing candidate before it reaches
-the active app or writes to its origin, and verify state preservation when the
-component module itself changes and when source is rolled back.
+Desktop and mobile captures are saved under `work/screenshots/` for visual review. Failure traces and screenshots are under `test-results/`, with the HTML report in `playwright-report/`. These paths are ignored build/test artifacts.
 
-A controlled scheduling test pauses an actual compiler invocation, switches to
-another application, and then releases compilation. The stale edit must be
-rejected, with both applications' revision pointers and durable state unchanged.
-An empty-archive test restores an empty workspace over an active app and verifies
-that frame, source pointers and app list remain empty after reload. A narrow-screen
-UI test opens settings and backup, accesses provider price inputs, and downloads
-diagnostics at a 390-pixel viewport width.
+## Technical invariants
 
-Speech tests inject scripted browser recognition events to exercise the actual
-Speak button, transcription-to-composer path and normal conversation approval.
-Another test removes recognition support and verifies the typing fallback. These
-test UI wiring and capability handling, not microphone capture or the browser
-vendor's remote speech-recognition service.
+`e2e/platform.spec.ts` installs an explicit counter fixture for architectural tests. It is never the product starter. Its coverage retains:
 
-## Deterministic versus external tests
+- multi-file compilation, scoped source updates, compatible hook and durable state, reload and rollback;
+- compile and runtime candidate rejection, working app retention and stale-edit ownership;
+- pinned npm resolution, hashing and dependency cache reuse across app origins and reload;
+- unsupported Node dependency diagnostics;
+- application AI through the authenticated shell bridge;
+- observation consent, actual repeated-click capture, suggestion dismissal and chat availability;
+- full backup/restore into a clean browser with dependency downloads denied, including shell state, localStorage, IndexedDB schema/index/version/typed values, Cache Storage and OPFS;
+- independent app-origin storage, shell credential isolation and absent privileged globals;
+- empty backup restoration and useful downloadable diagnostics;
+- explicit developer tools access rather than developer controls in the default journey.
 
-The normal suite makes no paid provider calls. It exercises the explicit local
-demo provider through the real orchestration and app bridge. Provider HTTP unit
-tests validate request and response contracts separately; neither substitutes for
-an authenticated live-provider compatibility test.
+`e2e/benchmark.spec.ts` retains actual-browser SWC versus esbuild compiler, visible update and lifecycle measurements. `e2e/live-dependencies.spec.ts` remains an explicit optional live-CDN probe. Unit tests retain bridge authentication, storage integrity, compiler, accounting, provider protocols and bounded coding tools, with added intent, onboarding and speech contracts.
 
-The npm acceptance test intercepts only the dependency gateway HTTP responses.
-It supplies the real `clsx@2.1.1` ESM implementation captured from esm.sh on
-2026-10-21 plus a deterministic re-export wrapper. Download accounting, transitive
-module traversal, transformation, SHA-256 locking, shell cache persistence and
-app-origin execution remain real. This keeps the default suite independent of
-gateway uptime; it does not establish availability of the live CDN.
+`npm run test:production` builds both sites, serves their static assets and uses the same deterministic HTTP replay through the normal UI. It checks initial setup and request resumption, goal generation, conversational modification, hidden source tools, same app frame, transient and durable state retention, reload, and absence of development hooks and uncaught browser errors.
 
-Playwright retains failure traces and screenshots under `test-results/` and writes
-an HTML report to `playwright-report/`. Compiler comparison results are recorded by
-`e2e/benchmark.spec.ts`; see `docs/compiler.md` for architecture tradeoffs.
+## Evidence boundaries
 
-## Execution status
+Deterministic replay verifies integration and outcomes for specified responses, not external model quality, live credentials, current model availability or real cost. Connection setup makes a bounded text-generation probe per provider/model; full structured-output and tool support still depends on that model. Browser microphone callbacks are simulated; no physical microphone recognition is claimed. Local static production smoke does not establish deployed DNS/TLS or hosted behavior. See [PRODUCT_RECOVERY.md](PRODUCT_RECOVERY.md) for the completed run counts, reviewed screenshots and remaining limits.
 
-On 2026-10-21, `npx playwright test e2e/platform.spec.ts --workers=1` passed all
-17 tests in 26.5 seconds using Chromium 141 / Playwright 1.56.1 in the Linux cloud
-workspace. `npm run typecheck` also passed. No external AI credentials
-were available or used. Firefox, WebKit, production TLS deployment and real
-microphone recognition were not tested.
-
-The browser tests discovered an unbound `fetch` receiver in the compiler worker;
-fixing it enabled actual dependency downloads. They also caught a test assumption:
-the HTML mount's `id="application"` creates a named Window DOM property, which is
-not the retired privileged application API. Tests now verify the absence of its
-old capabilities explicitly.
-
-Playwright sets `ITSALIVE_E2E=1` to suppress Vite's shell-development hot reload
-during acceptance. The platform's generated-application refresh mechanism remains
-active and is exercised by the state-retention tests. Desktop (1440×960) and mobile
-(390×844) screenshots were inspected; the narrow viewport had no horizontal page
-overflow. Mobile access to settings, backup, provider pricing and diagnostic export
-was corrected and then verified in both the browser test and an updated screenshot.
-
-After updating the development dependencies, `npm run test:e2e` passed all 20 normal tests (17 acceptance and three benchmarks) in 38.4 seconds. The optional live dependency test was skipped by default; its separate successful run is recorded in `docs/live-dependency-results.json`. The production static-build smoke test passed afterward. CI is pinned to Ubuntu 24.04, supported by the pinned Playwright release.
+Playwright disables Vite shell HMR during acceptance. Generated-app hot updates remain enabled and tested. Root and wildcard Vite servers use separate dependency optimization caches so simultaneously starting them cannot invalidate each other's optimized modules.

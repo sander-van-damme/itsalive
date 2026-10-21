@@ -9,6 +9,7 @@ import type {
   Provider,
   ProviderId,
   UsageRecord,
+  ProviderCredentials,
 } from "./types";
 import { HTTPProvider } from "./providers";
 import { DemoProvider } from "./demo";
@@ -91,6 +92,7 @@ function checkConfig(config: AIConfig): void {
 export class AIService {
   private configuration: AIConfig;
   private active = 0;
+  private testingConfiguration = false;
   private records: UsageRecord[] = [];
   private readonly providers: Record<ProviderId, Provider>;
   private readonly now: () => number;
@@ -115,7 +117,7 @@ export class AIService {
     return structuredClone(this.records);
   }
   get activeRequestCount(): number {
-    return this.active;
+    return this.active + (this.testingConfiguration ? 1 : 0);
   }
   get spentUSD(): number {
     return this.records.reduce((sum, record) => sum + record.costUSD, 0);
@@ -167,6 +169,8 @@ export class AIService {
   ): Promise<AIResponse> {
     this.options.beforeRequest?.();
     context.signal?.throwIfAborted();
+    if (this.testingConfiguration)
+      throw new Error("Wait for the AI connection check to finish.");
     const route = this.configuration.routes[role];
     if (!route || role === "speech")
       throw new Error(
@@ -175,6 +179,10 @@ export class AIService {
     if (!context.appId || !context.correlationId)
       throw new Error(
         "AI calls require application and correlation identities.",
+      );
+    if (route.provider === "demo" && !this.configuration.testProviderEnabled)
+      throw new Error(
+        "Connect an AI provider in Settings, or explicitly enable the scripted test provider in Advanced.",
       );
     const encoded = JSON.stringify(input);
     if (
@@ -329,6 +337,65 @@ export class AIService {
           requestId: record.id,
         });
       }
+    }
+  }
+  /** Probe actual configured models without committing credentials or routing on failure.
+   * Probe requests share the durable accounting ledger and block competing requests.
+   */
+  async testConfiguration(
+    config: AIConfig,
+    credentials: ProviderCredentials,
+    context: AIContext,
+  ): Promise<void> {
+    if (this.active || this.testingConfiguration)
+      throw new Error(
+        "Wait for the current AI request before changing the connection.",
+      );
+    checkConfig(config);
+    const candidate = structuredClone(config);
+    for (const route of Object.values(candidate.routes))
+      route.maxOutputTokens = 32;
+    const probe = new AIService(candidate, {
+      providers: this.providers,
+      credentials: () => credentials,
+      beforeRequest: this.options.beforeRequest,
+      log: this.options.log,
+      now: this.now,
+      onUsage: (record) => {
+        const index = this.records.findIndex((item) => item.id === record.id);
+        if (index === -1) this.records.push(record);
+        else this.records[index] = record;
+        this.options.onUsage?.(record);
+      },
+    });
+    probe.importUsage(this.usage);
+    this.testingConfiguration = true;
+    try {
+      const checked = new Set<string>();
+      for (const [role, route] of Object.entries(candidate.routes)) {
+        if (role === "speech" || route.provider === "demo") continue;
+        const key = `${route.provider}:${route.model}`;
+        if (checked.has(key)) continue;
+        checked.add(key);
+        const result = await probe.generate(
+          role as AIRole,
+          {
+            messages: [
+              {
+                role: "user",
+                content: "Reply with OK to confirm the connection.",
+              },
+            ],
+          },
+          context,
+        );
+        if (!result.text.trim())
+          throw new Error(
+            "The AI connection returned an empty response. Try another model.",
+          );
+      }
+    } finally {
+      this.testingConfiguration = false;
     }
   }
   async application(

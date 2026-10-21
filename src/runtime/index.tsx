@@ -282,6 +282,14 @@ export function start(port: MessagePort, init: RuntimeInit): void {
     }
   };
 
+  let stopObservation: (() => void) | undefined;
+  const setObservation = (enabled: boolean) => {
+    stopObservation?.();
+    stopObservation = enabled
+      ? observeBehavior((observation) => rpc.event("behavior", observation))
+      : undefined;
+  };
+
   const rpc = new PortRPC(port, async (method, payload) => {
     switch (method) {
       case "apply": {
@@ -291,6 +299,11 @@ export function start(port: MessagePort, init: RuntimeInit): void {
         queue = next;
         return next;
       }
+      case "set-observation":
+        if (init.mode !== "app" || typeof payload !== "boolean")
+          throw new Error("Invalid observation setting");
+        setObservation(payload);
+        return null;
       case "inspect":
         return inspect();
       case "snapshot":
@@ -371,51 +384,46 @@ export function start(port: MessagePort, init: RuntimeInit): void {
     });
   };
 
-  if (init.mode !== "backup") {
-    if (init.observe && init.mode === "app")
-      observeBehavior((observation) => rpc.event("behavior", observation));
-  }
+  if (init.observe && init.mode === "app") setObservation(true);
   rpc.event("ready", { appId: init.appId, mode: init.mode });
 }
 
 function observeBehavior(
   send: (observation: BehaviorObservation) => void,
-): void {
+): () => void {
   let lastTarget: Element | null = null;
   let first = 0;
   let count = 0;
   let lastSuggestion = -60_000;
-  document.addEventListener(
-    "click",
-    (event) => {
-      const target =
-        event.target instanceof Element
-          ? event.target.closest('button, a, [role="button"]')
-          : null;
-      if (!target) return;
-      const now = performance.now();
-      if (target === lastTarget && now - first < 4000) count += 1;
-      else {
-        lastTarget = target;
-        first = now;
-        count = 1;
-      }
-      if (count >= 4 && now - lastSuggestion > 60_000) {
-        lastSuggestion = now;
-        send({
-          kind: "repeated-click",
-          target: (
-            target.getAttribute("aria-label") ??
-            target.textContent ??
-            target.tagName
-          )
-            .trim()
-            .slice(0, 120),
-          count,
-          durationMs: now - first,
-        });
-      }
-    },
-    { passive: true },
-  );
+  const onClick = (event: MouseEvent) => {
+    const target =
+      event.target instanceof Element
+        ? event.target.closest('button, a, [role="button"]')
+        : null;
+    if (!target) return;
+    const now = performance.now();
+    if (target === lastTarget && now - first < 4000) count += 1;
+    else {
+      lastTarget = target;
+      first = now;
+      count = 1;
+    }
+    if (count >= 4 && now - lastSuggestion > 60_000) {
+      lastSuggestion = now;
+      send({
+        kind: "repeated-click",
+        target: (
+          target.getAttribute("aria-label") ??
+          target.textContent ??
+          target.tagName
+        )
+          .trim()
+          .slice(0, 120),
+        count,
+        durationMs: now - first,
+      });
+    }
+  };
+  document.addEventListener("click", onClick, { passive: true });
+  return () => document.removeEventListener("click", onClick);
 }

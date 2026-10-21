@@ -51,46 +51,76 @@ export class HTTPProvider implements Provider {
         : {}),
       ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
     }));
-    const response = await this.fetcher(ENDPOINTS[this.provider], {
-      method: "POST",
-      signal,
-      headers: {
-        Authorization: `Bearer ${credential}`,
-        "Content-Type": "application/json",
-        ...(this.provider === "openrouter" ? { "X-Title": "It's Alive" } : {}),
-      },
-      body: JSON.stringify({
-        model: route.model,
-        messages,
-        max_completion_tokens: route.maxOutputTokens,
-        ...(input.tools?.length
-          ? {
-              tools: input.tools.map((tool) => ({
-                type: "function",
-                function: tool,
-              })),
-              tool_choice: "auto",
-              parallel_tool_calls: false,
-            }
-          : {}),
-        ...(input.jsonSchema
-          ? {
-              response_format: {
-                type: "json_schema",
-                json_schema: { ...input.jsonSchema, strict: true },
-              },
-            }
-          : {}),
-        ...(this.provider === "openrouter"
-          ? { provider: { require_parameters: true }, usage: { include: true } }
-          : {}),
-      }),
-    });
-    // Provider bodies may contain echoed prompts or secrets. Errors intentionally expose status and request ID only.
-    if (!response.ok)
+    let response: Response;
+    // Invoke fetch as a function, not a method with this adapter as its receiver.
+    // Browser-native fetch rejects that receiver with "Illegal invocation".
+    const fetcher = this.fetcher;
+    try {
+      response = await fetcher(ENDPOINTS[this.provider], {
+        method: "POST",
+        signal,
+        headers: {
+          Authorization: `Bearer ${credential}`,
+          "Content-Type": "application/json",
+          ...(this.provider === "openrouter"
+            ? { "X-Title": "It's Alive" }
+            : {}),
+        },
+        body: JSON.stringify({
+          model: route.model,
+          messages,
+          max_completion_tokens: route.maxOutputTokens,
+          ...(input.tools?.length
+            ? {
+                tools: input.tools.map((tool) => ({
+                  type: "function",
+                  function: tool,
+                })),
+                tool_choice: "auto",
+                parallel_tool_calls: false,
+              }
+            : {}),
+          ...(input.jsonSchema
+            ? {
+                response_format: {
+                  type: "json_schema",
+                  json_schema: { ...input.jsonSchema, strict: true },
+                },
+              }
+            : {}),
+          ...(this.provider === "openrouter"
+            ? {
+                provider: { require_parameters: true },
+                usage: { include: true },
+              }
+            : {}),
+        }),
+      });
+    } catch (error) {
+      if (signal?.aborted) throw signal.reason ?? error;
       throw new Error(
-        `${this.provider} request failed (${response.status}). Check model access, key, quota and network. Request: ${response.headers.get("x-request-id") ?? "unavailable"}`,
+        "Couldn't reach your AI provider. Check your connection and try again.",
       );
+    }
+    // Never echo provider bodies: they can contain prompts or credentials.
+    if (!response.ok) {
+      const name = this.provider === "openai" ? "OpenAI" : "OpenRouter";
+      const recovery =
+        response.status === 401
+          ? "The API key was not accepted. Check it or create a new key."
+          : response.status === 403
+            ? "This key cannot use the selected model. Check model access or choose another model."
+            : response.status === 402
+              ? "Add credit to your provider account, then try again."
+              : response.status === 429
+                ? "The provider's usage or rate limit was reached. Check your account limits and credit, or try again shortly."
+                : response.status === 400 || response.status === 404
+                  ? "Check the model name and whether it supports text, structured responses and tools."
+                  : response.status >= 500
+                    ? "The provider is temporarily unavailable. Try again shortly."
+                    : "Check your key, model access and network, then try again.";
+      throw new Error(`${name} (${response.status}): ${recovery}`);
+    }
     const data = record(await response.json());
     const choices = Array.isArray(data.choices) ? data.choices : [];
     const first = record(choices[0]);

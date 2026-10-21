@@ -1,9 +1,11 @@
 import "./styles.css";
+import { SHELL_VIEW, initializeShellView } from "./shell-view";
+import { SettingsController } from "./settings";
 import { Workspace } from "./workspace";
 import {
   AIService,
   defaultAIConfig,
-  ROLE_LABELS,
+  missingProviderRoles,
   CodingHarness,
   converse,
   reason,
@@ -19,29 +21,23 @@ import type {
 import type { BehaviorObservation, ChatMessage } from "../shared/types";
 
 const root = document.querySelector<HTMLDivElement>("#shell")!;
-root.innerHTML = `
-<aside class="sidebar"><a class="brand" href="/" aria-label="It's Alive home"><span class="brand-mark">a<span>✳</span></span><span>it's alive<span class="beta">BETA / 02</span></span></a>
-<div class="sidebar-heading">YOUR WORKSPACE</div><button id="new-app" aria-label="New app" class="primary new-app"><span>＋</span> New app</button><nav id="app-list" aria-label="Applications"></nav>
-<div class="sidebar-bottom"><span class="local-dot"></span> Stored on this device<button id="settings" title="Settings" aria-label="Settings" class="quiet">⚙ Settings</button><button id="backup" title="Backup & restore" aria-label="Backup & restore" class="quiet">↗ Backup & restore</button></div></aside>
-<main class="workspace"><header class="topbar"><div><span class="breadcrumb">Workspace <span>/</span></span> <strong id="app-name">A place to begin</strong></div><div class="top-actions"><span id="provider-badge" class="pill">Demo mode</span><button id="export-log" title="Export diagnostics" aria-label="Export diagnostics" class="quiet">Export diagnostics</button></div></header>
-<div class="work-area"><section class="app-panel"><div class="app-toolbar"><div role="tablist" aria-label="Application views"><button role="tab" aria-selected="true" data-tab="preview">Preview</button><button role="tab" aria-selected="false" data-tab="source">Source</button><button role="tab" aria-selected="false" data-tab="history">History</button></div><span class="live-label"><i></i> LIVE</span></div>
-<div id="preview" class="view"><div id="welcome"><div class="welcome-mark">✳</div><div class="eyebrow">SOFTWARE THAT GROWS WITH YOU</div><h1>Make room for<br><em>your next idea.</em></h1><p>A small tool. A learning companion. Something entirely your own.<br>Start a space, then shape it through conversation.</p><button id="welcome-create" class="primary">Create your first app <span>↗</span></button><div class="welcome-note">Private by origin. Saved in your browser. Always yours.</div></div><div id="app-container"></div></div>
-<div id="source" class="view" hidden><div class="source-toolbar"><label>File <select id="source-file" aria-label="Source file"></select></label><button id="apply-source" class="primary">Apply source</button></div><textarea id="source-code" aria-label="Source code" spellcheck="false"></textarea><p class="hint">Changes are checked before they reach your running app. A failed build keeps your current revision.</p></div>
-<div id="history" class="view" hidden><h2>Your app, over time</h2><p class="hint">Restore any revision. Your saved application data stays with you.</p><div id="revision-list"></div></div>
-<footer class="statusbar"><span id="status" role="status">Ready when you are</span><span id="revision-label">LOCAL FIRST</span></footer></section>
-<aside class="conversation"><div class="conversation-heading"><div><span class="assistant-orb">✳</span><strong>Make it yours</strong></div><span class="hint">YOUR AI COLLABORATOR</span></div><div id="chat" aria-live="polite"><div class="chat-intro"><h2>What could this become?</h2><p>Describe what you need, ask a question, or work through an idea. We can build it together.</p><span class="demo-note">Demo mode uses scripted responses. Connect a provider in Settings for real AI.</span></div></div><div id="suggestion" hidden></div><div id="proposal" hidden></div><form id="chat-form"><label for="message" class="sr-only">Message</label><textarea id="message" placeholder="What would you like to make?" rows="3"></textarea><div class="composer-actions"><button type="button" id="speak" class="quiet" aria-label="Speak your message">◉ Speak</button><button type="submit" aria-label="Send" class="primary">Send ↑</button></div></form><div class="conversation-foot">Changes happen when you choose.</div></aside></div></main>
-<dialog id="create-dialog"><form id="create-form"><div class="eyebrow">A NEW BEGINNING</div><h2>What are we making?</h2><label>App name<input name="name" aria-label="App name" required maxlength="80" placeholder="My little idea"></label><label>Describe your idea <span class="hint">(optional)</span><textarea name="idea" rows="3" placeholder="A simple habit tracker for…"></textarea></label><div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button type="submit" class="primary">Create app</button></div></form></dialog>
-<dialog id="settings-dialog"><form id="settings-form"><div class="eyebrow">YOUR PREFERENCES</div><h2>Make yourself at home.</h2><p class="hint">Provider keys stay on this shell origin and are excluded from backups.</p><div class="key-grid"><label>OpenAI API key<input id="openai-key" type="password" autocomplete="off"></label><label>OpenRouter API key<input id="openrouter-key" type="password" autocomplete="off"></label></div><h3>Models by role</h3><p class="hint">Select a provider and its exact model ID. Set prices per million tokens to enable spending estimates.</p><div id="model-routes"></div><div class="limit-grid"><label>Requests / minute<input id="request-limit" type="number" min="1" max="1000"></label><label>Concurrent requests<input id="concurrency-limit" type="number" min="1" max="20"></label><label>Budget (USD)<input id="budget-limit" type="number" min="0" step="0.01"></label></div><label class="checkbox"><input id="observe" type="checkbox"> Offer occasional suggestions based on repeated clicks</label><p class="hint">Only aggregate click patterns are observed. No camera, cursor stream, or raw audio is stored. Suggestions are optional.</p><label class="checkbox"><input id="debug" type="checkbox"> Detailed diagnostics (DEBUG)</label><label class="checkbox"><input id="capture-content" type="checkbox"> Include AI prompts and responses in DEBUG logs</label><p class="hint">Logs are bounded and redacted, but prompts can contain private content. Export with care.</p><div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button type="submit" class="primary">Save settings</button></div></form></dialog>
-<dialog id="backup-dialog"><div class="eyebrow">TAKE YOUR WORK WITH YOU</div><h2>Your apps, packed to go.</h2><p>Download source, revisions, conversations, and accessible application storage. Restore the archive on another browser using the same site.</p><p class="hint">Application data may contain secrets. Keep the archive somewhere safe. Provider keys are excluded. Other open tabs and service workers may prevent a consistent snapshot; the archive reports limitations.</p><div class="backup-actions"><button id="download-backup" class="primary">Download backup</button><label class="file-button">Restore backup<input id="restore-file" type="file" accept=".json,.itsalive,application/json"></label><button id="cancel-backup" class="quiet" hidden>Cancel operation</button></div><p id="backup-status" role="status"></p><div class="dialog-actions"><button type="button" data-close class="quiet">Close</button></div></dialog>`;
+root.innerHTML = SHELL_VIEW;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const workspace = new Workspace($("app-container"));
 let config: AIConfig = defaultAIConfig();
 let credentials: Partial<Record<"openai" | "openrouter", string>> = {};
 try {
-  credentials = JSON.parse(
+  const stored: unknown = JSON.parse(
     localStorage.getItem("itsalive.credentials") ?? "{}",
   );
+  if (stored && typeof stored === "object" && !Array.isArray(stored)) {
+    for (const provider of ["openai", "openrouter"] as const) {
+      const value = (stored as Record<string, unknown>)[provider];
+      if (typeof value === "string" && value.trim())
+        credentials[provider] = value.trim();
+    }
+  }
 } catch {
   /* invalid local credentials can be replaced in Settings */
 }
@@ -64,8 +60,25 @@ const context = () => ({
   correlationId: crypto.randomUUID(),
 });
 function report(error: unknown) {
-  setStatus(error instanceof Error ? error.message : String(error));
-  console.error(error);
+  const detail = error instanceof Error ? error.message : String(error);
+  void workspace.diagnostics.record(
+    "operation.failed",
+    { message: detail },
+    context(),
+  );
+  const message =
+    /key|credential|provider|connect|authentication|401|403/i.test(detail)
+      ? "AI couldn't connect. Check your provider and API key in Settings, then try again."
+      : /budget|limit|429|rate/i.test(detail)
+        ? "An AI usage limit was reached. Check your limits in Settings or try again later."
+        : /network|fetch|offline/i.test(detail)
+          ? "The connection was interrupted. Check your internet connection and try again."
+          : /already|wait|finish|backup|restore|write a question|describe|characters|microphone|speech|recognition|Type your message/i.test(
+                detail,
+              )
+            ? detail
+            : "That didn't work. Your last working application is safe. Please try again.";
+  setStatus(message);
 }
 function action(fn: () => Promise<unknown>) {
   void fn().catch(report);
@@ -93,7 +106,7 @@ function showTab(tab: string) {
   for (const name of ["preview", "source", "history"])
     $(name).hidden = name !== tab;
   document
-    .querySelectorAll<HTMLButtonElement>("[data-tab]")
+    .querySelectorAll<HTMLButtonElement>('[role="tab"][data-tab]')
     .forEach((b) =>
       b.setAttribute("aria-selected", String(b.dataset.tab === tab)),
     );
@@ -142,30 +155,56 @@ async function renderHistory() {
   }
 }
 async function renderChat() {
+  const chat = $("chat");
   if (!workspace.current) {
-    $("chat").replaceChildren();
+    chat.innerHTML =
+      '<div class="chat-intro first-run-chat"><h2>What would you like to do?</h2><p>Describe a goal to create an app.</p></div>';
+    delete chat.dataset.appId;
     return;
   }
   const appId = workspace.current.id;
   const messages = await workspace.repo.listChat(appId);
   if (workspace.current?.id !== appId) return;
-  const chat = $("chat");
+  const changedApp = chat.dataset.appId !== appId;
+  const nearBottom =
+    chat.scrollHeight - chat.scrollTop - chat.clientHeight < 80;
+  const known = new Set(messages.map((message) => message.id));
+  const reset =
+    changedApp ||
+    [...chat.querySelectorAll<HTMLElement>("[data-message-id]")].some(
+      (node) => !known.has(node.dataset.messageId!),
+    );
+  if (reset) {
+    chat.setAttribute("aria-live", "off");
+    chat.replaceChildren();
+    chat.dataset.appId = appId;
+    requestAnimationFrame(() => {
+      if (chat.dataset.appId === appId)
+        chat.setAttribute("aria-live", "polite");
+    });
+  }
   if (!messages.length) {
-    chat.innerHTML =
-      '<div class="chat-intro"><h2>A fresh start.</h2><p>What would you like this app to do? Tell me a little about your idea.</p><span class="demo-note">Demo uses scripted responses. Configure a provider for real AI.</span></div>';
+    chat.innerHTML = '<p class="chat-intro">What would you like help with?</p>';
     return;
   }
-  chat.replaceChildren(
-    ...messages.map((message) => {
-      const bubble = element("div", undefined, `chat-message ${message.role}`);
-      bubble.append(
-        element("span", message.role === "user" ? "YOU" : "IT’S ALIVE"),
-        element("p", message.content),
-      );
-      return bubble;
-    }),
+  chat.querySelector(".chat-intro")?.remove();
+  const displayed = new Set(
+    [...chat.querySelectorAll<HTMLElement>("[data-message-id]")].map(
+      (node) => node.dataset.messageId,
+    ),
   );
-  chat.scrollTop = chat.scrollHeight;
+  for (const message of messages) {
+    if (displayed.has(message.id)) continue;
+    const bubble = element("div", undefined, `chat-message ${message.role}`);
+    bubble.dataset.messageId = message.id;
+    bubble.append(
+      element("span", message.role === "user" ? "You" : "It's Alive"),
+      element("p", message.content),
+    );
+    chat.append(bubble);
+  }
+  await renderFeedback(appId);
+  if (changedApp || nearBottom) chat.scrollTop = chat.scrollHeight;
 }
 async function render() {
   const apps = await workspace.repo.listApps();
@@ -190,8 +229,9 @@ async function render() {
       return button;
     }),
   );
+  root.classList.toggle("has-app", !!workspace.current);
   $("welcome").hidden = !!workspace.current;
-  $("app-name").textContent = workspace.current?.name ?? "A place to begin";
+  $("app-name").textContent = workspace.current?.name ?? "Your apps";
   $("revision-label").textContent = workspace.revision
     ? `REV ${workspace.revision.id.slice(0, 6).toUpperCase()}`
     : "LOCAL FIRST";
@@ -199,6 +239,7 @@ async function render() {
   if (activeTab === "history") await renderHistory();
   await renderChat();
 }
+const shellView = initializeShellView({ showTab });
 workspace.onChange = () => action(render);
 async function appendMessage(
   role: ChatMessage["role"],
@@ -215,13 +256,126 @@ async function appendMessage(
   });
   if (workspace.current?.id === appId) await renderChat();
 }
-async function runCoding(intent: string) {
-  if (coding) throw new Error("A change is already in progress");
-  if (!workspace.revision) throw new Error("Create an application first");
+interface FeedbackAttempt {
+  id: string;
+  appId: string;
+  revisionId: string;
+  originalRequest: string;
+  intent: string;
+  status: "offered" | "unresolved" | "resolved" | "dismissed";
+  createdAt: number;
+}
+async function feedbackAttempts(appId: string): Promise<FeedbackAttempt[]> {
+  return (
+    (await workspace.repo.getSetting<FeedbackAttempt[]>(`feedback.${appId}`)) ??
+    []
+  );
+}
+async function saveFeedback(attempt: FeedbackAttempt) {
+  const attempts = await feedbackAttempts(attempt.appId);
+  const next = attempts.filter((item) => item.id !== attempt.id);
+  next.push(attempt);
+  await workspace.repo.setSetting(`feedback.${attempt.appId}`, next.slice(-30));
+}
+async function renderFeedback(appId: string) {
+  const attempts = await feedbackAttempts(appId);
+  if (workspace.current?.id !== appId) return;
+  $("chat")
+    .querySelectorAll(".feedback")
+    .forEach((node) => node.remove());
+  const attempt = attempts.at(-1);
+  if (
+    coding ||
+    !attempt ||
+    attempt.status !== "offered" ||
+    attempt.revisionId !== workspace.revision?.id
+  )
+    return;
+  const feedback = element("div", undefined, "feedback");
+  feedback.append(element("span", "Did this change help?"));
+  for (const [label, status] of [
+    ["Yes", "resolved"],
+    ["Not yet", "unresolved"],
+    ["Dismiss", "dismissed"],
+  ] as const) {
+    const button = element("button", label, "quiet");
+    button.onclick = () =>
+      action(async () => {
+        if (workspace.current?.id !== appId) return;
+        feedback.remove();
+        attempt.status = status;
+        await saveFeedback(attempt);
+        await workspace.diagnostics.record(
+          "adaptation.feedback",
+          {
+            helpful:
+              status === "resolved"
+                ? true
+                : status === "unresolved"
+                  ? false
+                  : null,
+            originalRequest: attempt.originalRequest,
+            feedbackId: attempt.id,
+          },
+          { appId, revisionId: attempt.revisionId },
+        );
+        if (status !== "unresolved") return;
+        shellView.showAssistant();
+        await appendMessage("user", "Not yet.", appId);
+        // Inspect deterministic evidence before asking the user to explain a known failure.
+        const inspection = await workspace.inspect().catch(() => null);
+        if (workspace.current?.id !== appId) return;
+        if (inspection?.errors.length) {
+          await appendMessage(
+            "assistant",
+            "I found a problem while checking the app. I'll investigate and try to fix it.",
+            appId,
+          );
+          await runCoding(
+            `${attempt.intent}\nThe previous attempt did not help. Investigate these observed runtime errors and repair the original goal: ${JSON.stringify(inspection.errors).slice(0, 4000)}`,
+            attempt.originalRequest,
+          );
+        } else {
+          await appendMessage(
+            "assistant",
+            "What's still not working as you expected?",
+            appId,
+          );
+          $<HTMLTextAreaElement>("message").focus();
+        }
+      });
+    feedback.append(button);
+  }
+  $("chat")
+    .querySelectorAll(".feedback")
+    .forEach((node) => node.remove());
+  $("chat").append(feedback);
+}
+async function runCoding(intent: string, originalRequest = intent) {
+  const requestedAppId = workspace.current?.id;
+  if (
+    !requireAIReady(async () => {
+      if (requestedAppId && workspace.current?.id !== requestedAppId)
+        await workspace.openApp(requestedAppId);
+      await runCoding(intent, originalRequest);
+    }, ["coding-standard"])
+  )
+    return;
+  if (coding)
+    throw new Error(
+      "A change is already in progress. You can still ask a question.",
+    );
+  if (!workspace.revision)
+    throw new Error("Describe the application you'd like first.");
   coding = true;
+  $("chat")
+    .querySelectorAll(".feedback")
+    .forEach((node) => node.remove());
   const base = workspace.revision;
   const codingContext = context();
-  setStatus("Working on your idea…");
+  setStatus(
+    base.parent === null ? "Creating your app…" : "Working on your changes…",
+  );
   const requireSameApp = () => {
     if (
       workspace.current?.id !== base.appId ||
@@ -229,17 +383,19 @@ async function runCoding(intent: string) {
       workspace.isBackingUp
     )
       throw new Error(
-        "The application changed while this coding request was running. Please start again from the latest revision.",
+        "The application changed while this request was running. Please try again in the app you want to change.",
       );
   };
   try {
     const harness = new CodingHarness(ai, {
       compile: (project) => {
         requireSameApp();
+        setStatus("Checking the changes…");
         return workspace.compiler.compile(project, crypto.randomUUID());
       },
       verify: (artifact) => {
         requireSameApp();
+        setStatus("Checking the changes…");
         return workspace.verify(artifact, codingContext);
       },
       commit: (project, artifact, baseRevisionId) => {
@@ -247,7 +403,7 @@ async function runCoding(intent: string) {
         return workspace.applyProject(
           project,
           baseRevisionId,
-          intent,
+          originalRequest,
           artifact,
           codingContext.correlationId,
         );
@@ -267,69 +423,101 @@ async function runCoding(intent: string) {
       authorized: true,
       context: codingContext,
     });
-    await appendMessage("assistant", result.summary, base.appId);
-    $("proposal").hidden = true;
-    if (result.revisionId && workspace.current?.id === base.appId) {
-      const feedback = element("div", undefined, "feedback");
-      feedback.append(element("span", "Did this change help?"));
-      for (const [label, helpful] of [
-        ["Yes", true],
-        ["Not yet", false],
-      ] as const) {
-        const button = element("button", label, "quiet");
-        button.onclick = () =>
-          action(async () => {
-            await workspace.diagnostics.record(
-              "adaptation.feedback",
-              { helpful },
-              { appId: base.appId, revisionId: result.revisionId },
-            );
-            feedback.textContent = "Thanks — feedback saved.";
-          });
-        feedback.append(button);
-      }
-      $("chat").append(feedback);
+    await workspace.diagnostics.record(
+      "coding.complete",
+      { summary: result.summary, changedFiles: result.changedFiles },
+      codingContext,
+    );
+    await saveFeedback({
+      id: crypto.randomUUID(),
+      appId: base.appId,
+      revisionId: result.revisionId,
+      originalRequest,
+      intent,
+      status: "offered",
+      createdAt: Date.now(),
+    });
+    // Worker summaries are diagnostics, never an unfiltered technical chat response.
+    await appendMessage(
+      "assistant",
+      "Ready to try. Let me know what you'd like to adjust.",
+      base.appId,
+    );
+    if (workspace.current?.id === base.appId) {
+      $("proposal").hidden = true;
+      setStatus("Ready to try");
+      shellView.setMobileView("app");
     }
+  } catch (error) {
+    await workspace.diagnostics.record(
+      "coding.failed",
+      { message: String(error) },
+      codingContext,
+    );
+    await appendMessage(
+      "assistant",
+      base.parent === null
+        ? "I couldn't create your app yet. Tell me more about what you need, or ask me to try again."
+        : "I couldn't complete that change. Your previous app is still available. You can describe the problem or ask me to try again.",
+      base.appId,
+    );
+    throw error;
   } finally {
     coding = false;
+    if (workspace.current?.id === base.appId) await renderChat();
   }
 }
-function showProposal(intent: string) {
+function showConfirmation(
+  intent: string,
+  reason: string,
+  originalRequest: string,
+) {
   const appId = workspace.current?.id;
+  const revisionId = workspace.revision?.id;
   const box = $("proposal");
   box.hidden = false;
-  box.replaceChildren(element("p", intent));
-  const button = element("button", "Apply change", "primary");
+  box.replaceChildren(element("p", reason));
+  const button = element("button", "Confirm this change", "primary");
   button.onclick = () =>
     action(async () => {
-      if (workspace.current?.id !== appId)
-        throw new Error("Open the application this change was proposed for");
-      await runCoding(intent);
+      if (
+        workspace.current?.id !== appId ||
+        workspace.revision?.id !== revisionId
+      )
+        throw new Error(
+          "This application changed after the question was asked. Please request the change again.",
+        );
+      box.hidden = true;
+      await appendMessage("user", "Confirm this change.", appId);
+      await runCoding(intent, originalRequest);
     });
-  const dismiss = element("button", "Not now", "quiet");
+  const dismiss = element("button", "Cancel", "quiet");
   dismiss.onclick = () => {
     box.hidden = true;
   };
   box.append(button, dismiss);
 }
 async function observe(observation: BehaviorObservation) {
-  if (!workspace.current || workspace.isBackingUp) return;
+  if (
+    !workspace.current ||
+    workspace.isBackingUp ||
+    missingProviderRoles(config, credentials, ["decision"]).length
+  )
+    return;
   const suggestion = await advisor.observe(observation, context());
   if (!suggestion || suggestion.appId !== workspace.current?.id) return;
   const box = $("suggestion");
   box.hidden = false;
-  box.replaceChildren(
-    element("span", "A THOUGHT", "eyebrow"),
-    element("p", suggestion.explanation),
-  );
-  const accept = element("button", "Apply suggestion", "primary");
+  box.replaceChildren(element("p", suggestion.explanation));
+  const accept = element("button", "Try this", "quiet");
   accept.onclick = () =>
     action(async () => {
       if (workspace.current?.id !== suggestion.appId)
         throw new Error("Open the application this suggestion belongs to");
       box.hidden = true;
       const accepted = advisor.resolve(suggestion.id, "accepted");
-      if (accepted) await runCoding(accepted.changeRequest);
+      if (accepted)
+        await runCoding(accepted.changeRequest, accepted.explanation);
     });
   const dismiss = element("button", "Dismiss", "quiet");
   dismiss.onclick = () => {
@@ -342,19 +530,11 @@ workspace.onBehavior = (observation) => action(() => observe(observation));
 function showCreate() {
   $<HTMLDialogElement>("create-dialog").showModal();
   $<HTMLInputElement>("create-form")
-    .querySelector<HTMLInputElement>("input")
+    .querySelector<HTMLTextAreaElement>("textarea")
     ?.focus();
 }
 $("new-app").onclick = showCreate;
 $("welcome-create").onclick = showCreate;
-document
-  .querySelectorAll<HTMLButtonElement>("[data-close]")
-  .forEach(
-    (button) => (button.onclick = () => button.closest("dialog")?.close()),
-  );
-document
-  .querySelectorAll<HTMLButtonElement>("[data-tab]")
-  .forEach((button) => (button.onclick = () => showTab(button.dataset.tab!)));
 $<HTMLSelectElement>("source-file").onchange = () => {
   $<HTMLTextAreaElement>("source-code").value =
     workspace.revision?.project.files[
@@ -368,46 +548,104 @@ $("apply-source").onclick = () =>
         $<HTMLTextAreaElement>("source-code").value,
     }),
   );
+let pendingRequest: (() => Promise<void>) | undefined;
+let pendingText = "";
+function requireAIReady(
+  resume: () => Promise<void>,
+  roles: readonly AIRole[] = ["conversation"],
+  draftText = "",
+): boolean {
+  if (!missingProviderRoles(config, credentials, roles).length) return true;
+  pendingRequest = resume;
+  pendingText = draftText;
+  settings.open(
+    "Connect an AI provider to continue. Your request will resume after connection.",
+  );
+  return false;
+}
+async function createFromGoal(name: string, idea: string) {
+  if (!idea.trim())
+    throw new Error("Describe what you want your application to help you do.");
+  if (
+    !requireAIReady(
+      () => createFromGoal(name, idea),
+      ["conversation", "coding-standard"],
+      idea,
+    )
+  )
+    return;
+  if (coding)
+    throw new Error(
+      "Wait for the current change to finish before creating an app.",
+    );
+  await workspace.createApp(name.trim() || idea.slice(0, 60));
+  $<HTMLDialogElement>("create-dialog").close();
+  showTab("preview");
+  await sendMessage(idea);
+}
+async function sendMessage(
+  text: string,
+  expectedAppId: string | null = workspace.current?.id ?? null,
+) {
+  if (workspace.isBackingUp)
+    throw new Error("Finish the backup or restore first.");
+  if (!text.trim()) return;
+  if (
+    !requireAIReady(
+      () => sendMessage(text, expectedAppId),
+      ["conversation"],
+      text,
+    )
+  )
+    return;
+  if (expectedAppId && workspace.current?.id !== expectedAppId)
+    await workspace.openApp(expectedAppId);
+  if (expectedAppId === null || !workspace.current)
+    await workspace.createApp(text.slice(0, 60));
+  const appId = workspace.current!.id;
+  const requestContext = context();
+  const history = await workspace.repo.listChat(appId);
+  const attempts = await feedbackAttempts(appId);
+  const unresolved =
+    attempts.at(-1)?.status === "unresolved" ? attempts.at(-1) : undefined;
+  await appendMessage("user", text, appId);
+  setStatus("Thinking…");
+  const reply = await converse(
+    ai,
+    text,
+    history.map((m) => ({ role: m.role, content: m.content })),
+    requestContext,
+    unresolved
+      ? { originalRequest: unresolved.originalRequest, unresolved: true }
+      : undefined,
+  );
+  await appendMessage("assistant", reply.reply, appId);
+  if (workspace.current?.id !== appId) return;
+  if (reply.intent === "change" && reply.changeRequest)
+    await runCoding(reply.changeRequest, unresolved?.originalRequest ?? text);
+  else if (
+    reply.intent === "confirm" &&
+    reply.changeRequest &&
+    reply.confirmationReason
+  )
+    showConfirmation(reply.changeRequest, reply.confirmationReason, text);
+  else setStatus("Ready");
+}
 $<HTMLFormElement>("create-form").onsubmit = (event) => {
   event.preventDefault();
   const form = new FormData(event.currentTarget as HTMLFormElement);
-  action(async () => {
-    await workspace.createApp(String(form.get("name")));
-    $<HTMLDialogElement>("create-dialog").close();
-    showTab("preview");
-    const idea = String(form.get("idea") ?? "").trim();
-    if (idea) {
-      await appendMessage("user", idea);
-      await runCoding(idea);
-    }
-  });
+  const name = String(form.get("name") ?? "");
+  const idea = String(form.get("idea") ?? "").trim();
+  $<HTMLDialogElement>("create-dialog").close();
+  action(() => createFromGoal(name, idea));
 };
 $<HTMLFormElement>("chat-form").onsubmit = (event) => {
   event.preventDefault();
-  action(async () => {
-    if (workspace.isBackingUp)
-      throw new Error("Finish the backup or restore first");
-    const input = $<HTMLTextAreaElement>("message");
-    const text = input.value.trim();
-    if (!text) return;
-    if (!workspace.current) {
-      await workspace.createApp("My new app");
-    }
-    const appId = workspace.current!.id;
-    const requestContext = context();
-    input.value = "";
-    const history = await workspace.repo.listChat(appId);
-    await appendMessage("user", text, appId);
-    const reply = await converse(
-      ai,
-      text,
-      history.map((m) => ({ role: m.role, content: m.content })),
-      requestContext,
-    );
-    await appendMessage("assistant", reply.reply, appId);
-    if (reply.changeRequest && workspace.current?.id === appId)
-      showProposal(reply.changeRequest);
-  });
+  const input = $<HTMLTextAreaElement>("message");
+  const text = input.value.trim();
+  if (!text) return;
+  input.value = "";
+  action(() => sendMessage(text));
 };
 $("speak").onclick = () => {
   if (listening) speech.stop();
@@ -420,135 +658,97 @@ deeper.title =
 $("chat-form")
   .querySelector(".composer-actions")!
   .insertBefore(deeper, $("chat-form").querySelector("[type=submit]"));
+async function runDeeper(text: string, appId: string) {
+  if (!requireAIReady(() => runDeeper(text, appId), ["reasoning"], text))
+    return;
+  if (workspace.isBackingUp)
+    throw new Error("Finish the backup or restore first.");
+  if (reasoning) throw new Error("Deeper analysis is already running.");
+  if (workspace.current?.id !== appId) await workspace.openApp(appId);
+  const requestContext = context();
+  reasoning = true;
+  deeper.disabled = true;
+  try {
+    const history = await workspace.repo.listChat(appId);
+    await appendMessage("user", text, appId);
+    const reply = await reason(
+      ai,
+      text,
+      history.map((m) => ({ role: m.role, content: m.content })),
+      requestContext,
+    );
+    await appendMessage("assistant", reply, appId);
+  } finally {
+    reasoning = false;
+    deeper.disabled = false;
+  }
+}
 deeper.onclick = () =>
   action(async () => {
-    if (workspace.isBackingUp)
-      throw new Error("Finish the backup or restore first");
-    if (reasoning) throw new Error("Deeper analysis is already running");
-    const text = $<HTMLTextAreaElement>("message").value.trim();
+    const input = $<HTMLTextAreaElement>("message");
+    const text = input.value.trim();
     if (!text || !workspace.current)
-      throw new Error("Write a question in an open app first");
-    const appId = workspace.current.id;
-    const requestContext = context();
-    reasoning = true;
-    deeper.disabled = true;
-    try {
-      const history = await workspace.repo.listChat(appId);
-      await appendMessage("user", text, appId);
-      $<HTMLTextAreaElement>("message").value = "";
-      const reply = await reason(
-        ai,
-        text,
-        history.map((m) => ({ role: m.role, content: m.content })),
-        requestContext,
-      );
-      await appendMessage("assistant", reply, appId);
-    } finally {
-      reasoning = false;
-      deeper.disabled = false;
-    }
+      throw new Error("Write a question in an open app first.");
+    input.value = "";
+    await runDeeper(text, workspace.current.id);
   });
-$("settings").onclick = () => {
-  $<HTMLInputElement>("openai-key").value = credentials.openai ?? "";
-  $<HTMLInputElement>("openrouter-key").value = credentials.openrouter ?? "";
-  const routes = $("model-routes");
-  routes.replaceChildren();
-  for (const [role, label] of Object.entries(ROLE_LABELS)) {
-    if (role === "speech") continue;
-    const route = config.routes[role as AIRole];
-    const row = element("div", undefined, "model-row");
-    row.dataset.role = role;
-    row.append(element("label", label));
-    const provider = element("select");
-    provider.setAttribute("aria-label", `${label} provider`);
-    provider.className = "provider";
-    for (const id of ["demo", "openai", "openrouter"]) {
-      const option = element(
-        "option",
-        id === "demo" ? "Demo" : id === "openai" ? "OpenAI" : "OpenRouter",
-      );
-      option.value = id;
-      provider.append(option);
-    }
-    provider.value = route.provider;
-    const model = element("input");
-    model.value = route.model;
-    model.className = "model";
-    model.setAttribute("aria-label", `${label} model`);
-    row.append(provider, model);
-    for (const [field, caption] of [
-      ["inputPerMillion", "Input $/M"],
-      ["outputPerMillion", "Output $/M"],
-    ] as const) {
-      const input = element("input");
-      input.type = "number";
-      input.min = "0";
-      input.step = "0.01";
-      input.value = String(route[field]);
-      input.dataset.field = field;
-      input.setAttribute("aria-label", `${label} ${caption}`);
-      input.title = caption;
-      row.append(input);
-    }
-    routes.append(row);
-  }
-  $<HTMLInputElement>("request-limit").value = String(
-    config.limits.requestsPerMinute,
-  );
-  $<HTMLInputElement>("concurrency-limit").value = String(
-    config.limits.concurrency,
-  );
-  $<HTMLInputElement>("budget-limit").value = String(config.limits.budgetUSD);
-  $<HTMLInputElement>("observe").checked = workspace.observe;
-  $<HTMLInputElement>("debug").checked = workspace.diagnostics.debug;
-  $<HTMLInputElement>("capture-content").checked = config.captureContent;
-  $<HTMLDialogElement>("settings-dialog").showModal();
-};
-$<HTMLFormElement>("settings-form").onsubmit = (event) => {
-  event.preventDefault();
-  action(async () => {
+function refreshProviderBadge() {
+  const missing = missingProviderRoles(config, credentials);
+  $("provider-badge").textContent = missing.length
+    ? "Connect AI"
+    : Object.values(config.routes).some((route) => route.provider === "demo")
+      ? "Scripted test provider"
+      : "AI connected";
+}
+const settings = new SettingsController({
+  getState: () => ({
+    config,
+    credentials,
+    observe: workspace.observe,
+    debug: workspace.diagnostics.debug,
+  }),
+  getService: () => ai,
+  canSave: () => {
     if (workspace.isBackingUp)
-      throw new Error("Finish the backup or restore before saving settings");
-    const next = structuredClone(config);
-    document.querySelectorAll<HTMLElement>(".model-row").forEach((row) => {
-      const route = next.routes[row.dataset.role as AIRole];
-      route.provider = row.querySelector<HTMLSelectElement>(".provider")!
-        .value as typeof route.provider;
-      route.model = row.querySelector<HTMLInputElement>(".model")!.value;
-      for (const field of ["inputPerMillion", "outputPerMillion"] as const)
-        route[field] = Number(
-          row.querySelector<HTMLInputElement>(`[data-field="${field}"]`)!.value,
-        );
-    });
-    next.limits = {
-      requestsPerMinute: Number($<HTMLInputElement>("request-limit").value),
-      concurrency: Number($<HTMLInputElement>("concurrency-limit").value),
-      budgetUSD: Number($<HTMLInputElement>("budget-limit").value),
-    };
-    next.captureContent = $<HTMLInputElement>("capture-content").checked;
-    ai.configure(next);
-    config = next;
-    credentials = {
-      openai: $<HTMLInputElement>("openai-key").value.trim(),
-      openrouter: $<HTMLInputElement>("openrouter-key").value.trim(),
-    };
+      throw new Error("Finish the backup or restore before saving settings.");
+    if (coding || reasoning || ai.activeRequestCount > 0)
+      throw new Error(
+        "Wait for current AI requests before changing the connection.",
+      );
+  },
+  onSave: async (value) => {
+    ai.configure(value.config);
+    config = value.config;
+    credentials = value.credentials;
     localStorage.setItem("itsalive.credentials", JSON.stringify(credentials));
     await workspace.repo.setSetting("ai.config", config);
-    workspace.observe = $<HTMLInputElement>("observe").checked;
-    workspace.diagnostics.debug = $<HTMLInputElement>("debug").checked;
+    await workspace.setObservation(value.observe);
+    workspace.diagnostics.debug = value.debug;
     await workspace.repo.setSetting("privacy", {
-      observe: workspace.observe,
-      debug: workspace.diagnostics.debug,
+      observe: value.observe,
+      debug: value.debug,
     });
-    $("provider-badge").textContent =
-      config.routes.conversation.provider === "demo"
-        ? "Demo mode"
-        : config.routes.conversation.model;
-    $<HTMLDialogElement>("settings-dialog").close();
-    if (workspace.current) await workspace.openApp(workspace.current.id);
+    refreshProviderBadge();
     setStatus("Settings saved");
-  });
-};
+  },
+  onSaved: async () => {
+    const resume = pendingRequest;
+    pendingRequest = undefined;
+    pendingText = "";
+    if (resume) await resume();
+  },
+  onError: report,
+});
+$("settings").onclick = () => settings.open();
+$<HTMLDialogElement>("settings-dialog").addEventListener("close", () => {
+  if ($<HTMLDialogElement>("settings-dialog").returnValue === "saved") return;
+  pendingRequest = undefined;
+  if (pendingText) {
+    $<HTMLTextAreaElement>("message").value = pendingText;
+    pendingText = "";
+    shellView.showAssistant();
+  }
+});
 $("export-log").onclick = () =>
   action(async () => {
     download(
@@ -604,12 +804,35 @@ $("download-backup").onclick = () =>
       );
     }),
   );
-$<HTMLInputElement>("restore-file").onchange = () =>
+let pendingRestore: File | undefined;
+function cancelRestore() {
+  pendingRestore = undefined;
+  $("restore-confirmation").hidden = true;
+  $<HTMLInputElement>("restore-file").value = "";
+}
+$<HTMLInputElement>("restore-file").onchange = () => {
+  pendingRestore = $<HTMLInputElement>("restore-file").files?.[0];
+  if (!pendingRestore) {
+    cancelRestore();
+    return;
+  }
+  $("restore-confirm-description").textContent =
+    `Restoring “${pendingRestore.name}” replaces all applications, conversations and saved app data on this device. Download a backup first if you want to keep your current apps.`;
+  $("restore-confirmation").hidden = false;
+  $("cancel-restore").focus();
+};
+$("cancel-restore").onclick = () => {
+  cancelRestore();
+  $("download-backup").focus();
+};
+$("confirm-restore").onclick = () =>
   action(async () => {
-    const file = $<HTMLInputElement>("restore-file").files?.[0];
+    const file = pendingRestore;
+    cancelRestore();
     if (file)
       await backupOperation((signal) => workspace.importBackup(file, signal));
   });
+$<HTMLDialogElement>("backup-dialog").addEventListener("close", cancelRestore);
 $("cancel-backup").onclick = () => backupController?.abort();
 
 async function configureAI() {
@@ -658,10 +881,7 @@ async function configureAI() {
   }>("privacy");
   workspace.observe = privacy?.observe ?? false;
   workspace.diagnostics.debug = privacy?.debug ?? false;
-  $("provider-badge").textContent =
-    config.routes.conversation.provider === "demo"
-      ? "Demo mode"
-      : config.routes.conversation.model;
+  refreshProviderBadge();
 }
 async function initialize() {
   await configureAI();
@@ -671,8 +891,13 @@ async function initialize() {
     },
     onState: (active) => {
       listening = active;
-      $("speak").textContent = active ? "■ Stop" : "◉ Speak";
-      setStatus(active ? "Listening…" : "Ready");
+      $("speak").textContent = active ? "Stop listening" : "Speak";
+      $("speak").setAttribute("aria-pressed", String(active));
+      $("speak").setAttribute(
+        "aria-label",
+        active ? "Stop listening" : "Speak your message",
+      );
+      if (active) setStatus("Listening…");
     },
     onError: report,
   });

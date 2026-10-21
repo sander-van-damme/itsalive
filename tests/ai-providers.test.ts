@@ -4,6 +4,7 @@ import {
   HTTPProvider,
   ScriptedProvider,
   defaultAIConfig,
+  demoAIConfig,
   redact,
 } from "../src/ai";
 import type { AIResponse } from "../src/ai";
@@ -15,7 +16,7 @@ const response: AIResponse = {
   usage: { inputTokens: 10, outputTokens: 5, cachedTokens: 3 },
 };
 function liveConfig() {
-  const config = defaultAIConfig();
+  const config = demoAIConfig();
   config.routes.application = {
     provider: "openai",
     model: "gpt-4.1-mini",
@@ -27,6 +28,22 @@ function liveConfig() {
 }
 
 describe("documented HTTP provider adapters", () => {
+  it("does not bind the native fetch receiver to the provider adapter", async () => {
+    const fetcher = vi.fn(function (this: unknown) {
+      if (this !== undefined) throw new TypeError("Illegal invocation");
+      return Promise.resolve(
+        new Response(
+          JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
+        ),
+      );
+    });
+    const provider = new HTTPProvider("openai", fetcher as typeof fetch);
+    await expect(
+      provider.generate(liveConfig().routes.application, input, "key"),
+    ).resolves.toMatchObject({ text: "OK" });
+    expect(fetcher).toHaveBeenCalledOnce();
+  });
+
   it.each(["openai", "openrouter"] as const)(
     "sends credentials only to the fixed %s endpoint and parses tool calls and usage",
     async (provider) => {
@@ -134,7 +151,7 @@ describe("privileged AI limits and accounting", () => {
   it("blocks new provider calls during storage operations without confusing persisted reservations with active work", async () => {
     let paused = true;
     const provider = new ScriptedProvider([response]);
-    const service = new AIService(defaultAIConfig(), {
+    const service = new AIService(demoAIConfig(), {
       providers: { demo: provider },
       beforeRequest: () => {
         if (paused) throw new Error("Storage operation active");
@@ -183,7 +200,7 @@ describe("privileged AI limits and accounting", () => {
   });
   it("enforces concurrency across apps and releases slots after completion", async () => {
     let release!: (value: AIResponse) => void;
-    const config = defaultAIConfig();
+    const config = demoAIConfig();
     config.limits.concurrency = 1;
     const provider = new ScriptedProvider([
       () =>
@@ -204,7 +221,7 @@ describe("privileged AI limits and accounting", () => {
     ).resolves.toMatchObject({ text: "Hello back" });
   });
   it("enforces request rates, restores the ledger and separates roles", async () => {
-    const config = defaultAIConfig();
+    const config = demoAIConfig();
     config.limits.requestsPerMinute = 2;
     const provider = new ScriptedProvider([response, response]);
     const service = new AIService(config, {
@@ -225,7 +242,7 @@ describe("privileged AI limits and accounting", () => {
   });
   it("redacts secrets and omits content unless explicitly enabled", async () => {
     const log = vi.fn();
-    const config = defaultAIConfig();
+    const config = demoAIConfig();
     const service = new AIService(config, { log });
     await service.generate(
       "application",
@@ -244,7 +261,7 @@ describe("privileged AI limits and accounting", () => {
     ).toEqual({ password: "[REDACTED]", message: "[REDACTED] and [REDACTED]" });
   });
   it("validates app decisions and never accepts roles or credentials from app payloads", async () => {
-    const service = new AIService(defaultAIConfig(), {
+    const service = new AIService(demoAIConfig(), {
       providers: {
         demo: new ScriptedProvider([
           { text: '{"value":"not allowed"}', toolCalls: [] },

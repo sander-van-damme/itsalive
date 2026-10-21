@@ -4,13 +4,23 @@ import { AIService } from "./service";
 
 export interface ConversationReply {
   reply: string;
+  intent: "conversation" | "change" | "clarify" | "confirm";
   changeRequest: string | null;
+  confirmationReason: string | null;
 }
+export interface ConversationGoal {
+  originalRequest: string;
+  unresolved: boolean;
+}
+export const CONVERSATION_SYSTEM = `You are the conversational companion for It's Alive, an adaptive application for ordinary people. Help the person achieve their goal; never expose source files, coding agents, React, compilation, tool calls or internal handoffs. Answer questions directly. Distinguish four intents: conversation (questions/discussion), change (an explicitly requested ordinary creation, modification or repair), clarify (a genuinely unclear goal), and confirm (a destructive, costly or high-risk change that needs a specific confirmation).
+An explicit request such as "Create a violin trainer", "Add an exercise", "Fix the Start button", "Can you add a timer?" or "I want an app that teaches violin" already authorizes normal work. Return intent change and a concise internal changeRequest; do not ask the user to approve again. In an unresolved-feedback conversation, a specific description of what must be corrected is authorization to continue the original repair. Vague "Not yet" alone means clarify: ask what is still wrong. Questions such as "Why is this chord difficult?" are conversation even when they mention the app. Never turn behavioral observations or your own suggestions into authorization.
+For confirm, explain the concrete consequence in reply and confirmationReason and include the bounded changeRequest. For clarify/conversation set changeRequest and confirmationReason to null. For ordinary change set confirmationReason to null and reply to a concise goal-oriented acknowledgement. Never claim an application has changed, works, or passed checks before the platform verifies it. Do not promise unsupported capabilities. Return only the required JSON.`;
 export async function converse(
   service: AIService,
   text: string,
   history: Array<{ role: "user" | "assistant"; content: string }>,
   context: AIContext,
+  goal?: ConversationGoal,
 ): Promise<ConversationReply> {
   if (!text.trim() || text.length > 12_000)
     throw new Error("Message must contain 1–12000 characters.");
@@ -18,10 +28,15 @@ export async function converse(
     "conversation",
     {
       messages: [
-        {
-          role: "system",
-          content: `You are the responsive conversational partner for It's Alive. Answer questions directly, discuss uncertain goals, and distinguish conversation from source changes. For a requested structural change, return a concise technical changeRequest, which the user must approve before the coding harness executes. Never claim to have edited, verified, or deployed anything. Observations are evidence, not proof of user intent. Keep the reply useful and concise. Return JSON with reply and changeRequest (string or null).`,
-        },
+        { role: "system", content: CONVERSATION_SYSTEM },
+        ...(goal?.unresolved
+          ? [
+              {
+                role: "system" as const,
+                content: `The previous change did not resolve the user's goal. Continue helping with this original request: ${JSON.stringify(goal.originalRequest.slice(0, 4_000))}. Seek missing detail; do not treat vague dissatisfaction as a request to rewrite the application.`,
+              },
+            ]
+          : []),
         ...history.slice(-12).map((message) => ({
           ...message,
           content: message.content.slice(0, 3_000),
@@ -34,35 +49,65 @@ export async function converse(
           type: "object",
           properties: {
             reply: { type: "string" },
+            intent: {
+              type: "string",
+              enum: ["conversation", "change", "clarify", "confirm"],
+            },
             changeRequest: { type: ["string", "null"] },
+            confirmationReason: { type: ["string", "null"] },
           },
-          required: ["reply", "changeRequest"],
+          required: ["reply", "intent", "changeRequest", "confirmationReason"],
           additionalProperties: false,
         },
       },
     },
     context,
   );
-  let parsed: unknown;
+  let value: unknown;
   try {
-    parsed = JSON.parse(response.text);
+    value = JSON.parse(response.text);
   } catch {
-    throw new Error("Conversation model returned invalid JSON.");
+    throw new Error(
+      "The assistant couldn't understand the response. Please try again.",
+    );
   }
+  if (!value || typeof value !== "object")
+    throw new Error(
+      "The assistant returned an incomplete response. Please try again.",
+    );
+  const parsed = value as Record<string, unknown>;
   if (
-    !parsed ||
-    typeof parsed !== "object" ||
-    !("reply" in parsed) ||
     typeof parsed.reply !== "string" ||
-    !("changeRequest" in parsed) ||
-    !(parsed.changeRequest === null || typeof parsed.changeRequest === "string")
+    !["conversation", "change", "clarify", "confirm"].includes(
+      String(parsed.intent),
+    ) ||
+    !(
+      parsed.changeRequest === null || typeof parsed.changeRequest === "string"
+    ) ||
+    !(
+      parsed.confirmationReason === null ||
+      typeof parsed.confirmationReason === "string"
+    ) ||
+    ((parsed.intent === "change" || parsed.intent === "confirm") &&
+      !String(parsed.changeRequest ?? "").trim()) ||
+    (parsed.intent === "confirm" &&
+      !String(parsed.confirmationReason ?? "").trim()) ||
+    ((parsed.intent === "conversation" || parsed.intent === "clarify") &&
+      parsed.changeRequest !== null)
   )
-    throw new Error("Conversation model returned an invalid response.");
+    throw new Error(
+      "The assistant returned an incomplete response. Please try again.",
+    );
   return {
     reply: parsed.reply.slice(0, 12_000),
+    intent: parsed.intent as ConversationReply["intent"],
     changeRequest:
       typeof parsed.changeRequest === "string"
         ? parsed.changeRequest.slice(0, 12_000)
+        : null,
+    confirmationReason:
+      typeof parsed.confirmationReason === "string"
+        ? parsed.confirmationReason.slice(0, 2_000)
         : null,
   };
 }
@@ -187,7 +232,7 @@ export async function reason(
         {
           role: "system",
           content:
-            "The user explicitly requested deeper reasoning about this application or goal. Analyze the problem, state uncertainty, explain useful tradeoffs, and recommend a concrete next step. You have no tools and cannot modify code. Do not claim to have inspected, changed, tested or deployed the application. Any proposed structural change still requires a separate user-authorized coding request. Keep the result focused and readable.",
+            "The user explicitly requested deeper reasoning about their application or goal. Analyze the problem, state uncertainty, explain useful tradeoffs, and recommend a concrete next step in ordinary language. You provide advice and cannot modify the application. Do not claim to have inspected, changed, tested or deployed it. Suggestions do not authorize changes; let the user decide what to ask for. Keep coding agents, compilation, source files and internal tools out of the response unless the user explicitly asks a technical question. Keep the answer focused and readable.",
         },
         ...history.slice(-12).map((message) => ({
           ...message,

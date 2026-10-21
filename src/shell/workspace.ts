@@ -146,9 +146,24 @@ export class Workspace {
         await this.repo.updateState(appId, state);
         if (this.current?.id === appId) this.current.state = state;
       });
-    void this.stateWrites.catch((error) =>
-      this.onStatus(`Could not save state: ${String(error)}`),
-    );
+    void this.stateWrites.catch((error) => {
+      this.onStatus(
+        "Your latest activity could not be saved. Keep this app open and try again.",
+      );
+      void this.diagnostics.record(
+        "state.save.failed",
+        { message: String(error) },
+        { appId },
+      );
+    });
+  }
+
+  /** Update consent without replacing the running app or its transient activity. */
+  async setObservation(enabled: boolean) {
+    this.assertAvailable();
+    if (!enabled) this.observe = false;
+    if (this.frame) await this.frame.request("set-observation", enabled);
+    this.observe = enabled;
   }
 
   async flushState() {
@@ -337,7 +352,9 @@ export class Workspace {
               { message },
               { appId, revisionId: baseRevisionId, correlationId },
             );
-            this.onStatus(`Changes could not be applied. ${message}`);
+            this.onStatus(
+              "This change could not be completed. Your previous app is still available.",
+            );
             throw error;
           }
         },
@@ -396,7 +413,7 @@ export class Workspace {
     this.assertAvailable();
     if (this.activeEdits)
       throw new Error(
-        "Wait for the current source edit before backing up or restoring",
+        "Wait for the current change before backing up or restoring",
       );
     this.backupBusy = true;
     ++this.generation;

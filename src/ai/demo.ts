@@ -104,7 +104,7 @@ export class DemoProvider implements Provider {
               (_all, open: string, close: string) =>
                 `${open}{${JSON.stringify(title)}}${close}`,
             )
-          : `import React,{useState} from 'react';\nexport default function App(){const [count,setCount]=useState(0);return <main><h1>{${JSON.stringify(title)}}</h1><button onClick={()=>setCount(count+1)}>Count: {count}</button></main>}`;
+          : `import React from 'react';\nexport default function App(){return <main><h1>{${JSON.stringify(title)}}</h1></main>}`;
         return response("", [call("write_file", { path, content: updated })]);
       }
       const checked = [...results]
@@ -129,20 +129,30 @@ export class DemoProvider implements Provider {
     if (schemaName === "conversation") {
       const question =
         /^(?:what|why|how|explain|tell me|can you explain)\b/i.test(latest);
+      const supported =
+        /\b(?:title|heading|rename|todo|to-do|task list|checklist)\b/i.test(
+          latest,
+        );
+      const vague = /^(?:not yet|no|it doesn't help|still wrong)[.!]?$/i.test(
+        latest.trim(),
+      );
       return response(
-        JSON.stringify(
-          question
-            ? {
-                reply:
-                  "Demo mode can show the complete edit workflow: ask to change the title or create a task list. Configure a provider in Settings for a full conversation.",
-                changeRequest: null,
-              }
-            : {
-                reply:
-                  "I can demonstrate that change through the file-editing workflow. Review and apply it below. Demo supports heading changes and a task list; configure a provider for other requests.",
-                changeRequest: latest,
-              },
-        ),
+        JSON.stringify({
+          reply: vague
+            ? "What's still not working as you expected?"
+            : question
+              ? "This is a scripted test provider. Connect OpenAI or OpenRouter in Settings for answers about your application."
+              : supported
+                ? "I'll make that test change."
+                : "This scripted test provider only supports heading changes and task lists. Connect OpenAI or OpenRouter in Settings to create an app for your goal.",
+          intent: vague
+            ? "clarify"
+            : question || !supported
+              ? "conversation"
+              : "change",
+          changeRequest: !vague && !question && supported ? latest : null,
+          confirmationReason: null,
+        }),
       );
     }
     if (schemaName === "behavior_suggestion")

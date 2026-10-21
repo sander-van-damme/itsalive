@@ -23,6 +23,8 @@ export interface AIConfig {
   routes: Record<AIRole, ModelRoute>;
   limits: { requestsPerMinute: number; concurrency: number; budgetUSD: number };
   captureContent: boolean;
+  /** Explicit opt-in: scripted development responses must never be a fallback. */
+  testProviderEnabled?: boolean;
 }
 export interface AIContext {
   appId: string;
@@ -110,21 +112,57 @@ export const ROLE_LABELS: Record<AIRole, string> = {
   application: "Application AI",
   speech: "Speech transcription",
 };
-export function defaultAIConfig(): AIConfig {
-  const route: ModelRoute = {
-    provider: "demo",
-    model: "demo-v2",
-    maxOutputTokens: 4096,
-    inputPerMillion: 0,
-    outputPerMillion: 0,
+export function defaultModelRoute(provider: ProviderId = "openai"): ModelRoute {
+  return {
+    provider,
+    model:
+      provider === "demo"
+        ? "demo-v2"
+        : provider === "openrouter"
+          ? "openai/gpt-4.1-mini"
+          : "gpt-4.1-mini",
+    maxOutputTokens: 8192,
+    // Published list prices are estimates; custom models expose their own prices in Advanced.
+    inputPerMillion: provider === "demo" ? 0 : 0.4,
+    outputPerMillion: provider === "demo" ? 0 : 1.6,
   };
+}
+export function defaultAIConfig(): AIConfig {
   return {
     routes: Object.fromEntries(
-      AI_ROLES.map((role) => [role, { ...route }]),
+      AI_ROLES.map((role) => [role, defaultModelRoute()]),
     ) as Record<AIRole, ModelRoute>,
     limits: { requestsPerMinute: 30, concurrency: 2, budgetUSD: 1 },
     captureContent: false,
+    testProviderEnabled: false,
   };
+}
+/** Explicit deterministic fixture/developer choice. Never use as the application default. */
+export function demoAIConfig(): AIConfig {
+  const config = defaultAIConfig();
+  config.routes = Object.fromEntries(
+    AI_ROLES.map((role) => [role, defaultModelRoute("demo")]),
+  ) as Record<AIRole, ModelRoute>;
+  config.testProviderEnabled = true;
+  return config;
+}
+export type ProviderCredentials = Partial<
+  Record<"openai" | "openrouter", string>
+>;
+export function missingProviderRoles(
+  config: AIConfig,
+  credentials: ProviderCredentials,
+  roles: readonly AIRole[] = AI_ROLES.filter((role) => role !== "speech"),
+): AIRole[] {
+  return roles.filter((role) => {
+    const route = config.routes[role];
+    return (
+      !route ||
+      (route.provider === "demo"
+        ? !config.testProviderEnabled
+        : !credentials[route.provider]?.trim())
+    );
+  });
 }
 export const MODEL_REGISTRY = [
   {
