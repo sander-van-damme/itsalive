@@ -89,3 +89,5 @@ active and is exercised by the state-retention tests. Desktop (1440×960) and mo
 (390×844) screenshots were inspected; the narrow viewport had no horizontal page
 overflow. Mobile access to settings, backup, provider pricing and diagnostic export
 was corrected and then verified in both the browser test and an updated screenshot.
+
+After updating the development dependencies, `npm run test:e2e` passed all 20 normal tests (17 acceptance and three benchmarks) in 38.4 seconds. The optional live dependency test was skipped by default; its separate successful run is recorded in `docs/live-dependency-results.json`. The production static-build smoke test passed afterward. CI is pinned to Ubuntu 24.04, supported by the pinned Playwright release.

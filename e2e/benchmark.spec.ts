@@ -27,7 +27,7 @@ test("benchmarks real browser SWC module edits and esbuild incremental bundles",
   expect(result.esbuild.singleFileMs.every((value) => value > 0)).toBe(true);
   const evidence = { measuredAt: new Date().toISOString(), ...result };
   const text = JSON.stringify(evidence, null, 2);
-  await writeFile("docs/benchmark-results.json", `${text}\n`);
+  await writeFile(testInfo.outputPath("benchmark-results.json"), `${text}\n`);
   await testInfo.attach("compiler-benchmark.json", {
     body: text,
     contentType: "application/json",
@@ -155,7 +155,10 @@ test("measures compile to visible update on isolated origins for both compiler s
     null,
     2,
   );
-  await writeFile("docs/benchmark-visible-results.json", `${evidence}\n`);
+  await writeFile(
+    testInfo.outputPath("benchmark-visible-results.json"),
+    `${evidence}\n`,
+  );
   await testInfo.attach("compiler-visible-benchmark.json", {
     body: evidence,
     contentType: "application/json",
@@ -242,7 +245,10 @@ test("records complete accepted-edit lifecycle, reload and repeated-edit heap es
     null,
     2,
   );
-  await writeFile("docs/benchmark-lifecycle-results.json", `${evidence}\n`);
+  await writeFile(
+    testInfo.outputPath("benchmark-lifecycle-results.json"),
+    `${evidence}\n`,
+  );
   await testInfo.attach("lifecycle-benchmark.json", {
     body: evidence,
     contentType: "application/json",

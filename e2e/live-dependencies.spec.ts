@@ -119,7 +119,10 @@ test("downloads a real pinned npm package and reuses it across isolated app orig
       null,
       2,
     );
-    await writeFile("docs/live-dependency-results.json", `${evidence}\n`);
+    await writeFile(
+      testInfo.outputPath("live-dependency-results.json"),
+      `${evidence}\n`,
+    );
     await testInfo.attach("live-dependency.json", {
       body: evidence,
       contentType: "application/json",

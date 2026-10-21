@@ -69,6 +69,7 @@ npm test
 npm run build
 npx playwright install --with-deps chromium
 npm run test:e2e
+npm run test:production
 npm run benchmark
 ```
 

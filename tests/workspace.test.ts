@@ -42,7 +42,9 @@ function deferred<T>() {
   });
   return { promise, resolve, reject };
 }
-function frame(request = vi.fn(async (_method: string) => ({}))) {
+function frame(
+  request = vi.fn(async (_method: string): Promise<unknown> => ({})),
+) {
   return { request, close: vi.fn() } as unknown as FrameSession & {
     request: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;

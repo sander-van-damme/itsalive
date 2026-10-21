@@ -4,7 +4,7 @@ V2 uses SWC/WASM in one long-lived shell-owned worker. The compiler does not run
 
 ## Measured compiler choice
 
-Run `npm run benchmark` to reproduce the Chromium benchmark. The test writes `docs/benchmark-results.json` and attaches the same raw evidence to the Playwright report. The fixture contains three TypeScript/React files, twelve single-file edits and twelve two-file edits. Both engines execute their actual browser WASM implementations.
+Run `npm run benchmark` to reproduce the Chromium benchmark. The test writes results under `test-results/` (the initial recorded baseline is `docs/benchmark-results.json`) and attaches the same raw evidence to the Playwright report. The fixture contains three TypeScript/React files, twelve single-file edits and twelve two-file edits. Both engines execute their actual browser WASM implementations.
 
 On the first measured run (2026-10-21, Chromium 141, this execution environment):
 

@@ -37,10 +37,10 @@ A separate live `nanoid@5.1.6` experiment fetched current gateway responses thro
 
 ## Verification executed
 
-- Strict platform TypeScript checks passed.
+- Strict platform TypeScript checks passed. Vite and Vitest were updated after the registry audit; `npm audit` reports zero known vulnerabilities at verification time.
 - **57 deterministic tests passed**, covering actual SWC transforms, providers/limits, agent repair and authorization, bridge validation, transactional storage, safe restoration, cancellation and asynchronous workspace ownership.
 - **17 real Chromium acceptance tests passed**, including all 17 requested scenario categories, desktop/mobile controls, speech-interface simulations, concurrent app switching, and empty-archive restoration.
-- Three browser benchmark scenarios passed: compiler comparison, visible updates/state retention, and the complete lifecycle/memory fixture.
+- The final combined browser run passed 20 tests (17 acceptance plus three benchmarks), with the optional live npm test skipped by default. Three browser benchmark scenarios passed: compiler comparison, visible updates/state retention, and the complete lifecycle/memory fixture.
 - The optional live npm compatibility/cache test passed using fresh gateway responses.
 - A separate **production-build smoke test passed** using only `dist-root` and `dist-app`: actual WASM worker, UUID bootstrap, UI source edit, React state retention, durable reload, no development hooks and no uncaught browser errors.
 
