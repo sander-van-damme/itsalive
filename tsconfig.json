@@ -1,7 +1,6 @@
 {
   "compilerOptions": {
     "target": "ES2022",
-    "useDefineForClassFields": true,
     "module": "ESNext",
     "lib": ["ES2022", "DOM", "DOM.Iterable", "WebWorker"],
     "skipLibCheck": true,
@@ -15,8 +14,8 @@
     "noUncheckedIndexedAccess": true,
     "noImplicitOverride": true,
     "noFallthroughCasesInSwitch": true,
-    "noUncheckedSideEffectImports": true,
+    "jsx": "react-jsx",
     "types": ["vite/client", "node"]
   },
-  "include": ["src", "tests", "worker", "*.config.ts"]
+  "include": ["src", "tests", "e2e", "*.config.ts"]
 }

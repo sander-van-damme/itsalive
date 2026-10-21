@@ -1,0 +1,7 @@
+src/shell/runtime-source.generated.ts
+node_modules
+package-lock.json
+dist-root
+dist-app
+playwright-report
+test-results

@@ -4,3 +4,7 @@ dist-app/
 coverage/
 .env
 *.local
+src/shell/runtime-source.generated.ts
+test-results/
+playwright-report/
+work/

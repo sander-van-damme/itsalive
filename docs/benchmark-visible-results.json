@@ -1,0 +1,26 @@
+{
+  "measuredAt": "2026-10-21T19:57:33.670Z",
+  "samples": 12,
+  "results": [
+    {
+      "engine": "swc",
+      "editToVisibleMs": [
+        30.300000000046566, 23.5, 35.5, 32.40000000002328, 31.399999999906868,
+        33.40000000002328, 33.20000000006985, 33.29999999993015,
+        33.300000000046566, 33.09999999997672, 33.699999999953434,
+        33.40000000002328
+      ],
+      "localStateRetained": true
+    },
+    {
+      "engine": "esbuild",
+      "editToVisibleMs": [
+        33.09999999997672, 36.800000000046566, 30.5, 33.300000000046566, 32.5,
+        33.40000000002328, 33.5, 33, 33.39999999990687, 33.300000000046566,
+        33.5, 33.199999999953434
+      ],
+      "localStateRetained": false
+    }
+  ],
+  "scope": "Real browser worker compilation, transport, authenticated app bridge, React render, and two animation frames. Excludes separate candidate-verification iframe and persistence."
+}
