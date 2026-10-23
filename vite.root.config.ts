@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
+import { apiPlugin } from "./src/server/vite-api";
 import { resolve } from "node:path";
 export default defineConfig({
+  plugins: [apiPlugin()],
   cacheDir: resolve(import.meta.dirname, "node_modules/.vite-root"),
   root: resolve(import.meta.dirname, "sites/root"),
   publicDir: resolve(import.meta.dirname, "public"),

@@ -10,6 +10,8 @@ interface Message {
   tool_calls?: { id: string; function: { name: string; arguments: string } }[];
 }
 export interface ProviderRequest {
+  model?: string;
+  reasoning?: { effort: string };
   messages: Message[];
   tools?: { function: { name: string } }[];
   response_format?: { json_schema?: { name: string } };
@@ -33,28 +35,24 @@ export const GOAL_CSS = `:root{font-family:system-ui,sans-serif;color:#202a27;ba
 function reply(content: string, tools: { name: string; args: unknown }[] = []) {
   return {
     id: "deterministic-product-acceptance",
-    choices: [
-      {
-        finish_reason: tools.length ? "tool_calls" : "stop",
-        message: {
-          role: "assistant",
-          content,
-          ...(tools.length
-            ? {
-                tool_calls: tools.map((tool, index) => ({
-                  id: `call-${index}-${tool.name}`,
-                  type: "function",
-                  function: {
-                    name: tool.name,
-                    arguments: JSON.stringify(tool.args),
-                  },
-                })),
-              }
-            : {}),
-        },
-      },
+    status: "completed",
+    output: [
+      ...(content
+        ? [
+            {
+              type: "message",
+              content: [{ type: "output_text", text: content }],
+            },
+          ]
+        : []),
+      ...tools.map((tool, index) => ({
+        type: "function_call",
+        call_id: `call-${index}-${tool.name}`,
+        name: tool.name,
+        arguments: JSON.stringify(tool.args),
+      })),
     ],
-    usage: { prompt_tokens: 30, completion_tokens: 20 },
+    usage: { input_tokens: 30, output_tokens: 20 },
   };
 }
 function toolsFor(request: ProviderRequest) {
@@ -74,6 +72,8 @@ export function goalResponse(request: ProviderRequest): unknown {
   const latest =
     [...request.messages].reverse().find((message) => message.role === "user")
       ?.content ?? "";
+  if (request.tools?.some((tool) => tool.function.name === "connection_check"))
+    return reply("", [{ name: "connection_check", args: { ready: true } }]);
   if (request.tools?.some((tool) => tool.function.name === "write_file")) {
     const results = toolsFor(request);
     if (!results.some((result) => result.name === "list_files"))
@@ -125,6 +125,8 @@ export function goalResponse(request: ProviderRequest): unknown {
     return reply("", [{ name: "finish", args: { summary: "Ready to try." } }]);
   }
   const schema = request.response_format?.json_schema?.name;
+  if (schema === "connection_check")
+    return reply(JSON.stringify({ ready: true }));
   if (schema === "conversation") {
     const question = /^(why|how|what|explain)\b/i.test(latest);
     const dangerous = /delete all/i.test(latest);
@@ -137,6 +139,7 @@ export function goalResponse(request: ProviderRequest): unknown {
             : "I’ll help with that.",
         intent: question ? "conversation" : dangerous ? "confirm" : "change",
         changeRequest: question ? null : latest,
+        workLevel: /complex/i.test(latest) ? "high" : "medium",
         confirmationReason: dangerous
           ? "This deletes your saved practice history."
           : null,
@@ -158,7 +161,11 @@ export function goalResponse(request: ProviderRequest): unknown {
 }
 export async function installGoalProvider(context: BrowserContext) {
   const requests: ProviderRequest[] = [];
-  const control = { requests, failNext: false };
+  const control = {
+    requests,
+    failNext: false,
+    holdCoding: undefined as Promise<void> | undefined,
+  };
   const handler = async (route: Route) => {
     if (route.request().method() === "OPTIONS")
       return route.fulfill({
@@ -168,8 +175,41 @@ export async function installGoalProvider(context: BrowserContext) {
           "access-control-allow-headers": "*",
         },
       });
-    const request = route.request().postDataJSON() as ProviderRequest;
+    const raw = route.request().postDataJSON();
+    const request: ProviderRequest = {
+      model: raw.model,
+      reasoning: raw.reasoning,
+      messages: (raw.input ?? []).map((item: any) =>
+        item.type === "function_call_output"
+          ? { role: "tool", content: item.output, tool_call_id: item.call_id }
+          : item.type === "function_call"
+            ? {
+                role: "assistant",
+                content: "",
+                tool_calls: [
+                  {
+                    id: item.call_id,
+                    function: { name: item.name, arguments: item.arguments },
+                  },
+                ],
+              }
+            : { role: item.role, content: item.content },
+      ),
+      tools: raw.tools?.flatMap((tool: any) =>
+        (tool.type === "namespace" ? tool.tools : [tool]).map((item: any) => ({
+          function: { name: item.name },
+        })),
+      ),
+      response_format: raw.text?.format
+        ? { json_schema: { name: raw.text.format.name } }
+        : undefined,
+    };
     requests.push(request);
+    if (
+      request.tools?.some((tool) => tool.function.name === "write_file") &&
+      control.holdCoding
+    )
+      await control.holdCoding;
     if (control.failNext) {
       control.failNext = false;
       return route.fulfill({
@@ -183,7 +223,7 @@ export async function installGoalProvider(context: BrowserContext) {
       headers: { "access-control-allow-origin": "*" },
     });
   };
-  await context.route("https://api.openai.com/v1/chat/completions", handler);
-  await context.route("https://openrouter.ai/api/v1/chat/completions", handler);
+  await context.route("**/api/ai/responses", handler);
+  await context.route("http://127.0.0.1:1456/responses", handler);
   return control;
 }

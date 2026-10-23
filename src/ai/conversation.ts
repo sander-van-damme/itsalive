@@ -7,14 +7,15 @@ export interface ConversationReply {
   intent: "conversation" | "change" | "clarify" | "confirm";
   changeRequest: string | null;
   confirmationReason: string | null;
+  workLevel: "low" | "medium" | "high";
 }
 export interface ConversationGoal {
   originalRequest: string;
   unresolved: boolean;
 }
-export const CONVERSATION_SYSTEM = `You are the conversational companion for It's Alive, an adaptive application for ordinary people. Help the person achieve their goal; never expose source files, coding agents, React, compilation, tool calls or internal handoffs. Answer questions directly. Distinguish four intents: conversation (questions/discussion), change (an explicitly requested ordinary creation, modification or repair), clarify (a genuinely unclear goal), and confirm (a destructive, costly or high-risk change that needs a specific confirmation).
+export const CONVERSATION_SYSTEM = `You are the conversational companion for It's Alive, an adaptive application for ordinary people. Help the person achieve their goal; never expose source files, coding agents, React, compilation, tool calls or internal handoffs. Answer questions directly. Occasionally offer one concise, relevant suggestion when helpful. Make it dismissible through conversation and never act on your own suggestion without the user accepting it. Do not repeatedly offer a dismissed suggestion. Distinguish four intents: conversation (questions/discussion), change (an explicitly requested ordinary creation, modification or repair), clarify (a genuinely unclear goal), and confirm (a destructive, costly or high-risk change that needs a specific confirmation).
 An explicit request such as "Create a violin trainer", "Add an exercise", "Fix the Start button", "Can you add a timer?" or "I want an app that teaches violin" already authorizes normal work. Return intent change and a concise internal changeRequest; do not ask the user to approve again. In an unresolved-feedback conversation, a specific description of what must be corrected is authorization to continue the original repair. Vague "Not yet" alone means clarify: ask what is still wrong. Questions such as "Why is this chord difficult?" are conversation even when they mention the app. Never turn behavioral observations or your own suggestions into authorization.
-For confirm, explain the concrete consequence in reply and confirmationReason and include the bounded changeRequest. For clarify/conversation set changeRequest and confirmationReason to null. For ordinary change set confirmationReason to null and reply to a concise goal-oriented acknowledgement. Never claim an application has changed, works, or passed checks before the platform verifies it. Do not promise unsupported capabilities. Return only the required JSON.`;
+For confirm, explain the concrete consequence in reply and confirmationReason and include the bounded changeRequest. For clarify/conversation set changeRequest and confirmationReason to null. For ordinary change set confirmationReason to null and reply to a concise goal-oriented acknowledgement. Never claim an application has changed, works, or passed checks before the platform verifies it. Do not promise unsupported capabilities. Choose workLevel privately: low for a small cosmetic or wording change, medium for ordinary app creation and changes, high for complex multi-feature work or unresolved repairs. Never ask the user to choose or mention this level. For conversation or clarification use medium. Return only the required JSON.`;
 export async function converse(
   service: AIService,
   text: string,
@@ -49,6 +50,7 @@ export async function converse(
           type: "object",
           properties: {
             reply: { type: "string" },
+            workLevel: { type: "string", enum: ["low", "medium", "high"] },
             intent: {
               type: "string",
               enum: ["conversation", "change", "clarify", "confirm"],
@@ -56,7 +58,13 @@ export async function converse(
             changeRequest: { type: ["string", "null"] },
             confirmationReason: { type: ["string", "null"] },
           },
-          required: ["reply", "intent", "changeRequest", "confirmationReason"],
+          required: [
+            "reply",
+            "intent",
+            "changeRequest",
+            "confirmationReason",
+            "workLevel",
+          ],
           additionalProperties: false,
         },
       },
@@ -78,6 +86,7 @@ export async function converse(
   const parsed = value as Record<string, unknown>;
   if (
     typeof parsed.reply !== "string" ||
+    !["low", "medium", "high"].includes(String(parsed.workLevel)) ||
     !["conversation", "change", "clarify", "confirm"].includes(
       String(parsed.intent),
     ) ||
@@ -100,6 +109,7 @@ export async function converse(
     );
   return {
     reply: parsed.reply.slice(0, 12_000),
+    workLevel: parsed.workLevel as ConversationReply["workLevel"],
     intent: parsed.intent as ConversationReply["intent"],
     changeRequest:
       typeof parsed.changeRequest === "string"
@@ -212,36 +222,4 @@ export class BehaviorAdvisor {
     this.lastDecision.set(suggestion.appId, this.now());
     return { ...suggestion };
   }
-}
-
-/** Explicit deeper analysis; it returns advice and has no coding tools or mutation authority. */
-export async function reason(
-  service: AIService,
-  text: string,
-  history: Array<{ role: "user" | "assistant"; content: string }>,
-  context: AIContext,
-): Promise<string> {
-  if (!text.trim() || text.length > 12_000)
-    throw new Error(
-      "Give a question or goal of at most 12000 characters for deeper reasoning.",
-    );
-  const response = await service.generate(
-    "reasoning",
-    {
-      messages: [
-        {
-          role: "system",
-          content:
-            "The user explicitly requested deeper reasoning about their application or goal. Analyze the problem, state uncertainty, explain useful tradeoffs, and recommend a concrete next step in ordinary language. You provide advice and cannot modify the application. Do not claim to have inspected, changed, tested or deployed it. Suggestions do not authorize changes; let the user decide what to ask for. Keep coding agents, compilation, source files and internal tools out of the response unless the user explicitly asks a technical question. Keep the answer focused and readable.",
-        },
-        ...history.slice(-12).map((message) => ({
-          ...message,
-          content: message.content.slice(0, 3_000),
-        })),
-        { role: "user", content: text },
-      ],
-    },
-    context,
-  );
-  return response.text;
 }

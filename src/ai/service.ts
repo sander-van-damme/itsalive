@@ -11,16 +11,24 @@ import type {
   UsageRecord,
   ProviderCredentials,
 } from "./types";
-import { HTTPProvider } from "./providers";
+import { AIError, HTTPProvider } from "./providers";
+import { tierMultiplier } from "./types";
+import { RequestQueue } from "./queue";
 import { DemoProvider } from "./demo";
 
 export interface AIServiceOptions {
   beforeRequest?: () => void;
-  credentials?: () => Partial<Record<"openai" | "openrouter", string>>;
+  credentials?: () => ProviderCredentials;
+  onHealth?: (health: ConnectionHealth) => void;
   providers?: Partial<Record<ProviderId, Provider>>;
   log?: (event: AIEvent) => void;
   onUsage?: (record: UsageRecord) => void;
   now?: () => number;
+}
+export interface ConnectionHealth {
+  state: "unchecked" | "checking" | "ready" | "error";
+  message?: string;
+  checkedAt?: number;
 }
 
 export function redact(value: unknown, secrets: string[] = []): unknown {
@@ -55,7 +63,7 @@ function checkConfig(config: AIConfig): void {
   if (
     !Number.isInteger(limits.requestsPerMinute) ||
     limits.requestsPerMinute < 1 ||
-    limits.requestsPerMinute > 1_000 ||
+    limits.requestsPerMinute > 6_000 ||
     !Number.isInteger(limits.concurrency) ||
     limits.concurrency < 1 ||
     limits.concurrency > 20 ||
@@ -67,7 +75,7 @@ function checkConfig(config: AIConfig): void {
     );
   for (const route of Object.values(config.routes)) {
     if (
-      !["demo", "openai", "openrouter"].includes(route.provider) ||
+      !["demo", "openai", "chatgpt"].includes(route.provider) ||
       !route.model ||
       route.model.length > 160 ||
       !Number.isInteger(route.maxOutputTokens) ||
@@ -96,6 +104,13 @@ export class AIService {
   private records: UsageRecord[] = [];
   private readonly providers: Record<ProviderId, Provider>;
   private readonly now: () => number;
+  private readonly queue: RequestQueue;
+  private validated = "";
+  health: ConnectionHealth = { state: "unchecked" };
+  private updateHealth(health: ConnectionHealth) {
+    this.health = health;
+    this.options.onHealth?.(health);
+  }
   constructor(
     config: AIConfig,
     private readonly options: AIServiceOptions = {},
@@ -105,10 +120,11 @@ export class AIService {
     this.providers = {
       demo: new DemoProvider(),
       openai: new HTTPProvider("openai"),
-      openrouter: new HTTPProvider("openrouter"),
+      chatgpt: new HTTPProvider("chatgpt"),
       ...options.providers,
     };
     this.now = options.now ?? Date.now;
+    this.queue = new RequestQueue(() => this.configuration.limits, this.now);
   }
   get config(): AIConfig {
     return structuredClone(this.configuration);
@@ -117,14 +133,88 @@ export class AIService {
     return structuredClone(this.records);
   }
   get activeRequestCount(): number {
-    return this.active + (this.testingConfiguration ? 1 : 0);
+    return this.queue.size + (this.testingConfiguration ? 1 : 0);
   }
   get spentUSD(): number {
     return this.records.reduce((sum, record) => sum + record.costUSD, 0);
   }
+  get periodSpentUSD(): number {
+    const date = new Date(this.now());
+    const start =
+      this.configuration.limits.budgetPeriod === "month"
+        ? Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)
+        : 0;
+    return this.records
+      .filter((record) => record.timestamp >= start)
+      .reduce((sum, record) => sum + record.costUSD, 0);
+  }
+  private checkBudget(cost: number) {
+    if (
+      this.configuration.limits.budgetEnabled !== false &&
+      this.periodSpentUSD + cost > this.configuration.limits.budgetUSD
+    )
+      throw new AIError(
+        "Your spending limit would be exceeded. You can change it in Settings → Usage.",
+        "limit",
+      );
+  }
+  resetHealth(): void {
+    this.validated = "";
+    this.updateHealth({ state: "unchecked" });
+  }
   configure(config: AIConfig): void {
     checkConfig(config);
+    const changed =
+      JSON.stringify(config.routes) !==
+      JSON.stringify(this.configuration.routes);
     this.configuration = structuredClone(config);
+    if (changed)
+      this.updateHealth(
+        JSON.stringify(config.routes) === this.validated
+          ? { state: "ready", checkedAt: this.now() }
+          : { state: "unchecked" },
+      );
+  }
+  startVoice(context: AIContext): {
+    update(seconds: number, final?: boolean, confirmed?: boolean): void;
+  } {
+    // Reserve the initialization minimum, then a small rolling allowance while live.
+    const rate = 0.05 / 60;
+    this.checkBudget(15 * rate);
+    const record: UsageRecord = {
+      id: crypto.randomUUID(),
+      timestamp: this.now(),
+      role: "speech",
+      provider: "openai",
+      model: "gpt-live-1",
+      appId: context.appId,
+      correlationId: context.correlationId,
+      inputTokens: 0,
+      outputTokens: 0,
+      cachedTokens: 0,
+      costUSD: 15 * rate,
+      estimated: true,
+      latencyMs: 0,
+      status: "pending",
+      seconds: 0,
+    };
+    this.records.push(record);
+    this.options.onUsage?.(structuredClone(record));
+    return {
+      update: (seconds, final = false, confirmed = false) => {
+        const cost =
+          final && seconds === 0
+            ? 0
+            : Math.max(15, seconds + (final ? 0 : 5)) * rate;
+        if (!final) this.checkBudget(Math.max(0, cost - record.costUSD));
+        record.seconds = seconds;
+        record.costUSD = cost;
+        record.latencyMs = seconds * 1000;
+        record.status = final ? (confirmed ? "success" : "failed") : "pending";
+        record.estimated = true;
+        this.options.onUsage?.(structuredClone(record));
+      },
+    };
   }
   importUsage(records: UsageRecord[]): void {
     if (this.active)
@@ -167,6 +257,19 @@ export class AIService {
     input: GenerateInput,
     context: AIContext,
   ): Promise<AIResponse> {
+    if (this.testingConfiguration)
+      throw new Error("Wait for the AI connection check to finish.");
+    return this.queue.run(
+      () => this.perform(role, input, context),
+      role === "conversation" ? 2 : role === "decision" ? 0 : 1,
+      context.signal,
+    );
+  }
+  private async perform(
+    role: AIRole,
+    input: GenerateInput,
+    context: AIContext,
+  ): Promise<AIResponse> {
     this.options.beforeRequest?.();
     context.signal?.throwIfAborted();
     if (this.testingConfiguration)
@@ -174,7 +277,7 @@ export class AIService {
     const route = this.configuration.routes[role];
     if (!route || role === "speech")
       throw new Error(
-        "Speech input uses the browser recognition path; text generation cannot use the speech route.",
+        "Start a voice conversation to use the live voice model.",
       );
     if (!context.appId || !context.correlationId)
       throw new Error(
@@ -182,7 +285,7 @@ export class AIService {
       );
     if (route.provider === "demo" && !this.configuration.testProviderEnabled)
       throw new Error(
-        "Connect an AI provider in Settings, or explicitly enable the scripted test provider in Advanced.",
+        "Connect AI in Settings. Scripted responses require the explicit test URL.",
       );
     const encoded = JSON.stringify(input);
     if (
@@ -200,31 +303,19 @@ export class AIService {
     if (route.provider !== "demo" && !credential)
       throw new Error(`Add a ${route.provider} key in Settings.`);
     const now = this.now();
-    const limits = this.configuration.limits;
-    if (this.active >= limits.concurrency)
-      throw new Error(
-        "AI concurrency limit reached. Wait for the current request.",
-      );
-    if (
-      this.records.filter((record) => record.timestamp > now - 60_000).length >=
-      limits.requestsPerMinute
-    )
-      throw new Error("AI request limit reached. Try again in a minute.");
-    // UTF-8 bytes + framing is deliberately conservative for tokenizers. Model prices are user-configured estimates.
+    // UTF-8 bytes + framing is deliberately conservative for tokenizers. Catalog prices are conservative estimates; cached-token discounts are not assumed.
     const reservedInput =
       new TextEncoder().encode(encoded).length +
       input.messages.length * 32 +
       256;
     const reserved =
-      route.provider === "demo"
+      route.provider === "demo" || route.provider === "chatgpt"
         ? 0
-        : (reservedInput * route.inputPerMillion +
+        : ((reservedInput * route.inputPerMillion +
             route.maxOutputTokens * route.outputPerMillion) /
-          1_000_000;
-    if (this.spentUSD + reserved > limits.budgetUSD)
-      throw new Error(
-        "AI spending limit would be exceeded. Narrow the request or adjust the limit.",
-      );
+            1_000_000) *
+          tierMultiplier(route.serviceTier);
+    this.checkBudget(reserved);
     const record: UsageRecord = {
       id: crypto.randomUUID(),
       timestamp: now,
@@ -240,6 +331,7 @@ export class AIService {
       estimated: true,
       latencyMs: 0,
       status: "pending",
+      serviceTier: route.serviceTier,
     };
     this.records.push(record);
     this.active++;
@@ -267,7 +359,7 @@ export class AIService {
       );
     try {
       const signals = [
-        AbortSignal.timeout(90_000),
+        AbortSignal.timeout(180_000),
         ...(context.signal ? [context.signal] : []),
       ];
       const result = await this.providers[route.provider].generate(
@@ -289,16 +381,20 @@ export class AIService {
         record.outputTokens = usage.outputTokens;
         record.cachedTokens = usage.cachedTokens;
         record.costUSD =
-          route.provider === "demo"
+          route.provider === "demo" || route.provider === "chatgpt"
             ? 0
             : (usage.costUSD ??
-              (usage.inputTokens * route.inputPerMillion +
+              ((usage.inputTokens * route.inputPerMillion +
                 usage.outputTokens * route.outputPerMillion) /
-                1_000_000);
+                1_000_000) *
+                tierMultiplier(result.serviceTier ?? route.serviceTier));
+        record.serviceTier = result.serviceTier ?? route.serviceTier;
         record.estimated =
           usage.costUSD === undefined && route.provider !== "demo";
       }
       record.status = "success";
+      if (route.provider !== "demo")
+        this.updateHealth({ state: "ready", checkedAt: this.now() });
       this.event(context, "ai.response", {
         role,
         requestId: result.requestId ?? record.id,
@@ -318,6 +414,12 @@ export class AIService {
       return result;
     } catch (error) {
       record.status = "failed";
+      if (
+        route.provider !== "demo" &&
+        error instanceof AIError &&
+        error.kind !== "response"
+      )
+        this.updateHealth({ state: "error", message: error.message });
       // An interrupted request may still be billed. Retain its reservation instead of falsely reporting zero.
       this.event(context, "ai.failure", {
         role,
@@ -325,6 +427,7 @@ export class AIService {
         error:
           error instanceof Error ? error.message : "Unknown provider failure",
         reservedUSD: reserved,
+        ...(error instanceof AIError ? error.detail : {}),
       });
       throw error;
     } finally {
@@ -347,14 +450,14 @@ export class AIService {
     credentials: ProviderCredentials,
     context: AIContext,
   ): Promise<void> {
-    if (this.active || this.testingConfiguration)
+    if (this.activeRequestCount || this.testingConfiguration)
       throw new Error(
         "Wait for the current AI request before changing the connection.",
       );
     checkConfig(config);
     const candidate = structuredClone(config);
     for (const route of Object.values(candidate.routes))
-      route.maxOutputTokens = 32;
+      route.maxOutputTokens = 2048;
     const probe = new AIService(candidate, {
       providers: this.providers,
       credentials: () => credentials,
@@ -370,11 +473,13 @@ export class AIService {
     });
     probe.importUsage(this.usage);
     this.testingConfiguration = true;
+    const prior = this.health;
+    this.updateHealth({ state: "checking" });
     try {
       const checked = new Set<string>();
       for (const [role, route] of Object.entries(candidate.routes)) {
         if (role === "speech" || route.provider === "demo") continue;
-        const key = `${route.provider}:${route.model}`;
+        const key = `${route.provider}:${route.model}:${route.serviceTier}:${route.reasoningEffort}`;
         if (checked.has(key)) continue;
         checked.add(key);
         const result = await probe.generate(
@@ -383,9 +488,19 @@ export class AIService {
             messages: [
               {
                 role: "user",
-                content: "Reply with OK to confirm the connection.",
+                content:
+                  'Confirm the connection by replying with {"ready":true}.',
               },
             ],
+            jsonSchema: {
+              name: "connection_check",
+              schema: {
+                type: "object",
+                properties: { ready: { type: "boolean" } },
+                required: ["ready"],
+                additionalProperties: false,
+              },
+            },
           },
           context,
         );
@@ -393,7 +508,62 @@ export class AIService {
           throw new Error(
             "The AI connection returned an empty response. Try another model.",
           );
+        if (JSON.parse(result.text).ready !== true)
+          throw new AIError(
+            "The connection check did not return the expected answer. Please try again.",
+            "response",
+          );
+        const toolResult = await probe.generate(
+          role as AIRole,
+          {
+            messages: [
+              {
+                role: "user",
+                content:
+                  "Call connection_check with ready true. This is a harmless connection test.",
+              },
+            ],
+            tools: [
+              {
+                name: "connection_check",
+                description: "Confirm tool support. No side effects.",
+                parameters: {
+                  type: "object",
+                  properties: { ready: { type: "boolean" } },
+                  required: ["ready"],
+                  additionalProperties: false,
+                },
+              },
+            ],
+            toolChoice: "required",
+          },
+          context,
+        );
+        if (
+          !toolResult.toolCalls.some(
+            (call) =>
+              call.name === "connection_check" &&
+              JSON.parse(call.arguments).ready === true,
+          )
+        )
+          throw new AIError(
+            "This connection could answer, but could not perform application actions. Check your model selection.",
+            "model",
+          );
       }
+      this.validated = JSON.stringify(config.routes);
+      this.updateHealth({ state: "ready", checkedAt: this.now() });
+    } catch (error) {
+      this.updateHealth(
+        prior.state === "ready"
+          ? prior
+          : {
+              state: "error",
+              message:
+                error instanceof Error ? error.message : "Connection failed",
+            },
+      );
+      throw error;
     } finally {
       this.testingConfiguration = false;
     }

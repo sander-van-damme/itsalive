@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   AIService,
   HTTPProvider,
@@ -6,200 +6,248 @@ import {
   defaultAIConfig,
   demoAIConfig,
   redact,
+  responseRequest,
+  readResponseStream,
+  parseResponse,
+  type AIResponse,
 } from "../src/ai";
-import type { AIResponse } from "../src/ai";
-const context = { appId: "app-a", correlationId: "trace-a" };
+const context = { appId: "app", correlationId: "trace" };
 const input = { messages: [{ role: "user" as const, content: "Hello" }] };
-const response: AIResponse = {
+const answer: AIResponse = {
   text: "Hello back",
   toolCalls: [],
   usage: { inputTokens: 10, outputTokens: 5, cachedTokens: 3 },
 };
-function liveConfig() {
-  const config = demoAIConfig();
-  config.routes.application = {
-    provider: "openai",
-    model: "gpt-4.1-mini",
-    maxOutputTokens: 100,
-    inputPerMillion: 0.4,
-    outputPerMillion: 1.6,
-  };
-  return config;
-}
-
-describe("documented HTTP provider adapters", () => {
-  it("does not bind the native fetch receiver to the provider adapter", async () => {
-    const fetcher = vi.fn(function (this: unknown) {
+const completed = {
+  id: "resp-1",
+  status: "completed",
+  output: [{ type: "message", content: [{ type: "output_text", text: "OK" }] }],
+  usage: {
+    input_tokens: 22,
+    output_tokens: 8,
+    input_tokens_details: { cached_tokens: 4 },
+  },
+  service_tier: "priority",
+};
+afterEach(() => vi.useRealTimers());
+describe("OpenAI Responses integration", () => {
+  it("uses an unbound fetch, structured Responses tools, reasoning and selected speed", async () => {
+    const fetcher = vi.fn(function (
+      this: unknown,
+      _url: RequestInfo | URL,
+      _init?: RequestInit,
+    ) {
       if (this !== undefined) throw new TypeError("Illegal invocation");
-      return Promise.resolve(
-        new Response(
-          JSON.stringify({ choices: [{ message: { content: "OK" } }] }),
-        ),
-      );
+      return Promise.resolve(Response.json(completed));
     });
-    const provider = new HTTPProvider("openai", fetcher as typeof fetch);
-    await expect(
-      provider.generate(liveConfig().routes.application, input, "key"),
-    ).resolves.toMatchObject({ text: "OK" });
-    expect(fetcher).toHaveBeenCalledOnce();
+    const route = {
+      ...defaultAIConfig().routes.conversation,
+      serviceTier: "ultrafast" as const,
+    };
+    const result = await new HTTPProvider("openai", fetcher).generate(
+      route,
+      {
+        ...input,
+        tools: [
+          {
+            name: "read_files",
+            description: "Read",
+            parameters: { type: "object" },
+          },
+        ],
+        jsonSchema: { name: "test", schema: { type: "object" } },
+      },
+      "secret-key",
+    );
+    expect(fetcher.mock.calls[0]![0]).toBe(
+      "https://api.openai.com/v1/responses",
+    );
+    const request = fetcher.mock.calls[0]![1]!;
+    const body = JSON.parse(String(request.body));
+    expect(body.service_tier).toBe("ultrafast");
+    expect(body.reasoning.effort).toBe("medium");
+    expect(body.tools[0].name).toBe("read_files");
+    expect(body.text.format.strict).toBe(true);
+    expect(body.store).toBe(false);
+    expect(body.stream).toBe(true);
+    expect(String(request.body)).not.toContain("secret-key");
+    expect(result.usage?.cachedTokens).toBe(4);
+    expect(result.serviceTier).toBe("priority");
   });
-
-  it.each(["openai", "openrouter"] as const)(
-    "sends credentials only to the fixed %s endpoint and parses tool calls and usage",
-    async (provider) => {
-      const fetcher = vi.fn(
-        async (_input: RequestInfo | URL, _init?: RequestInit) =>
-          new Response(
-            JSON.stringify({
-              id: "req-1",
-              choices: [
-                {
-                  message: {
-                    content: "",
-                    tool_calls: [
-                      {
-                        id: "tool-1",
-                        function: {
-                          name: "read_files",
-                          arguments: '{"paths":["src/App.tsx"]}',
-                        },
-                      },
-                    ],
-                  },
-                },
-              ],
-              usage: {
-                prompt_tokens: 22,
-                completion_tokens: 8,
-                prompt_tokens_details: { cached_tokens: 4 },
-                cost: 0.002,
-              },
-            }),
-            { status: 200 },
-          ),
-      );
-      const adapter = new HTTPProvider(provider, fetcher as typeof fetch);
-      const result = await adapter.generate(
-        { ...liveConfig().routes.application, provider },
+  it("preserves tool call identity and obeys the ChatGPT-plan request contract", () => {
+    const body = responseRequest(
+      { ...defaultAIConfig().routes.conversation, provider: "chatgpt" },
+      {
+        messages: [
+          { role: "system", content: "Private instructions" },
+          {
+            role: "assistant",
+            content: "",
+            toolCalls: [{ id: "call-1", name: "inspect", arguments: "{}" }],
+          },
+          { role: "tool", content: '{"ok":true}', toolCallId: "call-1" },
+        ],
+        tools: [
+          {
+            name: "inspect",
+            description: "Inspect",
+            parameters: { type: "object" },
+          },
+        ],
+      },
+    );
+    expect(body.max_output_tokens).toBeUndefined();
+    expect(body.input).toEqual([
+      { role: "developer", content: "Private instructions" },
+      {
+        type: "function_call",
+        call_id: "call-1",
+        name: "inspect",
+        arguments: "{}",
+      },
+      {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: '{"ok":true}',
+      },
+    ]);
+    expect((body.tools as any[])[0].type).toBe("namespace");
+  });
+  it("carries encrypted reasoning and original function namespaces through a stateless tool round trip", () => {
+    const output = [
+      {
+        type: "reasoning",
+        id: "rs_1",
+        summary: [],
+        encrypted_content: "opaque-reasoning",
+      },
+      {
+        type: "function_call",
+        call_id: "call_1",
+        name: "inspect",
+        namespace: "itsalive",
+        arguments: "{}",
+      },
+    ];
+    const response = parseResponse({ status: "completed", output });
+    const body = responseRequest(defaultAIConfig().routes["coding-standard"], {
+      messages: [
         {
-          ...input,
-          tools: [
-            {
-              name: "read_files",
-              description: "Read source",
-              parameters: { type: "object" },
-            },
-          ],
-          jsonSchema: { name: "test", schema: { type: "object" } },
+          role: "assistant",
+          content: response.text,
+          toolCalls: response.toolCalls,
+          responseItems: response.responseItems,
         },
-        "secret-key",
-      );
-      expect(fetcher.mock.calls[0]?.[0]).toBe(
-        provider === "openai"
-          ? "https://api.openai.com/v1/chat/completions"
-          : "https://openrouter.ai/api/v1/chat/completions",
-      );
-      const request = fetcher.mock.calls[0]?.[1] as RequestInit | undefined;
-      expect(request?.headers).toMatchObject({
-        Authorization: "Bearer secret-key",
-      });
-      expect(String(request?.body)).not.toContain("secret-key");
-      const body = JSON.parse(String(request?.body));
-      expect(body.max_completion_tokens).toBe(100);
-      expect(body.tools[0].function.name).toBe("read_files");
-      expect(body.response_format.json_schema.strict).toBe(true);
-      expect(result.toolCalls[0]?.name).toBe("read_files");
-      expect(result.usage).toEqual({
-        inputTokens: 22,
-        outputTokens: 8,
-        cachedTokens: 4,
-        costUSD: 0.002,
-      });
-    },
-  );
-  it("does not echo provider error bodies and rejects truncated outputs", async () => {
-    const denied = new HTTPProvider(
-      "openai",
-      vi.fn(
-        async () => new Response("sk-do-not-expose", { status: 401 }),
-      ) as typeof fetch,
-    );
-    await expect(
-      denied.generate(liveConfig().routes.application, input, "key"),
-    ).rejects.toThrow("401");
-    await expect(
-      denied.generate(liveConfig().routes.application, input, "key"),
-    ).rejects.not.toThrow("sk-do-not-expose");
-    const truncated = new HTTPProvider(
-      "openai",
-      vi.fn(
-        async () =>
-          new Response(
-            JSON.stringify({
-              choices: [{ finish_reason: "length", message: { content: "{" } }],
-            }),
-          ),
-      ) as typeof fetch,
-    );
-    await expect(
-      truncated.generate(liveConfig().routes.application, input, "key"),
-    ).rejects.toThrow("token limit");
+        { role: "tool", content: '{"ok":true}', toolCallId: "call_1" },
+      ],
+    });
+    expect(body.include).toEqual(["reasoning.encrypted_content"]);
+    expect(body.input).toEqual([
+      ...output,
+      {
+        type: "function_call_output",
+        call_id: "call_1",
+        output: '{"ok":true}',
+      },
+    ]);
   });
-});
-
-describe("privileged AI limits and accounting", () => {
-  it("blocks new provider calls during storage operations without confusing persisted reservations with active work", async () => {
-    let paused = true;
-    const provider = new ScriptedProvider([response]);
-    const service = new AIService(demoAIConfig(), {
-      providers: { demo: provider },
-      beforeRequest: () => {
-        if (paused) throw new Error("Storage operation active");
+  it("requires stream completion and handles chunked UTF-8, late errors and premature close", async () => {
+    const bytes = new TextEncoder().encode(
+      `data: {"type":"response.output_text.delta","delta":"é"}\r\n\r\ndata: ${JSON.stringify({ type: "response.completed", response: completed })}\r\n\r\n`,
+    );
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        for (let i = 0; i < bytes.length; i += 7)
+          controller.enqueue(bytes.slice(i, i + 7));
+        controller.close();
       },
     });
+    expect(
+      (
+        await readResponseStream(
+          new Response(stream, {
+            headers: { "content-type": "text/event-stream" },
+          }),
+        )
+      ).text,
+    ).toBe("OK");
     await expect(
-      service.generate("application", input, context),
-    ).rejects.toThrow("Storage operation active");
-    expect(provider.requests).toHaveLength(0);
-    expect(service.activeRequestCount).toBe(0);
-    paused = false;
-    await service.generate("application", input, context);
-    service.importUsage(
-      service.usage.map((record) => ({
-        ...record,
-        status: "pending",
-        costUSD: 0.25,
-      })),
-    );
-    expect(service.activeRequestCount).toBe(0);
-    expect(service.spentUSD).toBe(0.25);
+      readResponseStream(
+        new Response(
+          'data: {"type":"response.output_text.delta","delta":"Looks done"}\n\n',
+          { headers: { "content-type": "text/event-stream" } },
+        ),
+      ),
+    ).rejects.toThrow("before the response finished");
+    const failed = {
+      type: "response.failed",
+      response: {
+        status: "failed",
+        error: { code: "subscription_sharing_usage_limit_exceeded" },
+      },
+    };
+    await expect(
+      readResponseStream(
+        new Response(`data: ${JSON.stringify(failed)}\n\n`, {
+          headers: { "content-type": "text/event-stream" },
+        }),
+      ),
+    ).rejects.toThrow("allowance");
   });
-  it("reserves budget before requests and retains uncertain spend on failures", async () => {
-    const config = liveConfig();
+  it("does not expose credentials or provider error bodies", async () => {
+    const provider = new HTTPProvider(
+      "openai",
+      vi.fn(async () => new Response("sk-secret-and-prompt", { status: 401 })),
+    );
+    await expect(
+      provider.generate(defaultAIConfig().routes.conversation, input, "key"),
+    ).rejects.toThrow("key was not accepted");
+    await expect(
+      provider.generate(defaultAIConfig().routes.conversation, input, "key"),
+    ).rejects.not.toThrow("sk-secret");
+  });
+});
+describe("accounting and burst scheduling", () => {
+  it("leaves limits optional, then reserves actual selected-speed costs when enabled", async () => {
+    const config = defaultAIConfig();
     config.limits.budgetUSD = 0.00001;
-    const provider = new ScriptedProvider([response]);
+    const provider = new ScriptedProvider([answer]);
     const service = new AIService(config, {
       providers: { openai: provider },
       credentials: () => ({ openai: "key" }),
     });
-    await expect(
-      service.generate("application", input, context),
-    ).rejects.toThrow("spending limit");
-    expect(provider.requests).toHaveLength(0);
-    config.limits.budgetUSD = 1;
+    await service.generate("conversation", input, context);
+    expect(provider.requests).toHaveLength(1);
+    config.limits.budgetEnabled = true;
     service.configure(config);
-    const failing = new AIService(config, {
-      providers: { openai: new ScriptedProvider([new Error("Disconnected")]) },
+    await expect(
+      service.generate("conversation", input, context),
+    ).rejects.toThrow("spending limit");
+    expect(provider.requests).toHaveLength(1);
+  });
+  it("accounts for the served tier and retains uncertain spend after failure", async () => {
+    const config = defaultAIConfig();
+    config.routes.conversation.serviceTier = "ultrafast";
+    const service = new AIService(config, {
+      providers: {
+        openai: new ScriptedProvider([
+          { ...answer, serviceTier: "priority" },
+          new Error("Disconnected"),
+        ]),
+      },
       credentials: () => ({ openai: "key" }),
     });
+    await service.generate("conversation", input, context);
+    expect(service.usage[0]!.costUSD).toBeCloseTo(
+      ((10 * 2 + 5 * 10) * 2) / 1e6,
+    );
     await expect(
-      failing.generate("application", input, context),
+      service.generate("conversation", input, context),
     ).rejects.toThrow("Disconnected");
-    expect(failing.usage[0]?.status).toBe("failed");
-    expect(failing.spentUSD).toBeGreaterThan(0);
+    expect(service.usage[1]!.costUSD).toBeGreaterThan(0);
   });
-  it("enforces concurrency across apps and releases slots after completion", async () => {
-    let release!: (value: AIResponse) => void;
+  it("queues cross-app bursts and gives conversation priority without rejecting normal work", async () => {
+    let release!: (answer: AIResponse) => void;
     const config = demoAIConfig();
     config.limits.concurrency = 1;
     const provider = new ScriptedProvider([
@@ -207,60 +255,79 @@ describe("privileged AI limits and accounting", () => {
         new Promise((resolve) => {
           release = resolve;
         }),
-      response,
+      answer,
+      answer,
     ]);
     const service = new AIService(config, { providers: { demo: provider } });
     const first = service.generate("application", input, context);
-    await expect(
-      service.generate("conversation", input, { ...context, appId: "app-b" }),
-    ).rejects.toThrow("concurrency");
-    release(response);
-    await first;
-    await expect(
-      service.generate("application", input, context),
-    ).resolves.toMatchObject({ text: "Hello back" });
+    await vi.waitFor(() => expect(provider.requests).toHaveLength(1));
+    const background = service.generate("decision", input, context);
+    const conversation = service.generate("conversation", input, {
+      ...context,
+      appId: "second",
+    });
+    expect(provider.requests).toHaveLength(1);
+    release(answer);
+    await Promise.all([first, background, conversation]);
+    expect(service.usage.map((record) => record.role)).toEqual([
+      "application",
+      "conversation",
+      "decision",
+    ]);
+    expect(service.activeRequestCount).toBe(0);
   });
-  it("enforces request rates, restores the ledger and separates roles", async () => {
+  it("removes cancelled queued work before a provider request", async () => {
+    let release!: (answer: AIResponse) => void;
     const config = demoAIConfig();
-    config.limits.requestsPerMinute = 2;
-    const provider = new ScriptedProvider([response, response]);
+    config.limits.concurrency = 1;
+    const provider = new ScriptedProvider([
+      () =>
+        new Promise((resolve) => {
+          release = resolve;
+        }),
+    ]);
+    const service = new AIService(config, { providers: { demo: provider } });
+    const first = service.generate("application", input, context);
+    await vi.waitFor(() => expect(provider.requests).toHaveLength(1));
+    const controller = new AbortController();
+    const queued = service.generate("conversation", input, {
+      ...context,
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(queued).rejects.toThrow();
+    release(answer);
+    await first;
+    expect(provider.requests).toHaveLength(1);
+  });
+  it("separates monthly API cost from ChatGPT allowance and includes voice", async () => {
+    const config = defaultAIConfig();
+    config.routes.conversation.provider = "chatgpt";
     const service = new AIService(config, {
-      providers: { demo: provider },
-      now: () => 100_000,
+      providers: { chatgpt: new ScriptedProvider([answer]) },
+      credentials: () => ({ chatgpt: "connected" }),
     });
     await service.generate("conversation", input, context);
-    await service.generate("application", input, context);
-    expect(service.usage.map((record) => record.role)).toEqual([
-      "conversation",
-      "application",
-    ]);
-    const restored = new AIService(config, { now: () => 100_000 });
-    restored.importUsage(service.usage);
-    await expect(restored.generate("decision", input, context)).rejects.toThrow(
-      "request limit",
-    );
+    expect(service.spentUSD).toBe(0);
+    const voice = service.startVoice(context);
+    voice.update(60, true, true);
+    expect(service.spentUSD).toBeCloseTo(0.05);
+    expect(service.usage[1]!.seconds).toBe(60);
   });
-  it("redacts secrets and omits content unless explicitly enabled", async () => {
+  it("keeps diagnostics content-free and redacts credential fields", async () => {
     const log = vi.fn();
-    const config = demoAIConfig();
-    const service = new AIService(config, { log });
+    const service = new AIService(demoAIConfig(), { log });
     await service.generate(
       "application",
-      { messages: [{ role: "user", content: "Private medical note" }] },
+      { messages: [{ role: "user", content: "private note" }] },
       context,
     );
-    expect(JSON.stringify(log.mock.calls)).not.toContain(
-      "Private medical note",
-    );
-    expect(redact({ inputTokens: 100, outputTokens: 20 })).toEqual({
-      inputTokens: 100,
-      outputTokens: 20,
-    });
+    expect(JSON.stringify(log.mock.calls)).not.toContain("private note");
     expect(
-      redact({ password: "hunter2", message: "Bearer abc and sk-1234567890" }),
+      redact({ password: "secret", message: "Bearer abc and sk-1234567890" }),
     ).toEqual({ password: "[REDACTED]", message: "[REDACTED] and [REDACTED]" });
   });
-  it("validates app decisions and never accepts roles or credentials from app payloads", async () => {
+  it("keeps application decisions bounded and cannot choose a privileged model", async () => {
     const service = new AIService(demoAIConfig(), {
       providers: {
         demo: new ScriptedProvider([
@@ -274,12 +341,6 @@ describe("privileged AI limits and accounting", () => {
         context,
       ),
     ).rejects.toThrow("allowed result");
-    expect(service.usage[0]?.role).toBe("application");
-    await expect(
-      service.application(
-        { method: "choose", prompt: "Choose", options: ["A", "A"] },
-        context,
-      ),
-    ).rejects.toThrow("distinct");
+    expect(service.usage[0]!.role).toBe("application");
   });
 });

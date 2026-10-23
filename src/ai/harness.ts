@@ -215,6 +215,9 @@ export class CodingHarness {
       messages.push({
         role: "assistant",
         content: response.text,
+        ...(response.responseItems
+          ? { responseItems: response.responseItems }
+          : {}),
         ...(response.toolCalls.length ? { toolCalls: response.toolCalls } : {}),
       });
       let finished = false;

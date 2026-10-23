@@ -10,10 +10,10 @@ Read [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md) before architectural or in
 - **Explicit requests are authorization:** Create, change or repair when clearly requested, without a generic second confirmation. Clarify ambiguity and confirm destructive, expensive or high-risk actions.
 - **Feedback leads to assistance:** Negative feedback continues the unresolved conversation and can lead to repair; recording telemetry alone is insufficient.
 - **Do not assume intent:** Behavior is evidence, not certainty. Offer subtle, dismissible assistance; inferred needs never authorize structural changes.
-- **Engineering stays behind the scenes:** Coding agents, compilation, source files, tool calls and technical diagnostics belong in optional developer tools, not ordinary conversations.
-- **Real product, not a demo:** Provide functional AI behavior or clear provider setup. Never silently substitute scripted responses. Explicit test providers remain available for development and tests.
+- **Engineering stays behind the scenes:** Coding agents, compilation, source files and tool calls remain internal. There is no developer-tools or source-editor interface. Support logs are downloadable in Settings → Help and diagnostics.
+- **Real product, not a demo:** Provide functional AI behavior or clear provider setup. Never silently substitute scripted responses. Scripted responses require the development URL ?test-provider=scripted and never appear in settings.
 - **Clean, usable design:** Prioritize readable type, accessibility, useful information, restrained chrome and efficient screen space. Avoid redundant copy and navigation.
-- **Enforce the experience:** Preserve executable user-outcome acceptance tests, including onboarding, goal creation, automatic changes, negative-feedback repair, dialogs, mobile state and hidden developer tools.
+- **Enforce the experience:** Preserve executable user-outcome acceptance tests, including onboarding, goal creation, automatic changes, negative-feedback repair, dialogs, mobile state, accurate connection health, keyboard submission and AI live voice.
 
 The product is beta. Prefer clean current contracts over V1 compatibility layers or data migrations. V1 is preserved on `archive/v1`; do not rewrite its history or merge V2 to main without the owner's instruction.
 

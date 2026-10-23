@@ -11,8 +11,9 @@ The [product contract](PRODUCT_VISION.md) is enforced through real user journeys
 - **Conversation and modification:** a chord question returns an answer with no coding calls or version change. An explicit new exercise applies automatically without a second confirmation. Source remains hidden. Compatible transient state and saved practice survive the update, and saved practice survives reload.
 - **Negative feedback:** introduce a broken Start control, attempt repair, choose Not yet, ask for missing detail without rewriting on vague feedback, then clarify and verify a working Start control after another repair. Feedback remains associated with the app, original request and version.
 - **User control:** only accepted suggestions authorize changes. Ignored and dismissed suggestions leave the version intact. Structural requests that require confirmation explain their consequence.
-- **Dialogs:** top-right close, Escape, contained keyboard focus and return, primary provider fields, advanced disclosure, Save/Cancel, validation and provider-error recovery.
-- **Speech:** simulated browser recognition callbacks cover listening, final text, permission errors and typing fallback. Transcription requires no AI key; sending its result does.
+- **Dialogs:** top-right close, Escape, contained keyboard focus and return, a single settings menu, four model categories, an optional spending limit, independent debug logging, Save/Cancel, validation and provider-error recovery.
+- **Voice:** `e2e/live-voice.spec.ts` simulates WebRTC media/events while using the real delegation, conversation, file tools and compile/verify/commit pipeline. A question completes during a held build, a second edit queues safely, transcripts remain visible with muted replies, and ending the session releases media. Unit tests cover microphone denial, late permissions, connection failure and graceful shutdown. No native recognition path exists.
+- **Keyboard:** Enter sends, Shift+Enter adds a line and IME composition does not submit prematurely.
 - **Responsive use:** desktop application occupies most of the viewport beside one compact right rail. Mobile switches views without replacing the app frame or losing activity. Another goal creates an interactive knot tutorial, rather than a domain-specific product template.
 
 Desktop and mobile captures are saved under `work/screenshots/` for visual review. Failure traces and screenshots are under `test-results/`, with the HTML report in `playwright-report/`. These paths are ignored build/test artifacts.
@@ -30,7 +31,7 @@ Desktop and mobile captures are saved under `work/screenshots/` for visual revie
 - full backup/restore into a clean browser with dependency downloads denied, including shell state, localStorage, IndexedDB schema/index/version/typed values, Cache Storage and OPFS;
 - independent app-origin storage, shell credential isolation and absent privileged globals;
 - empty backup restoration and useful downloadable diagnostics;
-- explicit developer tools access rather than developer controls in the default journey.
+- no developer-tools or source-editor interface; diagnostics remain accessible on mobile.
 
 `e2e/benchmark.spec.ts` retains actual-browser SWC versus esbuild compiler, visible update and lifecycle measurements. `e2e/live-dependencies.spec.ts` remains an explicit optional live-CDN probe. Unit tests retain bridge authentication, storage integrity, compiler, accounting, provider protocols and bounded coding tools, with added intent, onboarding and speech contracts.
 
@@ -38,6 +39,6 @@ Desktop and mobile captures are saved under `work/screenshots/` for visual revie
 
 ## Evidence boundaries
 
-Deterministic replay verifies integration and outcomes for specified responses, not external model quality, live credentials, current model availability or real cost. Connection setup makes a bounded text-generation probe per provider/model; full structured-output and tool support still depends on that model. Browser microphone callbacks are simulated; no physical microphone recognition is claimed. Local static production smoke does not establish deployed DNS/TLS or hosted behavior. See [PRODUCT_RECOVERY.md](PRODUCT_RECOVERY.md) for the completed run counts, reviewed screenshots and remaining limits.
+Deterministic replay verifies integration and outcomes for specified responses, not external model quality, live credentials, current model availability or real cost. Connection setup probes structured output and required function calls for each distinct configured model/reasoning/speed combination. Unit tests exercise SSE completion, late stream errors, encrypted reasoning continuation, queue priority/cancellation, accounting, same-origin forwarding and local OAuth state/PKCE/identity/token isolation. WebRTC media and events are simulated; real microphone quality and provider access are unverified. Local static production smoke does not establish deployed DNS/TLS or hosted behavior. See [REVIEW_IMPLEMENTATION.md](REVIEW_IMPLEMENTATION.md) for this iteration’s results and remaining limits.
 
 Playwright disables Vite shell HMR during acceptance. Generated-app hot updates remain enabled and tested. Root and wildcard Vite servers use separate dependency optimization caches so simultaneously starting them cannot invalidate each other's optimized modules.

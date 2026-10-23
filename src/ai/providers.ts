@@ -3,28 +3,296 @@ import type {
   GenerateInput,
   ModelRoute,
   Provider,
-  ToolCall,
+  ServiceTier,
 } from "./types";
+import { companionFetch } from "./connection";
 
-const ENDPOINTS = {
-  openai: "https://api.openai.com/v1/chat/completions",
-  openrouter: "https://openrouter.ai/api/v1/chat/completions",
-} as const;
-function finite(value: unknown): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0
-    ? value
-    : 0;
+export type AIErrorKind =
+  | "connection"
+  | "credentials"
+  | "access"
+  | "limit"
+  | "model"
+  | "response"
+  | "timeout";
+export class AIError extends Error {
+  constructor(
+    message: string,
+    readonly kind: AIErrorKind,
+    readonly detail: Record<string, unknown> = {},
+  ) {
+    super(message);
+    this.name = "AIError";
+  }
 }
-function record(value: unknown): Record<string, unknown> {
-  return value !== null && typeof value === "object"
-    ? (value as Record<string, unknown>)
+const object = (value: unknown): Record<string, any> =>
+  value !== null && typeof value === "object"
+    ? (value as Record<string, any>)
     : {};
-}
+const finite = (value: unknown) =>
+  typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : 0;
 
-/** Credentials are supplied by the shell immediately before fetch; never part of serializable configuration. */
+export function responseRequest(
+  route: ModelRoute,
+  input: GenerateInput,
+): Record<string, unknown> {
+  const items = input.messages.flatMap((message): Record<string, unknown>[] => {
+    if (message.role === "assistant" && message.responseItems?.length)
+      return message.responseItems;
+    if (message.role === "tool")
+      return [
+        {
+          type: "function_call_output",
+          call_id: message.toolCallId,
+          output: message.content,
+        },
+      ];
+    const result: Record<string, unknown>[] = [];
+    if (message.content)
+      result.push({
+        role: message.role === "system" ? "developer" : message.role,
+        content: message.content,
+      });
+    for (const call of message.toolCalls ?? [])
+      result.push({
+        type: "function_call",
+        call_id: call.id,
+        name: call.name,
+        arguments: call.arguments,
+      });
+    return result;
+  });
+  const functions = input.tools?.map((tool) => ({
+    type: "function",
+    ...tool,
+    strict: false,
+  }));
+  return {
+    model: route.model,
+    input: items,
+    store: false,
+    stream: true,
+    include: ["reasoning.encrypted_content"],
+    ...(route.provider === "chatgpt"
+      ? {}
+      : { max_output_tokens: route.maxOutputTokens }),
+    reasoning: { effort: route.reasoningEffort ?? "medium" },
+    service_tier: route.serviceTier ?? "default",
+    ...(functions?.length
+      ? {
+          tools:
+            route.provider === "chatgpt"
+              ? [
+                  {
+                    type: "namespace",
+                    name: "itsalive",
+                    description: "Application tools",
+                    tools: functions,
+                  },
+                ]
+              : functions,
+          tool_choice: input.toolChoice ?? "auto",
+          parallel_tool_calls: false,
+        }
+      : {}),
+    ...(input.jsonSchema
+      ? {
+          text: {
+            format: { type: "json_schema", ...input.jsonSchema, strict: true },
+          },
+        }
+      : {}),
+  };
+}
+export function httpFailure(status: number, requestId?: string): AIError {
+  const detail = { status, requestId };
+  if (status === 401)
+    return new AIError(
+      "Your AI connection has expired or the key was not accepted. Reconnect in Settings.",
+      "credentials",
+      detail,
+    );
+  if (status === 403)
+    return new AIError(
+      "This account cannot use the selected model or speed. Check your access or choose another option in Settings.",
+      "access",
+      detail,
+    );
+  if (status === 429 || status === 402)
+    return new AIError(
+      "Your AI account has reached a usage limit. Check your allowance or credit, then try again.",
+      "limit",
+      detail,
+    );
+  if (status === 400 || status === 404)
+    return new AIError(
+      "The selected AI model or speed could not handle this request. Check the AI choices in Settings.",
+      "model",
+      detail,
+    );
+  return new AIError(
+    "OpenAI is temporarily unavailable. Your working app is safe; please try again shortly.",
+    "connection",
+    detail,
+  );
+}
+export function parseResponse(value: unknown): AIResponse {
+  const data = object(value);
+  if (data.status === "incomplete")
+    throw new AIError(
+      "The AI response ended before it finished. Your working app is safe; try a smaller change.",
+      "response",
+      { reason: object(data.incomplete_details).reason },
+    );
+  if (data.status === "failed" || data.error) {
+    const code = object(data.error).code;
+    if (
+      typeof code === "string" &&
+      /usage_limit|usage_unavailable|quota/.test(code)
+    )
+      throw new AIError(
+        "Your ChatGPT allowance is unavailable or has been used up. Check usage in ChatGPT, then try again.",
+        "limit",
+        { code },
+      );
+    throw new AIError(
+      "The AI request could not finish. Try again or download the diagnostic logs.",
+      "response",
+      { code },
+    );
+  }
+  const output = Array.isArray(data.output) ? data.output.map(object) : [];
+  const content = output
+    .filter((item) => item.type === "message")
+    .flatMap((item) =>
+      Array.isArray(item.content) ? item.content.map(object) : [],
+    );
+  if (content.some((item) => item.type === "refusal"))
+    throw new AIError(
+      "The AI could not help with that request. Try describing a different approach.",
+      "response",
+    );
+  const text = content
+    .filter((item) => item.type === "output_text")
+    .map((item) => item.text ?? "")
+    .join("");
+  const toolCalls = output
+    .filter((item) => item.type === "function_call")
+    .map((item) => {
+      if (
+        typeof item.call_id !== "string" ||
+        typeof item.name !== "string" ||
+        typeof item.arguments !== "string"
+      )
+        throw new AIError(
+          "The AI returned an incomplete action. Please try again.",
+          "response",
+        );
+      return {
+        id: item.call_id,
+        name: item.name.replace(/^itsalive\./, ""),
+        arguments: item.arguments,
+      };
+    });
+  if (!text && !toolCalls.length)
+    throw new AIError(
+      "The AI returned an empty response. Please try again.",
+      "response",
+    );
+  const usage = object(data.usage);
+  return {
+    text,
+    toolCalls,
+    responseItems: output.filter((item) =>
+      ["reasoning", "message", "function_call"].includes(item.type),
+    ),
+    requestId: typeof data.id === "string" ? data.id : undefined,
+    serviceTier:
+      data.service_tier === "fast"
+        ? "priority"
+        : ["default", "priority", "ultrafast"].includes(data.service_tier)
+          ? (data.service_tier as ServiceTier)
+          : undefined,
+    ...(typeof usage.input_tokens === "number" &&
+    typeof usage.output_tokens === "number"
+      ? {
+          usage: {
+            inputTokens: finite(usage.input_tokens),
+            outputTokens: finite(usage.output_tokens),
+            cachedTokens: finite(
+              object(usage.input_tokens_details).cached_tokens,
+            ),
+          },
+        }
+      : {}),
+  };
+}
+/** Consume through the terminal event: early text does not establish success. */
+export async function readResponseStream(
+  response: Response,
+): Promise<AIResponse> {
+  if (!response.headers.get("content-type")?.includes("text/event-stream"))
+    return parseResponse(await response.json());
+  if (!response.body)
+    throw new AIError(
+      "The AI response was interrupted. Please try again.",
+      "connection",
+    );
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let bytes = 0;
+  try {
+    for (;;) {
+      const { value, done } = await reader.read();
+      buffer += decoder.decode(value, { stream: !done });
+      buffer = buffer.replace(/\r\n/g, "\n");
+      bytes += value?.length ?? 0;
+      if (bytes > 8_000_000)
+        throw new AIError(
+          "The AI response was too large. Please try a smaller change.",
+          "response",
+        );
+      let boundary: number;
+      while ((boundary = buffer.indexOf("\n\n")) >= 0) {
+        const event = buffer.slice(0, boundary);
+        buffer = buffer.slice(boundary + 2);
+        const payload = event
+          .split("\n")
+          .filter((line) => line.startsWith("data:"))
+          .map((line) => line.slice(5).trimStart())
+          .join("\n");
+        if (!payload || payload === "[DONE]") continue;
+        const data = object(JSON.parse(payload));
+        if (
+          [
+            "response.completed",
+            "response.failed",
+            "response.incomplete",
+          ].includes(data.type)
+        )
+          return parseResponse(data.response);
+        if (data.type === "error")
+          throw new AIError(
+            "The AI stream failed. Please try again.",
+            "response",
+            { code: data.code },
+          );
+      }
+      if (done) break;
+    }
+    throw new AIError(
+      "The AI connection ended before the response finished. Please try again.",
+      "connection",
+    );
+  } finally {
+    await reader.cancel().catch(() => {});
+    reader.releaseLock();
+  }
+}
 export class HTTPProvider implements Provider {
   constructor(
-    private readonly provider: "openai" | "openrouter",
+    private readonly provider: "openai" | "chatgpt",
     private readonly fetcher: typeof fetch = fetch,
   ) {}
   async generate(
@@ -34,153 +302,74 @@ export class HTTPProvider implements Provider {
     signal?: AbortSignal,
   ): Promise<AIResponse> {
     if (!credential.trim())
-      throw new Error(
-        `Add a ${this.provider === "openai" ? "OpenAI" : "OpenRouter"} key in Settings.`,
+      throw new AIError(
+        "Connect OpenAI or your ChatGPT account in Settings.",
+        "credentials",
       );
-    const messages = input.messages.map((message) => ({
-      role: message.role,
-      content: message.content,
-      ...(message.toolCalls?.length
-        ? {
-            tool_calls: message.toolCalls.map((call) => ({
-              id: call.id,
-              type: "function",
-              function: { name: call.name, arguments: call.arguments },
-            })),
-          }
-        : {}),
-      ...(message.toolCallId ? { tool_call_id: message.toolCallId } : {}),
-    }));
     let response: Response;
-    // Invoke fetch as a function, not a method with this adapter as its receiver.
-    // Browser-native fetch rejects that receiver with "Illegal invocation".
-    const fetcher = this.fetcher;
     try {
-      response = await fetcher(ENDPOINTS[this.provider], {
+      const fetcher = this.fetcher;
+      const init = {
         method: "POST",
         signal,
         headers: {
-          Authorization: `Bearer ${credential}`,
           "Content-Type": "application/json",
-          ...(this.provider === "openrouter"
-            ? { "X-Title": "It's Alive" }
+          ...(this.provider === "openai"
+            ? { Authorization: `Bearer ${credential}` }
             : {}),
         },
-        body: JSON.stringify({
-          model: route.model,
-          messages,
-          max_completion_tokens: route.maxOutputTokens,
-          ...(input.tools?.length
-            ? {
-                tools: input.tools.map((tool) => ({
-                  type: "function",
-                  function: tool,
-                })),
-                tool_choice: "auto",
-                parallel_tool_calls: false,
-              }
-            : {}),
-          ...(input.jsonSchema
-            ? {
-                response_format: {
-                  type: "json_schema",
-                  json_schema: { ...input.jsonSchema, strict: true },
-                },
-              }
-            : {}),
-          ...(this.provider === "openrouter"
-            ? {
-                provider: { require_parameters: true },
-                usage: { include: true },
-              }
-            : {}),
-        }),
-      });
+        body: JSON.stringify(responseRequest(route, input)),
+      };
+      response =
+        this.provider === "chatgpt"
+          ? await companionFetch("/responses", init)
+          : await fetcher(
+              typeof window === "undefined"
+                ? "https://api.openai.com/v1/responses"
+                : "/api/ai/responses",
+              init,
+            );
     } catch (error) {
-      if (signal?.aborted) throw signal.reason ?? error;
-      throw new Error(
-        "Couldn't reach your AI provider. Check your connection and try again.",
+      if (signal?.aborted)
+        throw new AIError(
+          "The AI request took too long or was cancelled. Please try again.",
+          "timeout",
+        );
+      if (error instanceof AIError) throw error;
+      throw new AIError(
+        "Couldn't reach OpenAI. Check your connection, then try again. You can download diagnostic logs in Settings.",
+        "connection",
+        { cause: error instanceof Error ? error.name : "unknown" },
       );
     }
-    // Never echo provider bodies: they can contain prompts or credentials.
-    if (!response.ok) {
-      const name = this.provider === "openai" ? "OpenAI" : "OpenRouter";
-      const recovery =
-        response.status === 401
-          ? "The API key was not accepted. Check it or create a new key."
-          : response.status === 403
-            ? "This key cannot use the selected model. Check model access or choose another model."
-            : response.status === 402
-              ? "Add credit to your provider account, then try again."
-              : response.status === 429
-                ? "The provider's usage or rate limit was reached. Check your account limits and credit, or try again shortly."
-                : response.status === 400 || response.status === 404
-                  ? "Check the model name and whether it supports text, structured responses and tools."
-                  : response.status >= 500
-                    ? "The provider is temporarily unavailable. Try again shortly."
-                    : "Check your key, model access and network, then try again.";
-      throw new Error(`${name} (${response.status}): ${recovery}`);
-    }
-    const data = record(await response.json());
-    const choices = Array.isArray(data.choices) ? data.choices : [];
-    const first = record(choices[0]);
-    const message = record(first.message);
-    if (typeof message.refusal === "string" && message.refusal)
-      throw new Error("The model declined this request.");
-    if (!choices.length) throw new Error("Provider returned no completion.");
-    const toolCalls: ToolCall[] = (
-      Array.isArray(message.tool_calls) ? message.tool_calls : []
-    ).map((value) => {
-      const call = record(value);
-      const fn = record(call.function);
-      if (
-        typeof call.id !== "string" ||
-        typeof fn.name !== "string" ||
-        typeof fn.arguments !== "string"
-      )
-        throw new Error("Provider returned an invalid tool call.");
-      return { id: call.id, name: fn.name, arguments: fn.arguments };
-    });
-    if (first.finish_reason === "length")
-      throw new Error(
-        "Model output reached its token limit; increase the configured output limit or narrow the task.",
+    if (!response.ok)
+      throw httpFailure(
+        response.status,
+        response.headers.get("x-request-id") ?? undefined,
       );
-    if (typeof message.content !== "string" && !toolCalls.length)
-      throw new Error("Provider returned neither text nor tool calls.");
-    const usage = record(data.usage);
-    const validUsage = ["prompt_tokens", "completion_tokens"].every(
-      (key) =>
-        typeof usage[key] === "number" &&
-        Number.isFinite(usage[key]) &&
-        Number(usage[key]) >= 0,
-    );
-    const details = record(usage.prompt_tokens_details);
-    return {
-      text: typeof message.content === "string" ? message.content : "",
-      toolCalls,
-      requestId:
-        typeof data.id === "string"
-          ? data.id
-          : (response.headers.get("x-request-id") ?? undefined),
-      ...(validUsage
-        ? {
-            usage: {
-              inputTokens: finite(usage.prompt_tokens),
-              outputTokens: finite(usage.completion_tokens),
-              cachedTokens: finite(details.cached_tokens),
-              ...(typeof usage.cost === "number" &&
-              Number.isFinite(usage.cost) &&
-              usage.cost >= 0
-                ? { costUSD: usage.cost }
-                : {}),
-            },
-          }
-        : {}),
-    };
+    try {
+      return await readResponseStream(response);
+    } catch (error) {
+      if (error instanceof AIError) throw error;
+      if (signal?.aborted)
+        throw new AIError(
+          "The AI request took too long or was cancelled. Please try again.",
+          "timeout",
+          { requestId: response.headers.get("x-request-id") },
+        );
+      throw new AIError(
+        error instanceof SyntaxError
+          ? "The AI returned an unreadable response. Try again or download diagnostic logs in Settings."
+          : "The AI connection was interrupted before the response finished. Please try again.",
+        error instanceof SyntaxError ? "response" : "connection",
+        {
+          requestId: response.headers.get("x-request-id"),
+          cause: error instanceof Error ? error.name : "unknown",
+        },
+      );
+    }
   }
 }
-
-/** A test provider uses the same service, tools, compiler and verification path as an external provider. */
 export class ScriptedProvider implements Provider {
   readonly requests: Array<{ route: ModelRoute; input: GenerateInput }> = [];
   constructor(

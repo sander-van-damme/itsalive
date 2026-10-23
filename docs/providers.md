@@ -1,54 +1,69 @@
-# AI orchestration and provider boundaries
+# OpenAI, account access and live voice
 
-The shell owns `AIService`, credentials, model routes, accounting and the coding harness. Generated application code receives only `text`, `decide`, `choose` and `score` functions over its authenticated app bridge. App requests cannot choose a role, URL, provider, API key or coding tool. Model output and tool arguments are untrusted input.
+The shell owns AI policy, credentials, usage, conversation and the bounded application-editing harness. Generated applications receive only `text`, `decide`, `choose` and `score` through the authenticated app bridge. They cannot choose provider endpoints, credentials, privileged roles or file-editing tools.
 
-AI is unconnected on first run. The default route is OpenAI `gpt-4.1-mini`, with a matching OpenRouter option and estimated prices supplied by the platform. Missing credentials open setup and preserve the user's original request; no provider failure falls back to scripted output. Saving a new connection performs a bounded real API probe before accepting it. Advanced settings retain role-specific routes, limits, prices and an explicitly labeled scripted test provider.
+## Connections and models
 
-`DemoProvider` and `ScriptedProvider` remain deterministic engineering fixtures. They exercise the actual file tools, compiler, isolated verification, revision commit and runtime, but establish no external-model quality claim. Product acceptance uses intercepted provider HTTP responses with goal-specific fixtures through the same orchestration pipeline.
+First run is disconnected. Setup preserves the pending request and checks structured output and function-call support for every distinct text model/reasoning/speed combination. A failed setup retains the draft and existing working configuration. The badge distinguishes unchecked, checking, ready and failed connections; having a key alone never establishes readiness. Success is historical, not a promise of continuous availability.
 
-## External providers
+Only OpenAI API-key and eligible ChatGPT-plan access are offered. OpenRouter has been removed. Compatible-looking APIs are not assumed to implement Responses tools, reasoning, service tiers, OAuth or live voice identically. Future providers need explicit capability tests, not merely a URL substitution.
 
-OpenAI uses `https://api.openai.com/v1/chat/completions`; OpenRouter uses `https://openrouter.ai/api/v1/chat/completions`. Both adapters support text, non-streaming function tools and strict JSON-schema outputs. The OpenRouter adapter additionally requires parameter-capable upstream providers and requests usage accounting. Provider credentials are added directly to the shell's fixed-endpoint fetch request and are never serialized into app configuration or tool messages. Raw error bodies are deliberately omitted because they can echo sensitive data.
+| User category | Default                       | Internal use                                   |
+| ------------- | ----------------------------- | ---------------------------------------------- |
+| Low           | GPT-6 Luna, low reasoning     | Small decisions and simple edits               |
+| Medium        | GPT-6.1 Sol, medium reasoning | Conversation, normal edits, generated-app AI   |
+| High          | GPT-6.1 Sol, high reasoning   | Complex work and reasoning                     |
+| Live voice    | GPT-Live 1                    | Full-duplex conversation and client delegation |
 
-The small registry describes known API/capability combinations and includes `gpt-4.1-mini` and its OpenRouter model ID. Users can choose another model, but it must support the configured tools/structured output. A name alone is not evidence of compatibility. These are generic structured-output decisions, not an invented specialized OpenAI decision endpoint. There is no claim that all provider/model combinations implement the same capabilities. Non-streaming responses make candidate source edits atomic; streaming dialogue remains future work.
+GPT-6 Astra is an optional text-model choice. ChatGPT-plan choices come from the signed-in account's catalog, retaining server display names and order. Routing has four configurable categories without an enable/disable switch; internal roles remain implementation details. Ordinary chat has no Think deeper button.
 
-API references checked during implementation on 2026-10-21:
+Standard/Faster/Fastest changes service priority without reducing reasoning quality. Requests use `default`, `priority` (Fast alias) or `ultrafast`. Fastest uses Fast on models without Ultrafast support. Listed API estimates are $0.10/$0.50 per million input/output tokens for Luna, $2/$10 for Sol and $10/$50 for Astra; Fast is 2× and Ultrafast 6×. Actual served tiers are used when returned. Account availability still applies; changing speed runs connection checks rather than silently downgrading a failed request.
 
-- [OpenAI create chat completion](https://developers.openai.com/api/reference/resources/chat/subresources/completions/methods/create): tools, `max_completion_tokens`, structured outputs and parallel tool control.
-- [OpenRouter parameters](https://openrouter.ai/docs/api/reference/parameters): completion limits, structured outputs and parallel tool calls.
-- [OpenRouter provider routing](https://openrouter.ai/docs/guides/routing/provider-selection): `require_parameters`.
-- [OpenRouter API overview](https://openrouter.ai/docs/api/reference/overview): messages, function tools and response shape.
+## API-key transport
 
-No live provider credential was supplied. HTTP behavior is verified through fetch mocks; provider authorization, current account access, actual latency, cost and response quality have not been live-tested.
+Browser requests go to same-origin `/api/ai/responses`, forwarded to `https://api.openai.com/v1/responses` using the caller's key. The Vite development middleware and Cloudflare root Worker implement this boundary. There is no shared server key, custom endpoint input or provider-key exposure to app origins. Keys are retained in shell browser storage and excluded from backups. The server forwards them transiently and does not store or log them.
 
-## Accounting and limits
+Responses requests use developer messages, JSON-schema output, function tools and `store:false, stream:true`. Read SSE through `response.completed`; late failures, incomplete responses and interrupted streams are errors. Preserve model output items, including encrypted reasoning and tool namespaces, across stateless tool rounds. Completed assistant output is displayed after validation; token-by-token text rendering is not implemented.
 
-All roles share a shell-level requests-per-minute limit, concurrent-request limit and USD budget. Usage records distinguish conversation, deeper reasoning, behavioral decisions, three coding capabilities and generated-app AI. Settings include a speech role for configuration, but the implemented speech path uses browser recognition, described below.
+## ChatGPT plan connection
 
-A request reserves its worst-case configured cost _before_ contacting the provider. UTF-8 input bytes plus framing provide a conservative token allowance; output tokens are capped. External models require explicit nonzero input/output prices. Completed requests use provider cost when reported; otherwise token counts times configured prices are marked estimated. Cached input tokens are reported but do not get an assumed discount. Failed/aborted requests retain a conservative reservation because the provider may still bill them. The ledger contains pending records before the request, can be persisted by the shell, and is restored on reload. Unknown usage stays reserved rather than being reported as free.
+Run `npm run connection` locally and choose **ChatGPT plan → Continue with ChatGPT**. This is OpenAI's documented plan-sharing flow, including eligible allowance shared with Codex, rather than GitHub OAuth or access to private ChatGPT endpoints.
 
-These are useful client-side controls, not a provider-enforced financial guarantee. Prices may be outdated, token accounting can differ, parallel browser tabs do not share an atomic server quota, and a user can clear or modify browser storage. Set provider-side spending limits for a hard account boundary. A server credential proxy is outside this implementation. Ledger persistence failure is reported in diagnostics; retained in-memory accounting remains in force.
+The helper listens only on `127.0.0.1:1456`, uses an exact loopback callback, PKCE S256, one-use state, nonce and signed OIDC identity checks. It requires the granted `chatgpt.tokens.use.direct` scope before inference. Issued client IDs are retained with the verified account. Tokens and rotating refresh credentials are atomically stored in ignored `.itsalive-local/chatgpt.json` (directory `0700`, file `0600` on Unix). Never copy that directory into a release or support bundle. One account registration is supported per local helper directory.
 
-## Coding workflow
+Browser/helper calls require an allowed Origin and per-process session header. Browser storage receives no OAuth token. Model discovery uses `/v1/models`; inference uses public `/v1/responses` with namespaced tools, full input history and no unsupported `max_output_tokens`. Sign-out attempts token revocation, clears local tokens and reports unconfirmed remote revocation. The account identity remains registered for reconnecting.
 
-The conversational companion distinguishes discussion, clarification, explicit changes and requests needing specific risk confirmation. An explicit create/change/repair request authorizes the internal coding workflow without an Apply step. Ordinary questions never authorize coding. Accepted behavior suggestions authorize only the proposed improvement; ignored behavior signals do not. The structured intent is private, while the user sees concise progress and the verified application.
+Plan usage is separate from API spending and never silently falls back to a billable API key. Live voice requires a separate API key. OpenAI currently documents this access for eligible local open-source/personal tools; paid or remotely hosted offerings require access from OpenAI. This repository includes the local integration, not hosted registration or access approval. The hosted account option remains disabled until an approved installation builds with `VITE_CHATGPT_PLAN_ENABLED=1`. Model access, browser local-network permissions and eligibility need a real-account check.
 
-`CodingHarness` receives an immutable project snapshot and base revision. Its bounded tools are `list_files`, `read_files`, `write_file`, `patch_file`, `delete_file`, `set_dependency`, `check`, `inspect`, and `finish`. The tool prompt includes a path list instead of all source. Reads are scoped, patches require one exact match, dependencies require exact versions, and path traversal is rejected. At most 12 model turns and 36 tools run per request. Tool errors and compile/isolated-render diagnostics go back to the model for repair. Ordinary app code has no access to these tools.
+## Spending and scheduling
 
-A finish request cannot override failed deterministic checks. The shell compiles and verifies any changed candidate, preserves its dependency lock, and commits using the expected base revision. A stale revision conflict, exhausted repair budget or cancellation leaves the working revision intact. Verification is technical evidence, not proof that a requested feature is useful; the product collects separate user feedback after adaptation.
+The optional monthly API spending limit starts disabled. When enabled, estimate/reserve cost before requests and settle from returned usage. UTC month boundaries apply to this browser's ledger. Cached-token discounts are not assumed. Failed or interrupted requests retain conservative reservations because billing is uncertain. ChatGPT-plan tokens are recorded separately at zero API cost. Voice reserves its 15-second initialization minimum, tracks elapsed usage and settles graceful-close usage at the listed $0.05/minute rate.
 
-## Behavior, privacy and speech
+Normal bursts queue rather than failing at two concurrent requests. Internal safeguards allow eight active calls, at most 30 starts/second, a corresponding 1,800/minute ceiling, 128 waiting calls and a two-minute queue timeout. Conversation has priority over queued background work. Coding remains bounded at 12 turns/36 calls; concurrent app edits queue and recheck the target app before execution. These settings have no user-facing rate controls.
 
-Runtime observation is opt-in. `BehaviorAdvisor` filters for repeated-click summaries, invokes at most one decision per app per minute, and allows only one outstanding suggestion per app. Explanations are tentative, suggestions are dismissible, and dismissed/ignored suggestions never become coding authorization. Raw pointer streams, keystrokes, audio and camera data are not sent by this feature.
+The ledger is a browser estimate, not an account-wide financial guarantee: parallel tabs, cleared storage, unknown usage, provider prices and external calls can differ. Use provider-side controls for a hard account boundary. Do not report uncertain spending as free.
 
-Diagnostics record provider, role, request identity, latency, token usage and cost without raw message content by default. Content capture requires explicit configuration and runs through key/credential redaction. Redaction is best effort: arbitrary user text can contain unidentified sensitive data, so exported diagnostic privacy still matters.
+## Voice and suggestions
 
-Speech input uses the browser's `SpeechRecognition`/`webkitSpeechRecognition` after an explicit microphone action. Recognition may use the browser vendor's remote service; browser support and microphone permission vary. Final text populates the composer. Transcription does not require a provider key; sending the transcript to AI requires setup and follows the same conversation and authorization rules as typed input. Unsupported browsers retain typed input. The code does not currently send recorded audio to OpenAI or OpenRouter; the speech provider route is not an implemented external-transcription claim. This browser path is deterministic-adapter-tested but real microphone recognition requires a supported interactive browser.
+Voice uses `/api/voice/sessions` to start GPT-Live 1 with WebRTC and `delegation.type:client`. It sends microphone audio over the negotiated peer connection and receives live transcripts/events on `oai-events`. No browser-vendor transcription fallback exists.
 
-## Optional live smoke test
+Client delegations use accumulated user transcripts and enter the same intent, authorization and compile/verify/commit workflow as typed input. The live conversation remains available during work. Results return through `session.commentary.append`, never invented from task-start status. A second requested edit waits for the previous edit. Destructive changes still require their specific confirmation.
 
-`node scripts/live-provider.mjs --live --provider=openai` uses `OPENAI_API_KEY`; `--provider=openrouter` uses `OPENROUTER_API_KEY`. Supply keys through a secure environment, never CLI arguments. The test bundles and invokes the actual application adapters, checks text, structured decisions and one inert function-tool response, sends at most three requests with a 96-token output cap each, and defaults to a USD 0.01 estimated budget. No normal test invokes it. Running without `--live` or a key fails before any request. Only metadata and aggregate accounting are printed.
+**Spoken replies** controls actual playback muting; captions remain visible. Muting does not stop audio generation or billing. **Mute microphone** suspends audio input; **End conversation** requests graceful close, waits for final usage with a bounded timeout and releases media. Unconfirmed usage remains estimated. Startup history is bounded; raw microphone recordings are not stored. The implementation does not add cross-reload persistence of every live transcript fragment.
 
-Optional `--model=...`, `--input-price=...`, `--output-price=...`, and `--budget=...` adjust the model and its current pricing. Defaults describe GPT-4.1 mini; verify current prices for your account. The CLI rejects budgets above USD 0.10. Client estimates and aborted requests remain subject to the accounting limitations above. A provider-side spend cap is still required for a hard guarantee. This path was verified to refuse unapproved/missing-key execution; no credential-backed run was performed.
+Helpful suggestions are ordinary conversational behavior. They are dismissible and do not authorize unsolicited changes. Removing the old preference does not enable passive tracking: repeated-click observation remains disabled in ordinary use, with its internal adapter covered by regression tests.
 
-The exported `reason()` helper uses the independently configured deeper-reasoning role only when the user asks for it. It has no tools or coding authority, so ordinary chat remains available while that independent request runs. Its output is advice; changing the app still requires an explicit user request.
+## Diagnostics and validation
+
+Settings → Help and diagnostics has one Debug logging switch and Download diagnostic logs. Both work without AI. Logs include correlation/request identity, app/version context, connection errors, token estimates, latency and selected models; keys are redacted and AI prompts/replies are excluded by default. Logs can contain app details and runtime errors. Exports include browser/app versions, health and usage. Enabling debug does not add full prompts or model reasoning.
+
+Deterministic tests exercise actual routing and application tooling using HTTP/media fixtures. They establish protocol and workflow behavior, not model quality, eligibility, microphone performance, actual latency or billed cost. No real provider credentials were available during this implementation.
+
+For an explicitly authorized live text probe, set `OPENAI_API_KEY` securely and run `npm run test:live -- --live --provider=openai`. It checks text, structured decisions and an inert function tool using Luna, sends at most three requests and defaults to a $0.01 estimated cap (maximum allowed $0.10). Never pass keys on the command line. This is separate from live voice or account sign-in validation.
+
+## Official references checked on 2026-10-22
+
+- [Responses function calling](https://developers.openai.com/api/docs/guides/function-calling) and [reasoning continuation](https://developers.openai.com/api/docs/guides/reasoning)
+- [Pricing](https://developers.openai.com/api/docs/pricing), [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) and [Ultrafast mode](https://developers.openai.com/api/docs/guides/ultrafast-mode)
+- [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source), [sign-in protocol](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) and [session lifecycle](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
+- [Live WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live), [Live conversations](https://developers.openai.com/api/docs/guides/live-conversations) and [client delegation](https://developers.openai.com/api/docs/guides/live-delegation)

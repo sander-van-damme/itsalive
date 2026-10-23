@@ -1,88 +1,253 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
-import { SpeechInput } from "../src/ai/speech";
-
-class Recognition {
-  static last: Recognition;
-  lang = "";
-  continuous = false;
-  interimResults = false;
-  onresult:
-    | ((event: {
-        resultIndex: number;
-        results: Array<{ isFinal: boolean; 0: { transcript: string } }>;
-      }) => void)
-    | null = null;
-  onerror: ((event: { error: string }) => void) | null = null;
-  onend: (() => void) | null = null;
-  start = vi.fn();
-  stop = vi.fn();
-  abort = vi.fn();
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { LiveVoice, type VoiceOptions } from "../src/ai/speech";
+let peer: FakePeer;
+let audio: FakeAudio;
+let track: { enabled: boolean; stop: ReturnType<typeof vi.fn> };
+class FakeAudio {
+  autoplay = false;
+  muted = false;
+  srcObject: unknown;
+  play = vi.fn(async () => {});
+  pause = vi.fn();
   constructor() {
-    Recognition.last = this;
+    audio = this;
   }
 }
-
-afterEach(() => vi.unstubAllGlobals());
-
-describe("speech recovery independent of AI credentials", () => {
-  it("resets listening on permission failure and preserves the error through the subsequent end event", () => {
-    vi.stubGlobal("SpeechRecognition", Recognition);
-    const events: string[] = [];
-    const speech = new SpeechInput({
-      onText: vi.fn(),
-      onState: (active) => events.push(active ? "Listening" : "Ready"),
-      onError: (message) => events.push(message),
+class FakePeer extends EventTarget {
+  iceGatheringState = "complete";
+  connectionState = "connected";
+  localDescription = { sdp: "offer" };
+  ontrack: ((event: any) => void) | null = null;
+  onconnectionstatechange: (() => void) | null = null;
+  channel = {
+    readyState: "open",
+    onmessage: null as ((event: any) => void) | null,
+    onclose: null as (() => void) | null,
+    send: vi.fn(),
+    close: vi.fn(),
+  };
+  addTrack = vi.fn();
+  close = vi.fn();
+  createOffer = vi.fn(async () => ({ type: "offer", sdp: "offer" }));
+  setLocalDescription = vi.fn(async () => {});
+  setRemoteDescription = vi.fn(async () => {
+    this.channel.onmessage?.({
+      data: JSON.stringify({ type: "session.started" }),
     });
-    speech.start();
-    Recognition.last.onerror?.({ error: "not-allowed" });
-    Recognition.last.onend?.();
-    expect(events.at(-1)).toContain("permission was denied");
-    speech.start();
-    expect(Recognition.last.start).toHaveBeenCalledTimes(2);
-    expect(events.at(-1)).toBe("Listening");
   });
-
-  it("accepts final transcription without a key or a provider call", () => {
-    vi.stubGlobal("SpeechRecognition", Recognition);
-    const onText = vi.fn();
-    const speech = new SpeechInput({ onText, onError: vi.fn() });
-    speech.start();
-    Recognition.last.onresult?.({
-      resultIndex: 0,
-      results: [
-        { isFinal: false, 0: { transcript: "interim" } },
-        { isFinal: true, 0: { transcript: "Help me practice scales" } },
-      ],
-    });
-    expect(onText).toHaveBeenCalledOnce();
-    expect(onText).toHaveBeenCalledWith("Help me practice scales");
-  });
-
-  it.each(["no-speech", "network", "audio-capture", "service-not-allowed"])(
-    "provides a recoverable %s state",
-    (error) => {
-      vi.stubGlobal("SpeechRecognition", Recognition);
-      const onError = vi.fn();
-      const onState = vi.fn();
-      const speech = new SpeechInput({ onText: vi.fn(), onError, onState });
-      speech.start();
-      Recognition.last.onerror?.({ error });
-      expect(onState).toHaveBeenLastCalledWith(false);
-      expect(onError).toHaveBeenCalledWith(
-        expect.stringMatching(/typing|type/),
-      );
+  createDataChannel() {
+    return this.channel;
+  }
+  constructor() {
+    super();
+    peer = this;
+  }
+}
+function options(overrides: Partial<VoiceOptions> = {}): VoiceOptions {
+  return {
+    key: "test-key",
+    spokenReplies: false,
+    onState: vi.fn(),
+    onTranscript: vi.fn(),
+    onDelegate: vi.fn(async () => "Completed"),
+    onUsage: vi.fn(),
+    onError: vi.fn(),
+    ...overrides,
+  };
+}
+beforeEach(() => {
+  vi.useFakeTimers();
+  track = { enabled: true, stop: vi.fn() };
+  vi.stubGlobal("navigator", {
+    mediaDevices: {
+      getUserMedia: vi.fn(async () => ({
+        getTracks: () => [track],
+        getAudioTracks: () => [track],
+      })),
     },
+  });
+  vi.stubGlobal("RTCPeerConnection", FakePeer);
+  vi.stubGlobal("Audio", FakeAudio);
+  vi.stubGlobal(
+    "fetch",
+    vi.fn(async () =>
+      Response.json({
+        session: { id: "live-test" },
+        transport: { sdp: "answer" },
+      }),
+    ),
   );
-
-  it("keeps unsupported browsers usable through typed input", () => {
-    vi.stubGlobal("SpeechRecognition", undefined);
-    vi.stubGlobal("webkitSpeechRecognition", undefined);
-    const onError = vi.fn();
-    const speech = new SpeechInput({ onText: vi.fn(), onError });
-    speech.start();
-    expect(speech.supported).toBe(false);
-    expect(onError).toHaveBeenCalledWith(
-      expect.stringContaining("Type your message"),
+  vi.stubGlobal(
+    "SpeechRecognition",
+    vi.fn(() => {
+      throw new Error("Native speech must not be used");
+    }),
+  );
+});
+afterEach(() => {
+  vi.useRealTimers();
+  vi.unstubAllGlobals();
+});
+describe("AI live voice", () => {
+  it("includes conversational context for an accepted spoken suggestion", async () => {
+    const opts = options();
+    const voice = new LiveVoice(opts);
+    await voice.start();
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: "How could practice be easier?",
+      end_ms: 100,
+    });
+    voice.acceptEvent({
+      type: "session.output_transcript.delta",
+      delta: "Would a practice timer help?",
+      end_ms: 200,
+    });
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: "Yes, add that.",
+      end_ms: 300,
+    });
+    voice.acceptEvent({
+      type: "session.delegation.created",
+      offset_ms: 300,
+      delegation: { id: "accepted-suggestion", target: "client" },
+    });
+    expect(opts.onDelegate).toHaveBeenCalledWith("Yes, add that.", [
+      { role: "user", content: "How could practice be easier?" },
+      { role: "assistant", content: "Would a practice timer help?" },
+    ]);
+    voice.acceptEvent({ type: "session.closed", usage: { seconds: 20 } });
+  });
+  it("starts AI media, guarantees silent playback, preserves fragments and delegates once per ID", async () => {
+    const opts = options();
+    const voice = new LiveVoice(opts);
+    await voice.start();
+    expect(audio.muted).toBe(true);
+    expect(globalThis.fetch).toHaveBeenCalledWith(
+      "/api/voice/sessions",
+      expect.anything(),
     );
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: "Add a ",
+      end_ms: 100,
+    });
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: "timer",
+      end_ms: 200,
+    });
+    const event = {
+      type: "session.delegation.created",
+      delegation: { id: "one", target: "client" },
+    };
+    voice.acceptEvent(event);
+    voice.acceptEvent(event);
+    await Promise.resolve();
+    expect(opts.onDelegate).toHaveBeenCalledExactlyOnceWith("Add a timer", []);
+    expect(peer.channel.send).toHaveBeenCalledWith(
+      expect.stringContaining("Completed"),
+    );
+    voice.setSpokenReplies(true);
+    expect(audio.muted).toBe(false);
+    voice.setMicrophone(false);
+    expect(track.enabled).toBe(false);
+    voice.stop();
+    expect(peer.channel.send).toHaveBeenCalledWith(
+      expect.stringContaining("session.close"),
+    );
+    expect(peer.close).not.toHaveBeenCalled();
+    voice.acceptEvent({ type: "session.closed", usage: { seconds: 30 } });
+    expect(peer.close).toHaveBeenCalledOnce();
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(opts.onUsage).toHaveBeenLastCalledWith(30, true, true);
+  });
+  it("continues receiving transcripts while a delegated action is still running", async () => {
+    let finish!: (text: string) => void;
+    const opts = options({
+      onDelegate: vi.fn(
+        () =>
+          new Promise<string>((resolve) => {
+            finish = resolve;
+          }),
+      ),
+    });
+    const voice = new LiveVoice(opts);
+    await voice.start();
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: "Build a timer",
+      end_ms: 100,
+    });
+    voice.acceptEvent({
+      type: "session.delegation.created",
+      delegation: { id: "task", target: "client" },
+    });
+    voice.acceptEvent({
+      type: "session.output_transcript.delta",
+      delta: "I am working on it.",
+      end_ms: 200,
+    });
+    expect(opts.onTranscript).toHaveBeenCalledWith(
+      "assistant",
+      "I am working on it.",
+    );
+    finish("The app is ready.");
+    await Promise.resolve();
+    voice.acceptEvent({ type: "session.closed", usage: { seconds: 20 } });
+  });
+  it("releases the microphone after connection failure and never falls back to browser recognition", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () =>
+        Response.json({ error: "Key rejected" }, { status: 401 }),
+      ),
+    );
+    const opts = options();
+    const voice = new LiveVoice(opts);
+    await voice.start();
+    expect(opts.onError).toHaveBeenCalled();
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(voice.active).toBe(false);
+    expect((globalThis as any).SpeechRecognition).not.toHaveBeenCalled();
+  });
+  it("handles microphone denial without contacting the provider", async () => {
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn(async () => {
+          throw new DOMException("Denied", "NotAllowedError");
+        }),
+      },
+    });
+    const opts = options();
+    await new LiveVoice(opts).start();
+    expect(opts.onError).toHaveBeenCalledWith(
+      expect.objectContaining({
+        message: expect.stringContaining("permission"),
+      }),
+    );
+    expect(fetch).not.toHaveBeenCalled();
+    expect(opts.onUsage).toHaveBeenLastCalledWith(0, true, false);
+  });
+  it("stops a permission request cleanly even if microphone access arrives late", async () => {
+    let allow!: (stream: any) => void;
+    vi.stubGlobal("navigator", {
+      mediaDevices: {
+        getUserMedia: vi.fn(
+          () =>
+            new Promise((resolve) => {
+              allow = resolve;
+            }),
+        ),
+      },
+    });
+    const voice = new LiveVoice(options());
+    const started = voice.start();
+    voice.stop();
+    allow({ getTracks: () => [track] });
+    await started;
+    expect(track.stop).toHaveBeenCalledOnce();
+    expect(fetch).not.toHaveBeenCalled();
   });
 });

@@ -1,6 +1,6 @@
 {
   "name": "itsalive",
-  "version": "2.0.0-beta.1",
+  "version": "2.0.0-beta.2",
   "private": true,
   "type": "module",
   "scripts": {
@@ -16,12 +16,14 @@
     "pretypecheck": "npm run build:runtime",
     "test:live": "node scripts/live-provider.mjs",
     "format": "prettier --write src tests e2e scripts sites *.ts *.json docs README.md AGENTS.md",
-    "test:production": "npm run build && node scripts/production-smoke.mjs"
+    "test:production": "npm run build && node scripts/production-smoke.mjs",
+    "connection": "node scripts/connection.mjs"
   },
   "dependencies": {
     "@swc/wasm-web": "1.15.3",
     "esbuild-wasm": "0.25.12",
     "idb": "8.0.3",
+    "jose": "6.2.13",
     "react": "19.2.0",
     "react-dom": "19.2.0",
     "react-refresh": "0.18.0",

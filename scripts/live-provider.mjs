@@ -11,32 +11,26 @@ const args = new Map(
 );
 if (!args.has("--live")) {
   console.error(
-    "Live tests are disabled. Use --live --provider=openai|openrouter with the corresponding secure API-key environment variable. This sends at most three requests.",
+    "Live tests are disabled. Use --live --provider=openai with the secure OPENAI_API_KEY environment variable. This sends at most three requests.",
   );
   process.exitCode = 2;
 } else {
   try {
     const provider = args.get("--provider") ?? "openai";
-    if (!["openai", "openrouter"].includes(provider))
-      throw new Error("Provider must be openai or openrouter.");
-    const credential =
-      process.env[
-        provider === "openai" ? "OPENAI_API_KEY" : "OPENROUTER_API_KEY"
-      ];
+    if (provider !== "openai") throw new Error("Provider must be openai.");
+    const credential = process.env.OPENAI_API_KEY;
     if (!credential)
       throw new Error(
         "The selected provider API-key environment variable is missing.",
       );
-    const inputPrice = Number(args.get("--input-price") ?? "0.4");
-    const outputPrice = Number(args.get("--output-price") ?? "1.6");
+    const inputPrice = Number(args.get("--input-price") ?? "0.1");
+    const outputPrice = Number(args.get("--output-price") ?? "0.5");
     const budget = Number(args.get("--budget") ?? "0.01");
     if (!Number.isFinite(budget) || budget <= 0 || budget > 0.1)
       throw new Error(
         "Live-test budget must be above zero and at most USD 0.10.",
       );
-    const model =
-      args.get("--model") ??
-      (provider === "openai" ? "gpt-4.1-mini" : "openai/gpt-4.1-mini");
+    const model = args.get("--model") ?? "gpt-6-luna";
     // Bundle the real application adapter in memory. Secrets are read above at runtime, never included in generated code.
     const built = await build({
       entryPoints: [resolve("src/ai/index.ts")],
@@ -53,13 +47,20 @@ if (!args.has("--live")) {
     const route = {
       provider,
       model,
-      maxOutputTokens: 96,
+      maxOutputTokens: 2048,
+      reasoningEffort: "low",
+      serviceTier: "default",
       inputPerMillion: inputPrice,
       outputPerMillion: outputPrice,
     };
     config.routes.application = route;
     config.routes["coding-simple"] = route;
-    config.limits = { requestsPerMinute: 3, concurrency: 1, budgetUSD: budget };
+    config.limits = {
+      requestsPerMinute: 3,
+      concurrency: 1,
+      budgetUSD: budget,
+      budgetEnabled: true,
+    };
     const service = new api.AIService(config, {
       credentials: () => ({ [provider]: credential }),
     });
@@ -138,10 +139,7 @@ if (!args.has("--live")) {
     // Never echo arbitrary provider response bodies or credentials, even when a transport library embeds them.
     let message =
       error instanceof Error ? error.message : "Live provider test failed.";
-    for (const key of [
-      process.env.OPENAI_API_KEY,
-      process.env.OPENROUTER_API_KEY,
-    ])
+    for (const key of [process.env.OPENAI_API_KEY])
       if (key) message = message.split(key).join("[REDACTED]");
     console.error(message.replace(/\bsk-[\w-]{8,}/g, "[REDACTED]"));
     process.exitCode = 1;

@@ -152,6 +152,7 @@ export class DemoProvider implements Provider {
               : "change",
           changeRequest: !vague && !question && supported ? latest : null,
           confirmationReason: null,
+          workLevel: "medium",
         }),
       );
     }

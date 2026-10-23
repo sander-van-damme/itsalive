@@ -31,6 +31,7 @@ interface TestAPI {
   importBackup(blob: Blob): Promise<void>;
   diagnostics(): Promise<Diagnostic[]>;
   observe(target: string, count?: number): Promise<unknown>;
+  setObservation(enabled: boolean): Promise<void>;
   rollback(revision: string): Promise<unknown>;
   compiler: {
     compile(project: Project, revisionId: string): Promise<BuildResult>;
@@ -57,7 +58,7 @@ export default function Counter() {
 }`;
 
 async function ready(page: Page): Promise<void> {
-  await page.goto("http://itsalive.localhost:4173/");
+  await page.goto("http://itsalive.localhost:4173/?test-provider=scripted");
   await page.waitForFunction(() => Boolean(window.__itsalive));
 }
 async function appFrame(page: Page): Promise<Frame> {
@@ -81,12 +82,14 @@ async function create(page: Page, name = "Browser acceptance"): Promise<Frame> {
   await expect(frame.getByRole("heading", { name, exact: true })).toBeVisible();
   return frame;
 }
-async function developerTools(page: Page) {
+async function openSettings(page: Page) {
+  if (await page.locator("#settings-dialog").isVisible()) return;
   await page.locator("#more-options > summary").click();
-  await page
-    .getByRole("button", { name: "Developer tools", exact: true })
-    .click();
-  await page.locator("#more-options > summary").click();
+  await page.getByRole("button", { name: "Settings", exact: true }).click();
+}
+async function openDiagnostics(page: Page) {
+  await openSettings(page);
+  await page.getByText("Help and diagnostics", { exact: true }).click();
 }
 async function edit(
   page: Page,
@@ -156,27 +159,6 @@ async function packageFixture(
 
 test.beforeEach(async ({ page }) => {
   await ready(page);
-  // Explicit test mode is seeded only in this architecture regression suite.
-  await page.evaluate(async (root) => {
-    const { Repository } = await import(`${root}/src/storage/repository.ts`);
-    const { defaultAIConfig } = await import(`${root}/src/ai/types.ts`);
-    const config = defaultAIConfig();
-    config.testProviderEnabled = true;
-    for (const route of Object.values(config.routes) as {
-      provider: string;
-      model: string;
-      inputPerMillion: number;
-      outputPerMillion: number;
-    }[]) {
-      route.provider = "demo";
-      route.model = "demo-v2";
-      route.inputPerMillion = 0;
-      route.outputPerMillion = 0;
-    }
-    await new Repository().setSetting("ai.config", config);
-  }, `/@fs${process.cwd()}`);
-  await page.reload();
-  await page.waitForFunction(() => Boolean(window.__itsalive));
 });
 
 test("creates a real multi-file React application on an immutable isolated origin", async ({
@@ -442,18 +424,7 @@ test("meaningful behavior yields a non-blocking suggestion and dismissal or igno
   await expect(
     page.getByRole("button", { name: "Try this", exact: true }),
   ).toHaveCount(0);
-  await page.getByRole("button", { name: /Settings$/ }).click();
-  await page.getByText("Advanced", { exact: true }).click();
-  await page
-    .getByRole("checkbox", {
-      name: "Offer occasional suggestions from repeated clicks",
-      exact: true,
-    })
-    .check();
-  await page
-    .getByRole("button", { name: "Save settings", exact: true })
-    .click();
-  await expect(page.getByRole("dialog")).not.toBeVisible();
+  await page.evaluate(() => window.__itsalive.setObservation(true));
   await expect(page.locator('iframe[data-mode="app"]')).toHaveAttribute(
     "src",
     beforeConsent.url(),
@@ -719,10 +690,10 @@ test("a deliberately broken build produces exportable correlated diagnostics", a
   expect(failure?.correlationId).toBeTruthy();
   expect(failure?.timestamp).toBeGreaterThan(0);
   expect(JSON.stringify(diagnostics)).toContain("src/App.tsx");
-  await developerTools(page);
+  await openDiagnostics(page);
   const downloaded = page.waitForEvent("download");
   await page
-    .getByRole("button", { name: "Export diagnostics", exact: true })
+    .getByRole("button", { name: "Download diagnostic logs", exact: true })
     .click();
   const download = await downloaded;
   expect(download.suggestedFilename()).toBe("itsalive-diagnostics.json");
@@ -732,147 +703,69 @@ test("a deliberately broken build produces exportable correlated diagnostics", a
     version: number;
     diagnostics: Diagnostic[];
   };
-  expect(exported.version).toBe(2);
+  expect(exported.version).toBe(3);
   expect(exported.diagnostics.some((event) => event.id === failure?.id)).toBe(
     true,
   );
 });
 
-test("speech input places a recognized utterance into the ordinary conversation flow", async ({
+test("Enter sends, Shift+Enter adds a line, and composition does not submit", async ({
   page,
 }) => {
-  await page.addInitScript(() => {
-    class ScriptedRecognition {
-      lang = "";
-      continuous = false;
-      interimResults = false;
-      onresult: ((event: unknown) => void) | null = null;
-      onerror: ((event: unknown) => void) | null = null;
-      onend: (() => void) | null = null;
-      start() {
-        setTimeout(() => {
-          this.onresult?.({
-            resultIndex: 0,
-            results: [
-              {
-                isFinal: true,
-                0: { transcript: "Change the title to Spoken idea" },
-              },
-            ],
-          });
-          this.onend?.();
-        }, 10);
-      }
-      stop() {
-        this.onend?.();
-      }
-      abort() {}
-    }
-    Object.assign(window, {
-      SpeechRecognition: ScriptedRecognition,
-      webkitSpeechRecognition: undefined,
-    });
-  });
-  await ready(page);
   await create(page);
+  const input = page.getByRole("textbox", { name: "Message", exact: true });
   const before = await revisionId(page);
-  await page
-    .getByRole("button", { name: "Speak your message", exact: true })
-    .click();
-  await expect(
-    page.getByRole("textbox", { name: "Message", exact: true }),
-  ).toHaveValue("Change the title to Spoken idea");
+  await input.fill("Change the title to Keyboard");
+  await input.press("Shift+Enter");
+  await expect(input).toHaveValue("Change the title to Keyboard\n");
+  await input.dispatchEvent("keydown", { key: "Enter", isComposing: true });
   expect(await revisionId(page)).toBe(before);
-  await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(
-    page.getByRole("button", { name: "Apply change", exact: true }),
-  ).toHaveCount(0);
+  await input.press("Enter");
   await expect.poll(() => revisionId(page)).not.toBe(before);
   await expect(
     (await appFrame(page)).getByRole("heading", {
-      name: "Spoken idea",
+      name: "Keyboard",
       exact: true,
     }),
   ).toBeVisible();
+  await expect(input).toHaveValue("");
 });
 
-test("unsupported speech remains an honest typing-first fallback", async ({
-  page,
-}) => {
-  await page.addInitScript(() => {
-    Object.assign(window, {
-      SpeechRecognition: undefined,
-      webkitSpeechRecognition: undefined,
-    });
-  });
-  await ready(page);
-  await page
-    .getByRole("button", { name: "Speak your message", exact: true })
-    .click();
-  await expect(
-    page
-      .getByRole("status")
-      .filter({ hasText: /unavailable|typing|type your/i }),
-  ).toBeVisible();
-  await page
-    .getByRole("textbox", { name: "Message", exact: true })
-    .fill("Typing still works");
-  await expect(
-    page.getByRole("textbox", { name: "Message", exact: true }),
-  ).toHaveValue("Typing still works");
-});
-
-test("mobile users can reach settings, provider prices, backup and diagnostic export", async ({
+test("mobile users can reach model choices, optional budget, backup and diagnostic export", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth),
   ).toBeLessThanOrEqual(390);
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  const settings = page.getByRole("dialog");
+  await openSettings(page);
+  const settings = page.locator("#settings-dialog");
+  await settings.getByText("AI choices", { exact: true }).click();
+  await expect(settings.getByLabel("Low model", { exact: true })).toBeVisible();
   await expect(
-    settings.getByRole("heading", { name: "AI connection", exact: true }),
+    settings.getByLabel("Live voice model", { exact: true }),
   ).toBeVisible();
-  await settings.getByText("Advanced", { exact: true }).click();
+  await settings.getByText("Usage", { exact: true }).click();
+  await expect(
+    settings.getByLabel("Enable spending limit", { exact: true }),
+  ).not.toBeChecked();
+  await settings.getByText("Backup and restore", { exact: true }).click();
   await settings
-    .getByLabel("Use scripted test provider", { exact: true })
-    .uncheck();
-  await settings
-    .getByLabel("Choose different models by role", { exact: true })
-    .check();
-  await expect(
-    settings.getByRole("spinbutton", {
-      name: "Conversation Input price per million tokens (USD)",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await expect(
-    settings.getByRole("spinbutton", {
-      name: "Conversation Output price per million tokens (USD)",
-      exact: true,
-    }),
-  ).toBeVisible();
-  await settings.getByRole("button", { name: "Cancel", exact: true }).click();
-  await page.locator("#more-options > summary").click();
-  await page
-    .getByRole("button", { name: "Backup & restore", exact: true })
+    .getByRole("button", { name: "Back up or restore all apps", exact: true })
     .click();
+  const backup = page.locator("#backup-dialog");
   await expect(
-    page
-      .getByRole("dialog")
-      .getByRole("button", { name: "Download backup", exact: true }),
+    backup.getByRole("button", { name: "Download backup", exact: true }),
   ).toBeVisible();
-  await page
-    .getByRole("dialog")
-    .getByRole("button", { name: "Close", exact: true })
+  await backup
+    .getByRole("button", { name: "Close backup and restore", exact: true })
     .click();
-  await developerTools(page);
-  const downloaded = page.waitForEvent("download");
+  await openDiagnostics(page);
+  const download = page.waitForEvent("download");
   await page
-    .getByRole("button", { name: "Export diagnostics", exact: true })
+    .getByRole("button", { name: "Download diagnostic logs", exact: true })
     .click();
-  expect((await downloaded).suggestedFilename()).toBe(
+  expect((await download).suggestedFilename()).toBe(
     "itsalive-diagnostics.json",
   );
 });

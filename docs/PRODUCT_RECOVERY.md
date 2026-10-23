@@ -1,3 +1,5 @@
+> Historical report for the 2026-10-21 iteration. The 2026-10-22 review replaces its OpenRouter, developer tools, browser speech and advanced-settings behavior; see [REVIEW_IMPLEMENTATION.md](REVIEW_IMPLEMENTATION.md).
+
 # Product and UX recovery
 
 This change restores It's Alive as an adaptive interface for ordinary users. The running application fills the left side and one compact, collapsible right rail contains app switching, creation, conversation, speech and platform actions. Mobile Application/Assistant views retain the mounted app. Source editing and technical identifiers are available only in optional Developer tools.

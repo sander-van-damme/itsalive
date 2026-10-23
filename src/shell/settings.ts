@@ -1,54 +1,46 @@
 import {
-  AI_ROLES,
-  ROLE_LABELS,
+  CATEGORY_ROLES,
+  MODEL_CHOICES,
   defaultModelRoute,
   missingProviderRoles,
+  serviceTierFor,
   type AIConfig,
-  type AIRole,
+  type ModelCategory,
   type ProviderCredentials,
-  type ProviderId,
+  type ResponseSpeed,
 } from "../ai/types";
 import type { AIService } from "../ai/service";
+import { accountSession, companionFetch } from "../ai/connection";
 
 export const SETTINGS_DIALOG = `
 <dialog id="settings-dialog" aria-labelledby="settings-title">
-  <button type="button" class="dialog-close quiet" data-close aria-label="Close settings">×</button>
-  <form id="settings-form">
-    <h2 id="settings-title">AI connection</h2>
-    <p id="settings-intro" class="hint">Connect an AI provider to create apps and talk with your assistant.</p>
-    <div class="settings-stack">
-      <label>AI provider<select id="ai-provider"><option value="openai">OpenAI</option><option value="openrouter">OpenRouter</option></select></label>
-      <label>Model<input id="ai-model" list="suggested-models" required maxlength="160" autocomplete="off"></label>
-      <datalist id="suggested-models"><option value="gpt-4.1-mini"></option><option value="openai/gpt-4.1-mini"></option></datalist>
-      <label>API key<input id="ai-key" type="password" autocomplete="off" spellcheck="false"></label>
-      <p class="hint">Your key stays in this browser and is excluded from backups. <a id="provider-help" href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an API key</a>.</p>
-      <label>Spending limit (USD)<input id="budget-limit" type="number" min="0" step="0.01" required></label>
-      <p class="hint">Estimated total AI spending on this device, including connection checks. Set a provider-side limit for a firm spending cap.</p>
-    </div>
-    <details id="advanced-settings">
-      <summary>Advanced</summary>
-      <label class="checkbox"><input id="observe" type="checkbox"> Offer occasional suggestions from repeated clicks</label>
-      <p class="hint">Suggestions are optional. Only aggregate click patterns are observed.</p>
-      <label class="checkbox"><input id="custom-routes" type="checkbox"> Choose different models by role</label>
-      <div id="model-routes" hidden></div>
-      <div id="additional-keys" class="key-grid" hidden>
-        <label>OpenAI API key<input id="openai-key" type="password" autocomplete="off" spellcheck="false"></label>
-        <label>OpenRouter API key<input id="openrouter-key" type="password" autocomplete="off" spellcheck="false"></label>
-      </div>
-      <p class="hint">Default cost estimates use GPT-4.1 mini list prices. Update estimates for custom models; provider prices may change.</p>
-      <div class="limit-grid">
-        <label>Requests per minute<input id="request-limit" type="number" min="1" max="1000" required></label>
-        <label>Concurrent requests<input id="concurrency-limit" type="number" min="1" max="20" required></label>
-      </div>
-      <label class="checkbox"><input id="debug" type="checkbox"> Detailed diagnostics</label>
-      <label class="checkbox"><input id="capture-content" type="checkbox"> Include AI prompts and responses in diagnostic logs</label>
-      <p class="hint">Prompts can contain private information. Export logs with care.</p>
-      <label class="checkbox"><input id="test-provider" type="checkbox"> Use scripted test provider</label>
-      <p id="test-notice" class="hint" hidden>Development only. Scripted responses cannot understand arbitrary goals and do not use a real AI provider.</p>
-    </details>
-    <p id="settings-status" class="dialog-status" role="status" aria-live="polite"></p>
-    <div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button id="save-settings" type="submit" class="primary">Connect and save</button></div>
-  </form>
+ <button type="button" class="dialog-close quiet" data-close aria-label="Close settings">×</button>
+ <form id="settings-form">
+  <h2 id="settings-title">Settings</h2><p id="settings-intro" class="hint">Make yourself at home. Good defaults are already selected.</p>
+  <section class="settings-section" aria-labelledby="connection-title">
+   <h3 id="connection-title">AI connection</h3>
+   <label>Connect with<select id="ai-provider"><option value="openai">OpenAI API key</option><option value="chatgpt">ChatGPT plan</option></select></label>
+   <div id="api-key-settings"><label>OpenAI API key<input id="ai-key" type="password" autocomplete="off" spellcheck="false"></label>
+   <p class="hint">Stored on this browser, excluded from backups. <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an API key</a>.</p></div>
+   <div id="chatgpt-settings" hidden><p class="hint">Use your eligible ChatGPT plan for application work, including the allowance shared with Codex.</p>
+    <button type="button" id="chatgpt-connect" class="primary">Continue with ChatGPT</button><button type="button" id="chatgpt-disconnect" class="quiet" hidden>Sign out</button>
+    <p id="chatgpt-status" role="status"></p><p class="hint">Account sign-in uses the connection helper on your device. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage ChatGPT usage</a></p>
+    <details id="connection-help"><summary>Set up the connection helper</summary><p class="hint">For a local installation, run <code>npm run connection</code> in the application folder, then return here. ChatGPT plan access is available for eligible local installations. Your ChatGPT tokens stay on your device.</p></details>
+    <label>OpenAI API key for voice (optional)<input id="voice-api-key" type="password" autocomplete="off" spellcheck="false"></label><p class="hint">Live voice uses separate OpenAI API usage.</p>
+   </div>
+   <details class="advanced-settings"><summary>AI choices</summary><p class="hint">We choose the right level for each task. You can change these defaults.</p><div id="model-routes"></div></details>
+   <label for="response-speed">Response speed</label><input id="response-speed" type="range" min="0" max="2" step="1" value="0" aria-describedby="speed-description"><div class="speed-labels"><span>Standard</span><span>Faster</span><span>Fastest</span></div><p id="speed-description" class="hint"></p>
+   <button type="button" id="check-connection" class="quiet">Check connection</button>
+  </section>
+  <details class="settings-section"><summary>Usage</summary>
+   <p id="usage-summary" class="hint"></p><label class="checkbox"><input id="budget-enabled" type="checkbox">Enable spending limit</label>
+   <div id="budget-options" hidden><label>Monthly limit (USD)<input id="budget-limit" type="number" min="0.01" max="100000" step="0.01"></label><p class="hint">Estimated OpenAI API spending on this browser, including voice. Resets on the first day of each month (UTC). ChatGPT plan limits are managed in ChatGPT.</p></div>
+  </details>
+  <details class="settings-section"><summary>Backup and restore</summary><p>Save or restore all your apps, conversations, settings and supported app data.</p><button id="backup" type="button" class="quiet">Back up or restore all apps</button></details>
+  <details class="settings-section"><summary>Help and diagnostics</summary><label class="checkbox"><input id="debug" type="checkbox">Debug logging</label><p class="hint">Record extra detail to help investigate problems. Basic errors are always saved. Keys and AI prompts are excluded; logs can include app details.</p><button id="export-log" type="button" class="quiet">Download diagnostic logs</button><p id="diagnostic-status" class="hint" role="status"></p></details>
+  <p id="settings-status" class="dialog-status" role="status" aria-live="polite"></p>
+  <div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button id="save-settings" type="submit" class="primary">Save settings</button></div>
+ </form>
 </dialog>`;
 
 export interface SettingsState {
@@ -64,258 +56,271 @@ export interface SettingsOptions {
   onSave(value: SettingsState): Promise<void>;
   onSaved?(): Promise<void>;
   onError?(error: unknown): void;
+  onAccountDisconnected?(): void;
 }
-
-/** Form edits are a private draft until validation and connection checks succeed. */
+const SPEEDS: ResponseSpeed[] = ["standard", "faster", "fastest"];
 export class SettingsController {
   private snapshot!: SettingsState;
-  private draftCredentials: ProviderCredentials = {};
-  private primaryProvider: "openai" | "openrouter" = "openai";
+  private connected = false;
+  private accountModels?: Array<{ id: string; name: string }>;
+  private accountCheck = 0;
   private checking: AbortController | null = null;
-  private readonly dialog = document.getElementById(
+  private signingIn: AbortController | null = null;
+  private dialog = document.getElementById(
     "settings-dialog",
   ) as HTMLDialogElement;
   constructor(private readonly options: SettingsOptions) {
+    const planEnabled =
+      location.hostname.endsWith(".localhost") ||
+      import.meta.env.VITE_CHATGPT_PLAN_ENABLED === "1";
+    const planChoice = this.get<HTMLSelectElement>(
+      "ai-provider",
+    ).querySelector<HTMLOptionElement>('option[value="chatgpt"]')!;
+    planChoice.disabled = !planEnabled;
+    if (!planEnabled)
+      planChoice.textContent = "ChatGPT plan (local installations)";
     this.get<HTMLFormElement>("settings-form").onsubmit = (event) => {
       event.preventDefault();
       void this.save();
     };
+    this.get<HTMLSelectElement>("ai-provider").onchange = () => {
+      this.disclose();
+      this.renderModels();
+      if (this.get<HTMLSelectElement>("ai-provider").value === "chatgpt")
+        void this.refreshAccount();
+    };
+    this.get<HTMLInputElement>("budget-enabled").onchange = () =>
+      this.disclose();
+    this.get<HTMLInputElement>("response-speed").oninput = () =>
+      this.speedDescription();
+    this.get("check-connection").onclick = () => void this.check();
+    this.get("chatgpt-connect").onclick = () => void this.connectAccount();
+    this.get("chatgpt-disconnect").onclick = () =>
+      void this.disconnectAccount();
+    this.dialog.addEventListener("close", () => {
+      this.checking?.abort();
+      this.signingIn?.abort();
+    });
     this.get<HTMLFormElement>("settings-form").addEventListener(
       "invalid",
       (event) => {
-        const target = event.target as HTMLElement;
-        const disclosure = target.closest("details");
-        if (disclosure) disclosure.open = true;
+        const parent = (event.target as HTMLElement).closest("details");
+        if (parent) parent.open = true;
       },
       true,
     );
-    this.get<HTMLSelectElement>("ai-provider").onchange = () => {
-      this.capturePrimaryKey();
-      this.primaryProvider = this.get<HTMLSelectElement>("ai-provider")
-        .value as "openai" | "openrouter";
-      this.get<HTMLInputElement>("ai-key").value =
-        this.draftCredentials[this.primaryProvider] ?? "";
-      this.get<HTMLInputElement>("ai-model").value = defaultModelRoute(
-        this.primaryProvider,
-      ).model;
-      this.updateProviderHelp();
-      this.syncConversationRoute();
-    };
-    this.get<HTMLInputElement>("ai-model").oninput = () =>
-      this.syncConversationRoute();
-    this.get<HTMLInputElement>("ai-key").oninput = () =>
-      this.capturePrimaryKey();
-    this.get<HTMLInputElement>("custom-routes").onchange = () =>
-      this.updateDisclosure();
-    this.get<HTMLInputElement>("test-provider").onchange = () =>
-      this.updateDisclosure();
-    for (const provider of ["openai", "openrouter"] as const) {
-      this.get<HTMLInputElement>(`${provider}-key`).oninput = () => {
-        this.draftCredentials[provider] = this.get<HTMLInputElement>(
-          `${provider}-key`,
-        ).value.trim();
-        if (provider === this.primaryProvider)
-          this.get<HTMLInputElement>("ai-key").value =
-            this.draftCredentials[provider] ?? "";
-      };
-    }
-    this.dialog.addEventListener("close", () => {
-      this.checking?.abort();
-      this.checking = null;
-    });
   }
   private get<T extends HTMLElement = HTMLElement>(id: string): T {
     return document.getElementById(id) as T;
   }
-  open(message?: string): void {
+  open(message?: string) {
+    this.accountCheck++;
     this.snapshot = structuredClone(this.options.getState());
-    this.draftCredentials = { ...this.snapshot.credentials };
-    const { config } = this.snapshot;
-    const route = config.routes.conversation;
-    this.primaryProvider =
-      route.provider === "openrouter" ? "openrouter" : "openai";
-    this.get<HTMLSelectElement>("ai-provider").value = this.primaryProvider;
-    this.get<HTMLInputElement>("ai-model").value =
-      route.provider === "demo"
-        ? defaultModelRoute(this.primaryProvider).model
-        : route.model;
-    this.get<HTMLInputElement>("ai-key").value =
-      this.draftCredentials[this.primaryProvider] ?? "";
-    for (const provider of ["openai", "openrouter"] as const)
-      this.get<HTMLInputElement>(`${provider}-key`).value =
-        this.draftCredentials[provider] ?? "";
+    this.get("model-routes").replaceChildren();
+    const { config, credentials, debug } = this.snapshot;
+    const provider =
+      config.routes.conversation.provider === "chatgpt" ? "chatgpt" : "openai";
+    this.get<HTMLSelectElement>("ai-provider").value = provider;
+    this.get<HTMLInputElement>("ai-key").value = credentials.openai ?? "";
+    this.get<HTMLInputElement>("voice-api-key").value =
+      credentials.openai ?? "";
+    this.connected = !!credentials.chatgpt;
+    this.get<HTMLInputElement>("budget-enabled").checked =
+      config.limits.budgetEnabled === true;
     this.get<HTMLInputElement>("budget-limit").value = String(
       config.limits.budgetUSD,
     );
-    this.get<HTMLInputElement>("request-limit").value = String(
-      config.limits.requestsPerMinute,
+    this.get<HTMLInputElement>("debug").checked = debug;
+    this.get<HTMLInputElement>("response-speed").value = String(
+      SPEEDS.indexOf(config.speed ?? "standard"),
     );
-    this.get<HTMLInputElement>("concurrency-limit").value = String(
-      config.limits.concurrency,
-    );
-    this.get<HTMLInputElement>("observe").checked = this.snapshot.observe;
-    this.get<HTMLInputElement>("debug").checked = this.snapshot.debug;
-    this.get<HTMLInputElement>("capture-content").checked =
-      config.captureContent;
-    this.get<HTMLInputElement>("test-provider").checked =
-      !!config.testProviderEnabled && route.provider === "demo";
-    this.get<HTMLInputElement>("custom-routes").checked = AI_ROLES.some(
-      (role) =>
-        role !== "speech" &&
-        JSON.stringify(config.routes[role]) !== JSON.stringify(route),
-    );
-    this.get<HTMLDetailsElement>("advanced-settings").open = false;
+    this.get("usage-summary").textContent =
+      `Estimated usage this month: $${this.options.getService().periodSpentUSD.toFixed(2)}.`;
     this.get("settings-intro").textContent =
       message ??
-      "Connect an AI provider to create apps and talk with your assistant.";
-    this.get<HTMLButtonElement>("save-settings").textContent =
-      missingProviderRoles(config, this.draftCredentials).length
-        ? "Connect and save"
-        : "Save settings";
-    this.get<HTMLButtonElement>("save-settings").disabled = false;
+      "Good defaults are already selected. Adjust only what you need.";
+    this.renderModels();
     this.setStatus("");
-    this.renderRoutes();
-    this.updateDisclosure();
-    this.updateProviderHelp();
+    this.disclose();
     this.dialog.returnValue = "";
     if (!this.dialog.open) this.dialog.showModal();
-    this.get<HTMLSelectElement>("ai-provider").focus();
+    this.get("ai-provider").focus();
+    if (provider === "chatgpt") void this.refreshAccount();
   }
-  private capturePrimaryKey(): void {
-    this.draftCredentials[this.primaryProvider] =
-      this.get<HTMLInputElement>("ai-key").value.trim();
-    this.get<HTMLInputElement>(`${this.primaryProvider}-key`).value =
-      this.draftCredentials[this.primaryProvider] ?? "";
-  }
-  private syncConversationRoute(): void {
-    const row = this.get("model-routes").querySelector<HTMLElement>(
-      '[data-role="conversation"]',
+  private renderModels() {
+    const account =
+      this.get<HTMLSelectElement>("ai-provider").value === "chatgpt";
+    const previous = Object.fromEntries(
+      Object.keys(CATEGORY_ROLES).map((category) => [
+        category,
+        this.get<HTMLSelectElement>(`model-${category}`)?.value,
+      ]),
     );
-    if (!row) return;
-    row.querySelector<HTMLSelectElement>(".provider")!.value =
-      this.primaryProvider;
-    row.querySelector<HTMLInputElement>(".model")!.value =
-      this.get<HTMLInputElement>("ai-model").value;
-  }
-  private updateProviderHelp(): void {
-    this.get<HTMLAnchorElement>("provider-help").href =
-      this.primaryProvider === "openai"
-        ? "https://platform.openai.com/api-keys"
-        : "https://openrouter.ai/settings/keys";
-  }
-  private updateDisclosure(): void {
-    const test = this.get<HTMLInputElement>("test-provider").checked;
-    const custom = this.get<HTMLInputElement>("custom-routes").checked;
-    this.get("model-routes").hidden = !custom || test;
-    this.get("additional-keys").hidden = !custom || test;
-    for (const row of this.get(
-      "model-routes",
-    ).querySelectorAll<HTMLFieldSetElement>("fieldset"))
-      row.disabled = !custom || test;
-    for (const input of this.get(
-      "additional-keys",
-    ).querySelectorAll<HTMLInputElement>("input"))
-      input.disabled = !custom || test;
-    this.get<HTMLInputElement>("custom-routes").disabled = test;
-    this.get("test-notice").hidden = !test;
-    for (const id of ["ai-provider", "ai-model", "ai-key"])
-      this.get<HTMLInputElement>(id).disabled = test;
-    this.get<HTMLInputElement>("ai-key").required = !test;
-  }
-  private renderRoutes(): void {
-    const root = this.get("model-routes");
-    root.replaceChildren();
-    for (const role of AI_ROLES) {
-      if (role === "speech") continue;
-      const route = this.snapshot.config.routes[role];
-      const row = document.createElement("fieldset");
-      row.className = "model-row";
-      row.dataset.role = role;
-      const legend = document.createElement("legend");
-      legend.textContent = ROLE_LABELS[role];
-      row.append(legend);
-      const provider = document.createElement("select");
-      provider.className = "provider";
-      for (const [value, text] of [
-        ["openai", "OpenAI"],
-        ["openrouter", "OpenRouter"],
-      ]) {
+    this.get("model-routes").replaceChildren();
+    for (const [category, roles] of Object.entries(CATEGORY_ROLES)) {
+      const route = this.snapshot.config.routes[roles[0]!];
+      const label = document.createElement("label");
+      label.textContent =
+        category === "voice"
+          ? "Live voice"
+          : category[0]!.toUpperCase() + category.slice(1);
+      const select = document.createElement("select");
+      select.id = `model-${category}`;
+      select.setAttribute("aria-label", `${label.textContent} model`);
+      const choices =
+        category === "voice"
+          ? [{ id: "gpt-live-1", name: "GPT-Live 1" }]
+          : account && this.accountModels
+            ? this.accountModels
+            : MODEL_CHOICES;
+      for (const choice of choices) {
         const option = document.createElement("option");
-        option.value = value!;
-        option.textContent = text!;
-        provider.append(option);
+        option.value = choice.id;
+        option.textContent = choice.name;
+        select.append(option);
       }
-      provider.value =
-        route.provider === "demo" ? this.primaryProvider : route.provider;
-      this.label(row, "Provider", provider, `${ROLE_LABELS[role]} provider`);
-      const model = document.createElement("input");
-      model.className = "model";
-      model.value =
-        route.provider === "demo"
-          ? defaultModelRoute(this.primaryProvider).model
-          : route.model;
-      model.maxLength = 160;
-      this.label(row, "Model", model, `${ROLE_LABELS[role]} model`);
-      for (const [field, caption] of [
-        ["maxOutputTokens", "Maximum output tokens"],
-        ["inputPerMillion", "Input price per million tokens (USD)"],
-        ["outputPerMillion", "Output price per million tokens (USD)"],
-      ] as const) {
-        const input = document.createElement("input");
-        input.type = "number";
-        input.min = field === "maxOutputTokens" ? "1" : "0.001";
-        input.step = field === "maxOutputTokens" ? "1" : "any";
-        if (field === "maxOutputTokens") input.max = "32768";
-        input.dataset.field = field;
-        input.value = String(
-          route.provider === "demo"
-            ? defaultModelRoute(this.primaryProvider)[field]
-            : route[field],
-        );
-        this.label(row, caption, input, `${ROLE_LABELS[role]} ${caption}`);
-      }
-      model.oninput = () => {
-        if (role === "conversation")
-          this.get<HTMLInputElement>("ai-model").value = model.value;
-      };
-      provider.onchange = () => {
-        const defaults = defaultModelRoute(provider.value as ProviderId);
-        model.value = defaults.model;
-        if (role === "conversation") {
-          this.capturePrimaryKey();
-          this.primaryProvider = provider.value as "openai" | "openrouter";
-          this.get<HTMLSelectElement>("ai-provider").value =
-            this.primaryProvider;
-          this.get<HTMLInputElement>("ai-model").value = model.value;
-          this.get<HTMLInputElement>("ai-key").value =
-            this.draftCredentials[this.primaryProvider] ?? "";
-          this.updateProviderHelp();
-        }
-        for (const field of ["inputPerMillion", "outputPerMillion"] as const)
-          row.querySelector<HTMLInputElement>(`[data-field=${field}]`)!.value =
-            String(defaults[field]);
-      };
-      root.append(row);
+      const preferred = previous[category] || route.model;
+      select.value = choices.some((choice) => choice.id === preferred)
+        ? preferred
+        : choices.some(
+              (choice) =>
+                choice.id ===
+                defaultModelRoute("openai", category as ModelCategory).model,
+            )
+          ? defaultModelRoute("openai", category as ModelCategory).model
+          : (choices[0]?.id ?? "");
+      select.required = true;
+      label.append(select);
+      this.get("model-routes").append(label);
     }
   }
-  private label(
-    row: HTMLElement,
-    caption: string,
-    control: HTMLElement,
-    accessibleName: string,
-  ): void {
-    const label = document.createElement("label");
-    label.textContent = caption;
-    control.setAttribute("aria-label", accessibleName);
-    label.append(control);
-    row.append(label);
+  private disclose() {
+    const account =
+      this.get<HTMLSelectElement>("ai-provider").value === "chatgpt";
+    this.get("api-key-settings").hidden = account;
+    this.get("chatgpt-settings").hidden = !account;
+    const enabled = this.get<HTMLInputElement>("budget-enabled").checked;
+    this.get("budget-options").hidden = !enabled;
+    this.get<HTMLInputElement>("budget-limit").disabled = !enabled;
+    this.get<HTMLInputElement>("budget-limit").required = enabled;
+    this.speedDescription();
   }
-  private setStatus(message: string, error = false): void {
-    const status = this.get("settings-status");
-    status.setAttribute("role", error ? "alert" : "status");
-    status.textContent = message;
+  private speedDescription() {
+    const index = Number(this.get<HTMLInputElement>("response-speed").value);
+    this.get<HTMLInputElement>("response-speed").setAttribute(
+      "aria-valuetext",
+      ["Standard", "Faster", "Fastest"][index]!,
+    );
+    if (this.get<HTMLSelectElement>("ai-provider").value === "chatgpt") {
+      this.get("speed-description").textContent =
+        index === 0
+          ? "Usual plan usage. Quality stays the same at every speed."
+          : "May use more plan allowance. Available speeds depend on your plan.";
+      return;
+    }
+    this.get("speed-description").textContent = [
+      "Usual cost. Quality stays the same at every speed.",
+      "Higher cost — typically 2× for model responses.",
+      "Highest cost — up to 6× for supported models.",
+    ][index]!;
   }
-  private async save(): Promise<void> {
+  private draft(): SettingsState {
+    const next = structuredClone(this.snapshot);
+    const provider = this.get<HTMLSelectElement>("ai-provider").value as
+      | "openai"
+      | "chatgpt";
+    next.credentials = {
+      openai: this.get<HTMLInputElement>(
+        provider === "openai" ? "ai-key" : "voice-api-key",
+      ).value.trim(),
+      ...(this.connected ? { chatgpt: "connected" } : {}),
+    };
+    const speed =
+      SPEEDS[Number(this.get<HTMLInputElement>("response-speed").value)]!;
+    next.config.speed = speed;
+    next.config.version = 3;
+    for (const [category, roles] of Object.entries(CATEGORY_ROLES)) {
+      const model = this.get<HTMLSelectElement>(`model-${category}`).value;
+      const choice = MODEL_CHOICES.find((choice) => choice.id === model);
+      const route = {
+        ...defaultModelRoute(
+          category === "voice" ? "openai" : provider,
+          category as ModelCategory,
+        ),
+        model,
+        serviceTier: serviceTierFor(model, speed),
+      };
+      if (choice) {
+        route.inputPerMillion = choice.input;
+        route.outputPerMillion = choice.output;
+      }
+      for (const role of roles) next.config.routes[role] = { ...route };
+    }
+    // Explicit URL test sessions retain their deterministic routing, never a visible provider choice.
+    if (this.snapshot.config.testProviderEnabled) {
+      next.config.routes = structuredClone(this.snapshot.config.routes);
+      next.config.testProviderEnabled = true;
+    }
+    next.config.limits = {
+      ...next.config.limits,
+      budgetEnabled: this.get<HTMLInputElement>("budget-enabled").checked,
+      budgetUSD: Number(this.get<HTMLInputElement>("budget-limit").value),
+      budgetPeriod: "month",
+    };
+    next.config.captureContent = false;
+    next.debug = this.get<HTMLInputElement>("debug").checked;
+    return next;
+  }
+  private connectionChanged(next: SettingsState) {
+    return (
+      JSON.stringify(next.config.routes) !==
+        JSON.stringify(this.snapshot.config.routes) ||
+      (next.credentials.openai ?? "") !==
+        (this.snapshot.credentials.openai ?? "") ||
+      (next.credentials.chatgpt ?? "") !==
+        (this.snapshot.credentials.chatgpt ?? "")
+    );
+  }
+  private setStatus(message: string, error = false) {
+    const node = this.get("settings-status");
+    node.textContent = message;
+    node.setAttribute("role", error ? "alert" : "status");
+  }
+  private async validate(next: SettingsState, signal: AbortSignal) {
+    if (missingProviderRoles(next.config, next.credentials).length)
+      throw new Error("Add an OpenAI API key or connect your ChatGPT account.");
+    await this.options
+      .getService()
+      .testConfiguration(next.config, next.credentials, {
+        appId: "settings",
+        correlationId: crypto.randomUUID(),
+        signal,
+      });
+  }
+  private async check() {
+    if (this.checking) return;
+    const controller = new AbortController();
+    this.checking = controller;
+    this.get<HTMLButtonElement>("check-connection").disabled = true;
+    try {
+      this.setStatus("Checking the connection and application actions…");
+      await this.validate(
+        this.draft(),
+        AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
+      );
+      this.setStatus("Connection checked. Save to use these settings.");
+    } catch (error) {
+      if (!controller.signal.aborted)
+        this.setStatus(
+          error instanceof Error ? error.message : "Connection check failed.",
+          true,
+        );
+    } finally {
+      this.checking = null;
+      this.get<HTMLButtonElement>("check-connection").disabled = false;
+    }
+  }
+  private async save() {
     if (
       this.checking ||
       !this.get<HTMLFormElement>("settings-form").reportValidity()
@@ -323,92 +328,19 @@ export class SettingsController {
       return;
     const controller = new AbortController();
     this.checking = controller;
-    const save = this.get<HTMLButtonElement>("save-settings");
-    save.disabled = true;
+    this.get<HTMLButtonElement>("save-settings").disabled = true;
     try {
-      this.options.canSave?.();
-      this.capturePrimaryKey();
-      const next = structuredClone(this.snapshot.config);
-      const test = this.get<HTMLInputElement>("test-provider").checked;
-      next.testProviderEnabled = test;
-      if (test) {
-        for (const role of AI_ROLES)
-          next.routes[role] = defaultModelRoute("demo");
-      } else if (this.get<HTMLInputElement>("custom-routes").checked) {
-        for (const row of this.get(
-          "model-routes",
-        ).querySelectorAll<HTMLElement>(".model-row")) {
-          const role = row.dataset.role as AIRole;
-          const route = next.routes[role];
-          route.provider = row.querySelector<HTMLSelectElement>(".provider")!
-            .value as ProviderId;
-          route.model = row
-            .querySelector<HTMLInputElement>(".model")!
-            .value.trim();
-          for (const field of [
-            "inputPerMillion",
-            "outputPerMillion",
-            "maxOutputTokens",
-          ] as const)
-            route[field] = Number(
-              row.querySelector<HTMLInputElement>(`[data-field=${field}]`)!
-                .value,
-            );
-        }
-      } else {
-        const route = {
-          ...defaultModelRoute(this.primaryProvider),
-          model: this.get<HTMLInputElement>("ai-model").value.trim(),
-        };
-        const previous = this.snapshot.config.routes.conversation;
-        if (
-          previous.provider === route.provider &&
-          previous.model === route.model
-        ) {
-          route.inputPerMillion = previous.inputPerMillion;
-          route.outputPerMillion = previous.outputPerMillion;
-          route.maxOutputTokens = previous.maxOutputTokens;
-        }
-        for (const role of AI_ROLES) next.routes[role] = { ...route };
-      }
-      next.limits = {
-        budgetUSD: Number(this.get<HTMLInputElement>("budget-limit").value),
-        requestsPerMinute: Number(
-          this.get<HTMLInputElement>("request-limit").value,
-        ),
-        concurrency: Number(
-          this.get<HTMLInputElement>("concurrency-limit").value,
-        ),
-      };
-      next.captureContent =
-        this.get<HTMLInputElement>("capture-content").checked;
-      const missing = missingProviderRoles(next, this.draftCredentials);
-      if (missing.length)
-        throw new Error(
-          "Add an API key for each selected provider. Additional keys are in Advanced.",
+      const next = this.draft();
+      if (this.connectionChanged(next)) {
+        this.options.canSave?.();
+        this.setStatus("Checking your AI connection…");
+        await this.validate(
+          next,
+          AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
         );
-      this.setStatus(
-        test
-          ? "Saving explicit test configuration…"
-          : "Checking your AI connection…",
-      );
-      await this.options
-        .getService()
-        .testConfiguration(next, this.draftCredentials, {
-          appId: "settings",
-          correlationId: crypto.randomUUID(),
-          signal: AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(30_000),
-          ]),
-        });
+      }
       controller.signal.throwIfAborted();
-      await this.options.onSave({
-        config: next,
-        credentials: { ...this.draftCredentials },
-        observe: this.get<HTMLInputElement>("observe").checked,
-        debug: this.get<HTMLInputElement>("debug").checked,
-      });
+      await this.options.onSave(next);
       this.dialog.close("saved");
       try {
         await this.options.onSaved?.();
@@ -416,18 +348,130 @@ export class SettingsController {
         this.options.onError?.(error);
       }
     } catch (error) {
-      if (this.dialog.open && !controller.signal.aborted)
+      if (!controller.signal.aborted)
         this.setStatus(
-          error instanceof DOMException && error.name === "TimeoutError"
-            ? "The connection check took too long. Check your network and try again."
-            : error instanceof Error
-              ? error.message
-              : "Couldn't connect. Check your key and try again.",
+          error instanceof Error
+            ? error.message
+            : "Settings could not be saved.",
           true,
         );
     } finally {
-      if (this.checking === controller) this.checking = null;
-      save.disabled = false;
+      this.checking = null;
+      this.get<HTMLButtonElement>("save-settings").disabled = false;
+    }
+  }
+  private async refreshAccount() {
+    const check = ++this.accountCheck;
+    try {
+      const session = await accountSession();
+      if (check !== this.accountCheck || !this.dialog.open) return session;
+      this.connected = session.connected && session.sharing;
+      this.get("chatgpt-status").textContent =
+        session.error ??
+        (session.connected
+          ? `${session.email ?? "ChatGPT account"}${session.sharing ? " — plan usage enabled" : " — enable plan usage in ChatGPT"}`
+          : "Ready to connect.");
+      this.get("chatgpt-disconnect").hidden = !session.connected;
+      if (this.connected) {
+        const result = await companionFetch("/models", {
+          signal: AbortSignal.timeout(10_000),
+        });
+        if (!result.ok)
+          throw new Error(
+            "Your ChatGPT model choices could not be loaded. Please reconnect.",
+          );
+        const catalog = (await result.json()) as {
+          models?: Array<{
+            slug: string;
+            display_name: string;
+            visibility: string;
+          }>;
+        };
+        if (check !== this.accountCheck || !this.dialog.open) return session;
+        this.accountModels = (catalog.models ?? [])
+          .filter(
+            (model) =>
+              model.visibility === "list" &&
+              typeof model.slug === "string" &&
+              typeof model.display_name === "string",
+          )
+          .map((model) => ({ id: model.slug, name: model.display_name }));
+        if (!this.accountModels.length)
+          throw new Error(
+            "No models are available for plan usage on this account. Check your ChatGPT plan settings.",
+          );
+        this.renderModels();
+      } else {
+        this.accountModels = undefined;
+        this.renderModels();
+      }
+      return session;
+    } catch (error) {
+      if (check === this.accountCheck)
+        this.get("chatgpt-status").textContent =
+          error instanceof Error && this.connected
+            ? error.message
+            : "Start the connection helper on this device, then select Continue with ChatGPT.";
+      return undefined;
+    }
+  }
+  private async connectAccount() {
+    if (this.signingIn) return;
+    const popup = window.open("about:blank", "_blank");
+    const controller = new AbortController();
+    this.signingIn = controller;
+    this.get<HTMLButtonElement>("chatgpt-connect").disabled = true;
+    try {
+      const response = await companionFetch("/signin", {
+        method: "POST",
+        signal: AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+      });
+      if (!response.ok) throw new Error("Could not start ChatGPT sign-in.");
+      const { url } = (await response.json()) as { url: string };
+      if (new URL(url).origin !== "https://auth.openai.com")
+        throw new Error("Unexpected sign-in address.");
+      if (!popup) throw new Error("Allow the sign-in window, then try again.");
+      popup.opener = null;
+      popup.location.href = url;
+      this.get("chatgpt-status").textContent =
+        "Finish signing in in the new window…";
+      for (let attempt = 0; attempt < 180; attempt++) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+        controller.signal.throwIfAborted();
+        const session = await accountSession(
+          AbortSignal.any([controller.signal, AbortSignal.timeout(5000)]),
+        );
+        if (session.error) throw new Error(session.error);
+        if (!session.pending) {
+          await this.refreshAccount();
+          return;
+        }
+      }
+      throw new Error("Sign-in timed out. Please try again.");
+    } catch (error) {
+      popup?.close();
+      if (!controller.signal.aborted)
+        this.get("chatgpt-status").textContent =
+          error instanceof Error
+            ? error.message
+            : "Start the connection helper and try again.";
+    } finally {
+      this.signingIn = null;
+      this.get<HTMLButtonElement>("chatgpt-connect").disabled = false;
+    }
+  }
+  private async disconnectAccount() {
+    try {
+      this.options.canSave?.();
+      const response = await companionFetch("/signout", { method: "POST" });
+      if (!response.ok) throw new Error("Sign-out could not finish.");
+      this.connected = false;
+      this.accountModels = undefined;
+      this.options.onAccountDisconnected?.();
+      await this.refreshAccount();
+    } catch (error) {
+      this.get("chatgpt-status").textContent =
+        error instanceof Error ? error.message : "Could not sign out.";
     }
   }
 }

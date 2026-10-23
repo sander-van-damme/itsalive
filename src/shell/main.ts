@@ -8,11 +8,14 @@ import {
   missingProviderRoles,
   CodingHarness,
   converse,
-  reason,
   BehaviorAdvisor,
-  SpeechInput,
+  LiveVoice,
+  demoAIConfig,
 } from "../ai";
+import { AIError } from "../ai/providers";
+import { accountSession } from "../ai/connection";
 import type {
+  ProviderCredentials,
   AIConfig,
   AIRole,
   ApplicationAIRequest,
@@ -26,13 +29,13 @@ const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const workspace = new Workspace($("app-container"));
 let config: AIConfig = defaultAIConfig();
-let credentials: Partial<Record<"openai" | "openrouter", string>> = {};
+let credentials: ProviderCredentials = {};
 try {
   const stored: unknown = JSON.parse(
     localStorage.getItem("itsalive.credentials") ?? "{}",
   );
   if (stored && typeof stored === "object" && !Array.isArray(stored)) {
-    for (const provider of ["openai", "openrouter"] as const) {
+    for (const provider of ["openai"] as const) {
       const value = (stored as Record<string, unknown>)[provider];
       if (typeof value === "string" && value.trim())
         credentials[provider] = value.trim();
@@ -44,9 +47,8 @@ try {
 let ai: AIService;
 let advisor: BehaviorAdvisor;
 let coding = false;
-let speech: SpeechInput;
-let listening = false;
-let reasoning = false;
+let voice: LiveVoice | undefined;
+let microphoneEnabled = true;
 let usageWrites: Promise<void> = Promise.resolve();
 let backupController: AbortController | null = null;
 let activeTab = "preview";
@@ -63,21 +65,23 @@ function report(error: unknown) {
   const detail = error instanceof Error ? error.message : String(error);
   void workspace.diagnostics.record(
     "operation.failed",
-    { message: detail },
+    { message: detail, ...(error instanceof AIError ? error.detail : {}) },
     context(),
   );
   const message =
-    /key|credential|provider|connect|authentication|401|403/i.test(detail)
-      ? "AI couldn't connect. Check your provider and API key in Settings, then try again."
-      : /budget|limit|429|rate/i.test(detail)
-        ? "An AI usage limit was reached. Check your limits in Settings or try again later."
-        : /network|fetch|offline/i.test(detail)
-          ? "The connection was interrupted. Check your internet connection and try again."
-          : /already|wait|finish|backup|restore|write a question|describe|characters|microphone|speech|recognition|Type your message/i.test(
-                detail,
-              )
-            ? detail
-            : "That didn't work. Your last working application is safe. Please try again.";
+    error instanceof AIError
+      ? error.message
+      : /key|credential|provider|connect|authentication|401|403/i.test(detail)
+        ? "AI couldn't connect. Check your provider and API key in Settings, then try again."
+        : /budget|limit|429|rate/i.test(detail)
+          ? "An AI usage limit was reached. Check your limits in Settings or try again later."
+          : /network|fetch|offline/i.test(detail)
+            ? "The connection was interrupted. Check your internet connection and try again."
+            : /already|wait|finish|backup|restore|write a question|describe|characters|microphone|speech|recognition|Type your message/i.test(
+                  detail,
+                )
+              ? detail
+              : "That didn't work. Your last working application is safe. Please try again.";
   setStatus(message);
 }
 function action(fn: () => Promise<unknown>) {
@@ -103,31 +107,8 @@ function element<K extends keyof HTMLElementTagNameMap>(
 }
 function showTab(tab: string) {
   activeTab = tab;
-  for (const name of ["preview", "source", "history"])
-    $(name).hidden = name !== tab;
-  document
-    .querySelectorAll<HTMLButtonElement>('[role="tab"][data-tab]')
-    .forEach((b) =>
-      b.setAttribute("aria-selected", String(b.dataset.tab === tab)),
-    );
-  if (tab === "source") renderSource();
+  for (const name of ["preview", "history"]) $(name).hidden = name !== tab;
   if (tab === "history") action(renderHistory);
-}
-function renderSource() {
-  const project = workspace.revision?.project;
-  if (!project) return;
-  const select = $<HTMLSelectElement>("source-file");
-  const selected = select.value;
-  select.replaceChildren(
-    ...Object.keys(project.files).map((file) => {
-      const opt = element("option", file);
-      opt.value = file;
-      return opt;
-    }),
-  );
-  if (project.files[selected] !== undefined) select.value = selected;
-  $<HTMLTextAreaElement>("source-code").value =
-    project.files[select.value] ?? "";
 }
 async function renderHistory() {
   const list = $("revision-list");
@@ -232,10 +213,6 @@ async function render() {
   root.classList.toggle("has-app", !!workspace.current);
   $("welcome").hidden = !!workspace.current;
   $("app-name").textContent = workspace.current?.name ?? "Your apps";
-  $("revision-label").textContent = workspace.revision
-    ? `REV ${workspace.revision.id.slice(0, 6).toUpperCase()}`
-    : "LOCAL FIRST";
-  if (activeTab === "source") renderSource();
   if (activeTab === "history") await renderHistory();
   await renderChat();
 }
@@ -314,7 +291,7 @@ async function renderFeedback(appId: string) {
                 : status === "unresolved"
                   ? false
                   : null,
-            originalRequest: attempt.originalRequest,
+
             feedbackId: attempt.id,
           },
           { appId, revisionId: attempt.revisionId },
@@ -351,20 +328,54 @@ async function renderFeedback(appId: string) {
     .forEach((node) => node.remove());
   $("chat").append(feedback);
 }
-async function runCoding(intent: string, originalRequest = intent) {
+type WorkLevel = "low" | "medium" | "high";
+interface QueuedEdit {
+  level: WorkLevel;
+  appId: string;
+  intent: string;
+  originalRequest: string;
+  resolve(): void;
+  reject(error: unknown): void;
+}
+const queuedEdits: QueuedEdit[] = [];
+async function runCoding(
+  intent: string,
+  originalRequest = intent,
+  level: WorkLevel = "medium",
+) {
+  const role = (
+    {
+      low: "coding-simple",
+      medium: "coding-standard",
+      high: "coding-complex",
+    } as const
+  )[level];
   const requestedAppId = workspace.current?.id;
   if (
     !requireAIReady(async () => {
       if (requestedAppId && workspace.current?.id !== requestedAppId)
         await workspace.openApp(requestedAppId);
-      await runCoding(intent, originalRequest);
-    }, ["coding-standard"])
+      await runCoding(intent, originalRequest, level);
+    }, [role])
   )
     return;
-  if (coding)
-    throw new Error(
-      "A change is already in progress. You can still ask a question.",
+  if (coding) {
+    if (!requestedAppId || queuedEdits.length >= 8)
+      throw new Error(
+        "Several changes are already waiting. Let them finish before adding more.",
+      );
+    setStatus("Your next change is queued. You can keep talking.");
+    return new Promise<void>((resolve, reject) =>
+      queuedEdits.push({
+        level,
+        appId: requestedAppId,
+        intent,
+        originalRequest,
+        resolve,
+        reject,
+      }),
     );
+  }
   if (!workspace.revision)
     throw new Error("Describe the application you'd like first.");
   coding = true;
@@ -421,11 +432,12 @@ async function runCoding(intent: string, originalRequest = intent) {
       baseRevisionId: base.id,
       intent,
       authorized: true,
+      role,
       context: codingContext,
     });
     await workspace.diagnostics.record(
       "coding.complete",
-      { summary: result.summary, changedFiles: result.changedFiles },
+      { changedFiles: result.changedFiles },
       codingContext,
     );
     await saveFeedback({
@@ -456,21 +468,40 @@ async function runCoding(intent: string, originalRequest = intent) {
     );
     await appendMessage(
       "assistant",
-      base.parent === null
-        ? "I couldn't create your app yet. Tell me more about what you need, or ask me to try again."
-        : "I couldn't complete that change. Your previous app is still available. You can describe the problem or ask me to try again.",
+      error instanceof AIError
+        ? error.message
+        : base.parent === null
+          ? "I couldn't finish creating your app. Your request is saved. You can ask me to retry or download diagnostic logs in Settings."
+          : "I couldn't complete that change. Your previous app is still available. Ask me to retry, or download diagnostic logs in Settings.",
       base.appId,
     );
     throw error;
   } finally {
     coding = false;
     if (workspace.current?.id === base.appId) await renderChat();
+    while (queuedEdits.length) {
+      const next = queuedEdits.shift()!;
+      if (workspace.current?.id !== next.appId) {
+        next.reject(
+          new Error(
+            "The app changed before a queued request began. Open the intended app and try again.",
+          ),
+        );
+        continue;
+      }
+      void runCoding(next.intent, next.originalRequest, next.level).then(
+        next.resolve,
+        next.reject,
+      );
+      break;
+    }
   }
 }
 function showConfirmation(
   intent: string,
   reason: string,
   originalRequest: string,
+  level: WorkLevel = "medium",
 ) {
   const appId = workspace.current?.id;
   const revisionId = workspace.revision?.id;
@@ -489,7 +520,7 @@ function showConfirmation(
         );
       box.hidden = true;
       await appendMessage("user", "Confirm this change.", appId);
-      await runCoding(intent, originalRequest);
+      await runCoding(intent, originalRequest, level);
     });
   const dismiss = element("button", "Cancel", "quiet");
   dismiss.onclick = () => {
@@ -535,19 +566,6 @@ function showCreate() {
 }
 $("new-app").onclick = showCreate;
 $("welcome-create").onclick = showCreate;
-$<HTMLSelectElement>("source-file").onchange = () => {
-  $<HTMLTextAreaElement>("source-code").value =
-    workspace.revision?.project.files[
-      $<HTMLSelectElement>("source-file").value
-    ] ?? "";
-};
-$("apply-source").onclick = () =>
-  action(() =>
-    workspace.edit({
-      [$<HTMLSelectElement>("source-file").value]:
-        $<HTMLTextAreaElement>("source-code").value,
-    }),
-  );
 let pendingRequest: (() => Promise<void>) | undefined;
 let pendingText = "";
 function requireAIReady(
@@ -586,13 +604,14 @@ async function createFromGoal(name: string, idea: string) {
 async function sendMessage(
   text: string,
   expectedAppId: string | null = workspace.current?.id ?? null,
+  liveHistory: Array<{ role: "user" | "assistant"; content: string }> = [],
 ) {
   if (workspace.isBackingUp)
     throw new Error("Finish the backup or restore first.");
   if (!text.trim()) return;
   if (
     !requireAIReady(
-      () => sendMessage(text, expectedAppId),
+      () => sendMessage(text, expectedAppId, liveHistory),
       ["conversation"],
       text,
     )
@@ -613,7 +632,10 @@ async function sendMessage(
   const reply = await converse(
     ai,
     text,
-    history.map((m) => ({ role: m.role, content: m.content })),
+    [
+      ...history.map((m) => ({ role: m.role, content: m.content })),
+      ...liveHistory,
+    ],
     requestContext,
     unresolved
       ? { originalRequest: unresolved.originalRequest, unresolved: true }
@@ -622,13 +644,22 @@ async function sendMessage(
   await appendMessage("assistant", reply.reply, appId);
   if (workspace.current?.id !== appId) return;
   if (reply.intent === "change" && reply.changeRequest)
-    await runCoding(reply.changeRequest, unresolved?.originalRequest ?? text);
+    await runCoding(
+      reply.changeRequest,
+      unresolved?.originalRequest ?? text,
+      unresolved ? "high" : reply.workLevel,
+    );
   else if (
     reply.intent === "confirm" &&
     reply.changeRequest &&
     reply.confirmationReason
   )
-    showConfirmation(reply.changeRequest, reply.confirmationReason, text);
+    showConfirmation(
+      reply.changeRequest,
+      reply.confirmationReason,
+      text,
+      reply.workLevel,
+    );
   else setStatus("Ready");
 }
 $<HTMLFormElement>("create-form").onsubmit = (event) => {
@@ -639,66 +670,56 @@ $<HTMLFormElement>("create-form").onsubmit = (event) => {
   $<HTMLDialogElement>("create-dialog").close();
   action(() => createFromGoal(name, idea));
 };
+const submitted = new Set<string>();
 $<HTMLFormElement>("chat-form").onsubmit = (event) => {
   event.preventDefault();
   const input = $<HTMLTextAreaElement>("message");
   const text = input.value.trim();
-  if (!text) return;
+  const submission = `${workspace.current?.id ?? "new"}:${text}`;
+  if (!text || submitted.has(submission)) return;
+  submitted.add(submission);
   input.value = "";
-  action(() => sendMessage(text));
+  void sendMessage(text)
+    .catch((error) => {
+      if (!input.value) input.value = text;
+      report(error);
+    })
+    .finally(() => submitted.delete(submission));
 };
-$("speak").onclick = () => {
-  if (listening) speech.stop();
-  else speech.start();
-};
-const deeper = element("button", "Think deeper", "quiet");
-deeper.type = "button";
-deeper.title =
-  "Ask the reasoning model; you can continue chatting while it works";
-$("chat-form")
-  .querySelector(".composer-actions")!
-  .insertBefore(deeper, $("chat-form").querySelector("[type=submit]"));
-async function runDeeper(text: string, appId: string) {
-  if (!requireAIReady(() => runDeeper(text, appId), ["reasoning"], text))
-    return;
-  if (workspace.isBackingUp)
-    throw new Error("Finish the backup or restore first.");
-  if (reasoning) throw new Error("Deeper analysis is already running.");
-  if (workspace.current?.id !== appId) await workspace.openApp(appId);
-  const requestContext = context();
-  reasoning = true;
-  deeper.disabled = true;
-  try {
-    const history = await workspace.repo.listChat(appId);
-    await appendMessage("user", text, appId);
-    const reply = await reason(
-      ai,
-      text,
-      history.map((m) => ({ role: m.role, content: m.content })),
-      requestContext,
-    );
-    await appendMessage("assistant", reply, appId);
-  } finally {
-    reasoning = false;
-    deeper.disabled = false;
+$<HTMLTextAreaElement>("message").addEventListener("keydown", (event) => {
+  if (
+    event.key === "Enter" &&
+    !event.shiftKey &&
+    !event.isComposing &&
+    event.keyCode !== 229
+  ) {
+    event.preventDefault();
+    if (!event.repeat) $<HTMLFormElement>("chat-form").requestSubmit();
   }
-}
-deeper.onclick = () =>
-  action(async () => {
-    const input = $<HTMLTextAreaElement>("message");
-    const text = input.value.trim();
-    if (!text || !workspace.current)
-      throw new Error("Write a question in an open app first.");
-    input.value = "";
-    await runDeeper(text, workspace.current.id);
-  });
+});
 function refreshProviderBadge() {
-  const missing = missingProviderRoles(config, credentials);
-  $("provider-badge").textContent = missing.length
-    ? "Connect AI"
-    : Object.values(config.routes).some((route) => route.provider === "demo")
-      ? "Scripted test provider"
-      : "AI connected";
+  const badge = $("provider-badge");
+  const test =
+    config.testProviderEnabled &&
+    config.routes.conversation.provider === "demo";
+  const missing = missingProviderRoles(config, credentials).length > 0;
+  const state = ai?.health.state ?? "unchecked";
+  badge.textContent = test
+    ? "Scripted test provider"
+    : missing
+      ? "Connect AI"
+      : {
+          unchecked: "AI not checked",
+          checking: "Checking AI…",
+          ready: "AI connected",
+          error: "AI needs attention",
+        }[state];
+  badge.dataset.state = missing ? "unchecked" : state;
+  badge.title =
+    ai?.health.message ??
+    (ai?.health.checkedAt
+      ? `Last successful check: ${new Date(ai.health.checkedAt).toLocaleString()}`
+      : "Connect and check AI in Settings.");
 }
 const settings = new SettingsController({
   getState: () => ({
@@ -711,7 +732,7 @@ const settings = new SettingsController({
   canSave: () => {
     if (workspace.isBackingUp)
       throw new Error("Finish the backup or restore before saving settings.");
-    if (coding || reasoning || ai.activeRequestCount > 0)
+    if (coding || ai.activeRequestCount > 0)
       throw new Error(
         "Wait for current AI requests before changing the connection.",
       );
@@ -720,7 +741,10 @@ const settings = new SettingsController({
     ai.configure(value.config);
     config = value.config;
     credentials = value.credentials;
-    localStorage.setItem("itsalive.credentials", JSON.stringify(credentials));
+    localStorage.setItem(
+      "itsalive.credentials",
+      JSON.stringify({ openai: credentials.openai }),
+    );
     await workspace.repo.setSetting("ai.config", config);
     await workspace.setObservation(value.observe);
     workspace.diagnostics.debug = value.debug;
@@ -738,8 +762,16 @@ const settings = new SettingsController({
     if (resume) await resume();
   },
   onError: report,
+  onAccountDisconnected: () => {
+    delete credentials.chatgpt;
+    ai.resetHealth();
+    refreshProviderBadge();
+  },
 });
-$("settings").onclick = () => settings.open();
+$("settings").onclick = () => {
+  $<HTMLDetailsElement>("more-options").open = false;
+  settings.open();
+};
 $<HTMLDialogElement>("settings-dialog").addEventListener("close", () => {
   if ($<HTMLDialogElement>("settings-dialog").returnValue === "saved") return;
   pendingRequest = undefined;
@@ -756,7 +788,10 @@ $("export-log").onclick = () =>
         [
           JSON.stringify(
             {
-              version: 2,
+              version: 3,
+              appVersion: "2.0.0-beta.2",
+              browser: navigator.userAgent,
+              connection: ai.health,
               exportedAt: new Date().toISOString(),
               diagnostics: await workspace.repo.listDiagnostics(),
               usage: ai.usage,
@@ -769,6 +804,7 @@ $("export-log").onclick = () =>
       ),
       "itsalive-diagnostics.json",
     );
+    $("diagnostic-status").textContent = "Diagnostic logs downloaded.";
   });
 $("backup").onclick = () => $<HTMLDialogElement>("backup-dialog").showModal();
 workspace.onBackupProgress = (progress) => {
@@ -836,15 +872,32 @@ $<HTMLDialogElement>("backup-dialog").addEventListener("close", cancelRestore);
 $("cancel-backup").onclick = () => backupController?.abort();
 
 async function configureAI() {
-  config =
-    (await workspace.repo.getSetting<AIConfig>("ai.config")) ??
-    defaultAIConfig();
+  const saved = await workspace.repo.getSetting<AIConfig>("ai.config");
+  config = saved?.version === 3 ? saved : defaultAIConfig();
+  // A test URL is a session-only development choice, never persisted by accident.
+  if (
+    import.meta.env.DEV &&
+    new URLSearchParams(location.search).get("test-provider") === "scripted"
+  )
+    config = demoAIConfig();
+  else if (
+    config.testProviderEnabled ||
+    Object.values(config.routes).some((route) => route.provider === "demo")
+  )
+    config = defaultAIConfig();
+  if (config.routes.conversation.provider === "chatgpt") {
+    const account = await accountSession().catch(() => undefined);
+    if (account?.sharing && account.connected)
+      credentials.chatgpt = "connected";
+    else delete credentials.chatgpt;
+  }
   const service = new AIService(config, {
     beforeRequest: () => {
       if (workspace.isBackingUp)
         throw new Error("AI requests are paused during backup and restoration");
     },
     credentials: () => credentials,
+    onHealth: () => refreshProviderBadge(),
     log: (event) => {
       void workspace.diagnostics.record(
         event.event,
@@ -879,33 +932,107 @@ async function configureAI() {
     observe: boolean;
     debug: boolean;
   }>("privacy");
-  workspace.observe = privacy?.observe ?? false;
+  workspace.observe = false; // Suggestions do not enable passive interaction tracking.
   workspace.diagnostics.debug = privacy?.debug ?? false;
   refreshProviderBadge();
 }
+$("speak").onclick = () =>
+  action(async () => {
+    if (voice?.active) {
+      voice.stop();
+      return;
+    }
+    if (!credentials.openai) {
+      settings.open(
+        "Add an OpenAI API key to use live voice. Your ChatGPT plan can still power application work.",
+      );
+      return;
+    }
+    if (workspace.isBackingUp)
+      throw new Error("Finish the backup or restore first.");
+    const history = workspace.current
+      ? await workspace.repo.listChat(workspace.current.id)
+      : [];
+    const usage = ai.startVoice(context());
+    const transcripts: { user: string; assistant: string } = {
+      user: "",
+      assistant: "",
+    };
+    const captions = $("voice-captions");
+    captions.replaceChildren();
+    const userCaption = element("p");
+    const assistantCaption = element("p");
+    captions.append(userCaption, assistantCaption);
+    microphoneEnabled = true;
+    $("voice-mute").textContent = "Mute microphone";
+    $<HTMLInputElement>("voice-audio").checked = config.voiceReplies !== false;
+    voice = new LiveVoice({
+      key: credentials.openai,
+      spokenReplies: config.voiceReplies !== false,
+      history: history.slice(-12).map((message) => ({
+        role: message.role,
+        content: message.content.slice(0, 3000),
+      })),
+      onState: (state) => {
+        $("voice-panel").hidden = state === "closed";
+        $("speak").setAttribute("aria-pressed", String(state !== "closed"));
+        $("voice-status").textContent = {
+          connecting: "Connecting voice…",
+          listening: "Listening — you can keep talking while I work.",
+          closing: "Ending conversation…",
+          closed: "Voice conversation ended.",
+        }[state];
+        $<HTMLButtonElement>("voice-stop").disabled = state === "closing";
+      },
+      onTranscript: (role, text) => {
+        transcripts[role] = (transcripts[role] + text).slice(-4000);
+        (role === "user" ? userCaption : assistantCaption).textContent =
+          `${role === "user" ? "You" : "It's Alive"}: ${transcripts[role]}`;
+        captions.scrollTop = captions.scrollHeight;
+      },
+      onDelegate: async (text, liveHistory) => {
+        const appId = workspace.current?.id;
+        await sendMessage(text, appId ?? null, liveHistory);
+        if (!workspace.current)
+          return "Ask the user to connect AI in Settings before continuing.";
+        if (appId && workspace.current.id !== appId)
+          return "The user switched apps before the action finished. Do not claim the new app changed.";
+        const messages = await workspace.repo.listChat(
+          appId ?? workspace.current.id,
+        );
+        return messages
+          .filter((message) => message.role === "assistant")
+          .slice(-2)
+          .map((message) => message.content)
+          .join("\n");
+      },
+      onUsage: (seconds, final, confirmed) =>
+        usage.update(seconds, final, confirmed),
+      onError: report,
+    });
+    await voice.start();
+  });
+$("voice-stop").onclick = () => voice?.stop();
+$("voice-mute").onclick = () => {
+  microphoneEnabled = !microphoneEnabled;
+  voice?.setMicrophone(microphoneEnabled);
+  $("voice-mute").textContent = microphoneEnabled
+    ? "Mute microphone"
+    : "Unmute microphone";
+};
+$<HTMLInputElement>("voice-audio").onchange = () => {
+  config.voiceReplies = $<HTMLInputElement>("voice-audio").checked;
+  voice?.setSpokenReplies(config.voiceReplies);
+  action(() => workspace.repo.setSetting("ai.config", config));
+};
+window.addEventListener("pagehide", () => voice?.stop());
 async function initialize() {
   await configureAI();
-  speech = new SpeechInput({
-    onText: (text) => {
-      $<HTMLTextAreaElement>("message").value = text;
-    },
-    onState: (active) => {
-      listening = active;
-      $("speak").textContent = active ? "Stop listening" : "Speak";
-      $("speak").setAttribute("aria-pressed", String(active));
-      $("speak").setAttribute(
-        "aria-label",
-        active ? "Stop listening" : "Speak your message",
-      );
-      if (active) setStatus("Listening…");
-    },
-    onError: report,
-  });
   workspace.onRestored = configureAI;
   workspace.beforeBackup = async () => {
-    if (coding || reasoning || ai.activeRequestCount > 0)
+    if (coding || ai.activeRequestCount > 0 || voice?.active)
       throw new Error(
-        "Wait for active AI requests before starting a backup or restore",
+        "Finish active requests and the voice conversation before starting a backup or restore",
       );
     await usageWrites;
   };
@@ -926,6 +1053,7 @@ async function initialize() {
         exportBackup: () => workspace.exportBackup(),
         importBackup: (blob: Blob) => workspace.importBackup(blob),
         diagnostics: () => workspace.repo.listDiagnostics(),
+        setObservation: (enabled: boolean) => workspace.setObservation(enabled),
         observe: (target: string, count = 4) =>
           observe({ kind: "repeated-click", target, count, durationMs: 1200 }),
         rollback: (id: string) => workspace.rollback(id),
@@ -938,5 +1066,16 @@ async function initialize() {
   const active = apps.find((a) => a.id === last) ?? apps[0];
   if (active) await workspace.openApp(active.id);
   await render();
+  if (
+    !config.testProviderEnabled &&
+    !missingProviderRoles(config, credentials).length
+  ) {
+    action(() =>
+      ai.testConfiguration(config, credentials, {
+        ...context(),
+        signal: AbortSignal.timeout(120_000),
+      }),
+    );
+  }
 }
 action(initialize);

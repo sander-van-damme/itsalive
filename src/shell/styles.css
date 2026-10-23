@@ -470,64 +470,6 @@ summary::-webkit-details-marker {
   display: none;
 }
 
-/* Optional developer area. No technical controls appear on the default stage. */
-.developer-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  padding: 4px 8px;
-  border-bottom: 1px solid var(--line);
-  background: var(--panel);
-}
-.developer-toolbar [role="tab"] {
-  padding: 8px 12px;
-  border-bottom: 2px solid transparent;
-}
-.developer-toolbar [aria-selected="true"] {
-  border-color: var(--accent);
-  font-weight: 600;
-}
-#revision-label {
-  margin-left: auto;
-}
-#source {
-  display: flex;
-  flex-direction: column;
-  padding: 12px;
-}
-.source-toolbar {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-.source-toolbar label {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-.source-toolbar select {
-  max-width: 100%;
-  padding: 9px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-}
-#source-code {
-  flex: 1;
-  min-height: 180px;
-  width: 100%;
-  resize: none;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 6px;
-  font:
-    13px/1.65 ui-monospace,
-    monospace;
-  tab-size: 2;
-}
 #history {
   padding: 20px;
 }
@@ -864,15 +806,6 @@ dialog .hint {
     flex-direction: column;
     gap: 0;
   }
-  .developer-toolbar {
-    flex-wrap: wrap;
-  }
-  #revision-label {
-    display: none;
-  }
-  .source-toolbar {
-    flex-wrap: wrap;
-  }
 }
 @media (prefers-reduced-motion: reduce) {
   *,
@@ -880,4 +813,58 @@ dialog .hint {
   *::after {
     scroll-behavior: auto !important;
   }
+}
+
+.settings-section {
+  border-top: 1px solid var(--line);
+  padding: 18px 0 4px;
+  margin-top: 16px;
+}
+.settings-section > summary {
+  font-size: 15px;
+  font-weight: 600;
+  padding: 8px 0;
+}
+.settings-section h3 {
+  font-size: 15px;
+  margin: 0 0 12px;
+}
+.speed-labels {
+  display: flex;
+  justify-content: space-between;
+  font-size: 12px;
+  color: var(--muted);
+}
+#response-speed {
+  border: 0;
+  padding: 8px 0;
+  accent-color: var(--accent);
+}
+.voice-panel {
+  margin: 0 12px 10px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  font-size: 13px;
+}
+#voice-captions {
+  max-height: 140px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.voice-panel button {
+  font-size: 12px;
+  margin-top: 8px;
+}
+.voice-panel .checkbox {
+  align-items: center;
+  margin-top: 10px;
+}
+#provider-badge[data-state="error"] {
+  color: #a12f24;
+}
+#connection-help {
+  font-size: 12px;
+  margin: 12px 0;
 }

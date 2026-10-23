@@ -17,11 +17,15 @@ npm run dev:app
 
 Open **http://itsalive.localhost:4173**. The exact hostname matters: the authenticated bridge rejects other shell origins. Application frames use `http://<uuid>.itsalive.localhost:4174`. Chromium resolves localhost subdomains automatically; other browsers may need local DNS configuration.
 
-Describe what you want to do. If AI is not connected, **Settings** guides you through OpenAI or OpenRouter setup with a compatible model and connection test, then resumes your request. Explicit requests to create, change or repair run automatically; questions stay conversational. Negative feedback continues the conversation so the assistant can help resolve the problem.
+Describe what you want to do. If AI is not connected, **⋯ → Settings** guides you through OpenAI API-key or eligible ChatGPT-plan setup with current model defaults and structured/tool connection tests, then resumes your request. Explicit requests to create, change or repair run automatically; questions stay conversational. Negative feedback continues the conversation so the assistant can help resolve the problem.
 
-**Settings** keeps provider connection and basic limits accessible, with per-role routing and diagnostics under Advanced. Optional **Developer tools** expose source editing and technical history. Scripted providers are explicitly selected test tools, never the default product or a fallback for unavailable AI.
+**Settings** offers four AI categories (Low, Medium, High and Live voice), a Standard/Faster/Fastest response-speed slider, and an optional monthly API spending limit. Defaults use GPT-6 Luna, GPT-6.1 Sol, GPT-6.1 Sol with higher reasoning, and GPT-Live 1. Reasoning is selected automatically. There are no source-editor or developer-tools controls. Debug logging and diagnostic downloads work without a connected AI account.
 
-**Speak** uses browser speech recognition, with a typed-input fallback when unavailable. Browser recognition may contact the browser vendor's service; the platform does not retain raw audio. **Think deeper** makes an explicit reasoning-model request while ordinary conversation remains available.
+**Voice** starts an AI conversation over WebRTC. You can keep talking while application changes run, turn off **Spoken replies** to read the responses, or mute the microphone. Browser speech recognition is never used. Live voice requires an OpenAI API key and has separate metered usage. **Enter** sends a message; **Shift+Enter** inserts a new line.
+
+For local ChatGPT-plan access, run `npm run connection` in another terminal, then choose **ChatGPT plan → Continue with ChatGPT**. The helper performs official OAuth, keeps tokens in an ignored local directory, loads your available models and uses eligible plan allowance shared with Codex. It does not use GitHub as an OAuth provider. Plan integration for paid/remote deployments requires OpenAI access; see [provider setup](docs/providers.md).
+
+Development-only deterministic operation uses `http://itsalive.localhost:4173/?test-provider=scripted`. It is never a production setting or an error fallback.
 
 ## Architecture
 
@@ -53,11 +57,13 @@ export default function App() {
 }
 ```
 
-Generated code never receives provider credentials or coding capabilities. AI calls cross the authenticated bridge to fixed provider endpoints in the shell. The accounting separates roles and reserves estimated cost before requests. Client-side limits are not provider-enforced financial guarantees; configure provider-side limits for that purpose.
+Generated code never receives provider credentials or coding capabilities. AI calls cross the authenticated bridge to shell-owned routing. API-key requests use a same-origin server boundary forwarding to fixed OpenAI endpoints; ChatGPT-plan requests use the local helper. The accounting separates roles and reserves estimated cost before requests. Client-side limits are not provider-enforced financial guarantees; configure provider-side limits for that purpose.
 
 ## Backup and restore
 
-**Backup & restore** downloads a SHA-256-checked archive containing all source revisions, manifests/locks, cached dependency resources, platform settings/history and supported app-origin storage. The shell visits each app in backup-only mode without executing generated source. Restore validates the archive before modifying data and restores origin data before shell records.
+**Settings → Backup and restore → Back up or restore all apps** downloads a SHA-256-checked archive containing all source revisions, manifests/locks, cached dependency resources, platform settings/history and supported app-origin storage. The shell visits each app in backup-only mode without executing generated source. Restore validates the archive before modifying data and restores origin data before shell records.
+
+**⋯ → Restore this app to a previous version** changes only the current app version and retains its saved data.
 
 The archive reports skipped storage and failures. It excludes shell provider keys, but arbitrary application data can contain secrets. Cookies and inaccessible browser-managed state are not restored. Archives are unencrypted and currently limited to 128 MiB in memory. Close other app tabs; arbitrary concurrent writes, service workers and external network effects prevent universal transactional guarantees. See [backup details](docs/backup.md).
 
@@ -75,14 +81,14 @@ npm run benchmark
 
 Tests use actual Chromium origins, actual WASM compilation, real React updates, deterministic providers and a reproducible npm fixture. Live-provider probes are a separate opt-in path: see [provider documentation](docs/providers.md).
 
-`dist-root/` deploys to `https://itsalive.org`; `dist-app/` deploys to `https://*.itsalive.org` using the included Wrangler configurations. Generated apps require JavaScript evaluation and WebAssembly. Deployment/DNS/TLS and live providers were not validated by local tests.
+The root Worker in `wrangler.toml` serves `dist-root/` plus the `/api/*` routes at `https://itsalive.org`; `dist-app/` deploys to `https://*.itsalive.org` using the included Wrangler configurations. Generated apps require JavaScript evaluation and WebAssembly. Deployment/DNS/TLS and live providers were not validated by local tests.
 
 ## Evidence and limits
 
 - [Implementation milestones](docs/MILESTONES.md)
 - [Compiler comparison and measurements](docs/compiler.md)
 - [Browser acceptance coverage](docs/acceptance.md)
-- [Provider protocols, limits and speech](docs/providers.md)
+- [OpenAI, account access, spending and live voice](docs/providers.md)
 - [Backup formats and limitations](docs/backup.md)
 
 Generated TypeScript is transpiled, not semantically typechecked. Normal updates preserve compatible React state; arbitrary render failures may require a remount. Apps have broad control over their own origin; this is origin isolation, not a complete sandbox from their local runtime. Full offline shell boot, streaming backups, encrypted archives and universal npm compatibility are outside this version.

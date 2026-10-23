@@ -11,17 +11,32 @@ export const AI_ROLES = [
   "speech",
 ] as const;
 export type AIRole = (typeof AI_ROLES)[number];
-export type ProviderId = "demo" | "openai" | "openrouter";
+export type ProviderId = "demo" | "openai" | "chatgpt";
+export type ModelCategory = "low" | "medium" | "high" | "voice";
+export type ResponseSpeed = "standard" | "faster" | "fastest";
+export type ServiceTier = "default" | "priority" | "ultrafast";
+export type ReasoningEffort = "low" | "medium" | "high";
 export interface ModelRoute {
   provider: ProviderId;
   model: string;
   maxOutputTokens: number;
   inputPerMillion: number;
   outputPerMillion: number;
+  reasoningEffort?: ReasoningEffort;
+  serviceTier?: ServiceTier;
 }
 export interface AIConfig {
+  version?: 3;
   routes: Record<AIRole, ModelRoute>;
-  limits: { requestsPerMinute: number; concurrency: number; budgetUSD: number };
+  limits: {
+    requestsPerMinute: number;
+    concurrency: number;
+    budgetUSD: number;
+    budgetEnabled?: boolean;
+    budgetPeriod?: "month" | "total";
+  };
+  speed?: ResponseSpeed;
+  voiceReplies?: boolean;
   captureContent: boolean;
   /** Explicit opt-in: scripted development responses must never be a fallback. */
   testProviderEnabled?: boolean;
@@ -41,6 +56,8 @@ export interface AIMessage {
   content: string;
   toolCalls?: ToolCall[];
   toolCallId?: string;
+  /** Opaque Responses continuation items; never shown in the conversation. */
+  responseItems?: Array<Record<string, unknown>>;
 }
 export interface ToolDefinition {
   name: string;
@@ -51,6 +68,7 @@ export interface GenerateInput {
   messages: AIMessage[];
   tools?: ToolDefinition[];
   jsonSchema?: { name: string; schema: Record<string, unknown> };
+  toolChoice?: "auto" | "required";
 }
 export interface AIUsage {
   inputTokens: number;
@@ -60,9 +78,11 @@ export interface AIUsage {
 }
 export interface AIResponse {
   text: string;
+  responseItems?: Array<Record<string, unknown>>;
   toolCalls: ToolCall[];
   usage?: AIUsage;
   requestId?: string;
+  serviceTier?: ServiceTier;
 }
 export interface Provider {
   generate(
@@ -94,6 +114,8 @@ export interface UsageRecord {
   estimated: boolean;
   latencyMs: number;
   status: "pending" | "success" | "failed";
+  serviceTier?: ServiceTier;
+  seconds?: number;
 }
 export interface ApplicationAIRequest {
   method: "text" | "decide" | "choose" | "score";
@@ -112,27 +134,90 @@ export const ROLE_LABELS: Record<AIRole, string> = {
   application: "Application AI",
   speech: "Speech transcription",
 };
-export function defaultModelRoute(provider: ProviderId = "openai"): ModelRoute {
+export const CATEGORY_ROLES: Record<ModelCategory, AIRole[]> = {
+  low: ["decision", "coding-simple"],
+  medium: ["conversation", "coding-standard", "application"],
+  high: ["reasoning", "coding-complex"],
+  voice: ["speech"],
+};
+export const MODEL_CHOICES = [
+  {
+    id: "gpt-6-luna",
+    name: "GPT-6 Luna",
+    input: 0.1,
+    output: 0.5,
+    fastest: false,
+  },
+  {
+    id: "gpt-6.1-sol",
+    name: "GPT-6.1 Sol",
+    input: 2,
+    output: 10,
+    fastest: true,
+  },
+  {
+    id: "gpt-6-astra",
+    name: "GPT-6 Astra",
+    input: 10,
+    output: 50,
+    fastest: true,
+  },
+] as const;
+export function serviceTierFor(
+  model: string,
+  speed: ResponseSpeed = "standard",
+): ServiceTier {
+  if (
+    speed === "fastest" &&
+    MODEL_CHOICES.some((choice) => choice.id === model && choice.fastest)
+  )
+    return "ultrafast";
+  return speed === "standard" ? "default" : "priority";
+}
+export function tierMultiplier(tier: ServiceTier = "default"): number {
+  return tier === "ultrafast" ? 6 : tier === "priority" ? 2 : 1;
+}
+export function defaultModelRoute(
+  provider: ProviderId = "openai",
+  category: ModelCategory = "medium",
+): ModelRoute {
+  const model = category === "low" ? MODEL_CHOICES[0] : MODEL_CHOICES[1];
   return {
     provider,
     model:
       provider === "demo"
         ? "demo-v2"
-        : provider === "openrouter"
-          ? "openai/gpt-4.1-mini"
-          : "gpt-4.1-mini",
-    maxOutputTokens: 8192,
-    // Published list prices are estimates; custom models expose their own prices in Advanced.
-    inputPerMillion: provider === "demo" ? 0 : 0.4,
-    outputPerMillion: provider === "demo" ? 0 : 1.6,
+        : category === "voice"
+          ? "gpt-live-1"
+          : model.id,
+    maxOutputTokens: category === "high" ? 16384 : 8192,
+    inputPerMillion: provider === "demo" ? 0 : model.input,
+    outputPerMillion: provider === "demo" ? 0 : model.output,
+    reasoningEffort:
+      category === "high" ? "high" : category === "low" ? "low" : "medium",
+    serviceTier: "default",
   };
 }
 export function defaultAIConfig(): AIConfig {
   return {
+    version: 3,
     routes: Object.fromEntries(
-      AI_ROLES.map((role) => [role, defaultModelRoute()]),
+      Object.entries(CATEGORY_ROLES).flatMap(([category, roles]) =>
+        roles.map((role) => [
+          role,
+          defaultModelRoute("openai", category as ModelCategory),
+        ]),
+      ),
     ) as Record<AIRole, ModelRoute>,
-    limits: { requestsPerMinute: 30, concurrency: 2, budgetUSD: 1 },
+    limits: {
+      requestsPerMinute: 1800,
+      concurrency: 8,
+      budgetUSD: 20,
+      budgetEnabled: false,
+      budgetPeriod: "month",
+    },
+    speed: "standard",
+    voiceReplies: true,
     captureContent: false,
     testProviderEnabled: false,
   };
@@ -146,9 +231,7 @@ export function demoAIConfig(): AIConfig {
   config.testProviderEnabled = true;
   return config;
 }
-export type ProviderCredentials = Partial<
-  Record<"openai" | "openrouter", string>
->;
+export type ProviderCredentials = Partial<Record<"openai" | "chatgpt", string>>;
 export function missingProviderRoles(
   config: AIConfig,
   credentials: ProviderCredentials,
@@ -164,41 +247,12 @@ export function missingProviderRoles(
     );
   });
 }
-export const MODEL_REGISTRY = [
-  {
-    provider: "demo",
-    id: "demo-v2",
-    text: true,
-    tools: true,
-    structured: true,
-    audio: false,
-    endpoint: "deterministic-local",
-  },
-  {
-    provider: "openai",
-    id: "gpt-4.1-mini",
-    text: true,
-    tools: true,
-    structured: true,
-    audio: false,
-    endpoint: "/v1/chat/completions",
-  },
-  {
-    provider: "openrouter",
-    id: "openai/gpt-4.1-mini",
-    text: true,
-    tools: true,
-    structured: true,
-    audio: false,
-    endpoint: "/api/v1/chat/completions",
-  },
-  {
-    provider: "openai",
-    id: "gpt-4o-mini-transcribe",
-    text: false,
-    tools: false,
-    structured: false,
-    audio: true,
-    endpoint: "/v1/audio/transcriptions",
-  },
-] as const;
+export const MODEL_REGISTRY = MODEL_CHOICES.map((model) => ({
+  provider: "openai",
+  id: model.id,
+  text: true,
+  tools: true,
+  structured: true,
+  audio: false,
+  endpoint: "/v1/responses",
+}));
