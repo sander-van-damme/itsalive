@@ -12,14 +12,15 @@ import {
 import type { AIService } from "../ai/service";
 import { accountSession, companionFetch } from "../ai/connection";
 
-export const SETTINGS_DIALOG = `
+function settingsDialog(onboarding = false) {
+  const markup = `
 <dialog id="settings-dialog" aria-labelledby="settings-title">
- <button type="button" class="dialog-close quiet" data-close aria-label="Close settings">×</button>
+ <button type="button" class="dialog-close quiet" data-close aria-label="${onboarding ? "Close AI setup" : "Close settings"}">×</button>
  <form id="settings-form">
-  <h2 id="settings-title">Settings</h2><p id="settings-intro" class="hint">Make yourself at home. Good defaults are already selected.</p>
+  <h2 id="settings-title">${onboarding ? "Connect your AI" : "Settings"}</h2><p id="settings-intro" class="hint">${onboarding ? "Connect once, then we’ll create your app." : "Good defaults are already selected."}</p>
   <section class="settings-section" aria-labelledby="connection-title">
    <h3 id="connection-title">AI connection</h3>
-   <label>Connect with<select id="ai-provider"><option value="openai">OpenAI API key</option><option value="chatgpt">ChatGPT plan</option></select></label>
+   <label>Connect with<select id="ai-provider"><option value="openai">OpenAI API key</option><option value="chatgpt">ChatGPT plan</option></select></label><p id="account-unavailable" class="hint" hidden>ChatGPT plan access is unavailable on this website. It requires a supported local installation. Use an OpenAI API key here.</p>
    <div id="api-key-settings"><label>OpenAI API key<input id="ai-key" type="password" autocomplete="off" spellcheck="false"></label>
    <p class="hint">Stored on this browser, excluded from backups. <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an API key</a>.</p></div>
    <div id="chatgpt-settings" hidden><p class="hint">Use your eligible ChatGPT plan for application work, including the allowance shared with Codex.</p>
@@ -28,20 +29,38 @@ export const SETTINGS_DIALOG = `
     <details id="connection-help"><summary>Set up the connection helper</summary><p class="hint">For a local installation, run <code>npm run connection</code> in the application folder, then return here. ChatGPT plan access is available for eligible local installations. Your ChatGPT tokens stay on your device.</p></details>
     <label>OpenAI API key for voice (optional)<input id="voice-api-key" type="password" autocomplete="off" spellcheck="false"></label><p class="hint">Live voice uses separate OpenAI API usage.</p>
    </div>
-   <details class="advanced-settings"><summary>AI choices</summary><p class="hint">We choose the right level for each task. You can change these defaults.</p><div id="model-routes"></div></details>
+   ${onboarding ? '<h3 class="preferences-heading">AI preferences</h3>' : ""}<details class="advanced-settings"><summary>AI choices</summary><p class="hint">We choose the right level for each task. You can change these defaults.</p><div id="model-routes"></div></details>
    <label for="response-speed">Response speed</label><input id="response-speed" type="range" min="0" max="2" step="1" value="0" aria-describedby="speed-description"><div class="speed-labels"><span>Standard</span><span>Faster</span><span>Fastest</span></div><p id="speed-description" class="hint"></p>
    <button type="button" id="check-connection" class="quiet">Check connection</button>
   </section>
-  <details class="settings-section"><summary>Usage</summary>
-   <p id="usage-summary" class="hint"></p><label class="checkbox"><input id="budget-enabled" type="checkbox">Enable spending limit</label>
-   <div id="budget-options" hidden><label>Monthly limit (USD)<input id="budget-limit" type="number" min="0.01" max="100000" step="0.01"></label><p class="hint">Estimated OpenAI API spending on this browser, including voice. Resets on the first day of each month (UTC). ChatGPT plan limits are managed in ChatGPT.</p></div>
-  </details>
-  <details class="settings-section"><summary>Backup and restore</summary><p>Save or restore all your apps, conversations, settings and supported app data.</p><button id="backup" type="button" class="quiet">Back up or restore all apps</button></details>
-  <details class="settings-section"><summary>Help and diagnostics</summary><label class="checkbox"><input id="debug" type="checkbox">Debug logging</label><p class="hint">Record extra detail to help investigate problems. Basic errors are always saved. Keys and AI prompts are excluded; logs can include app details.</p><button id="export-log" type="button" class="quiet">Download diagnostic logs</button><p id="diagnostic-status" class="hint" role="status"></p></details>
+  <${onboarding ? 'section class="settings-section" aria-labelledby="usage-title"><h3 id="usage-title">Usage</h3>' : 'details class="settings-section"><summary>Usage</summary>'}
+   <p id="usage-summary" class="hint"></p><p class="hint">Usage is recorded after each request. A spending limit is optional.</p><label class="checkbox"><input id="budget-enabled" type="checkbox">Enable spending limit</label>
+   <div id="budget-options" hidden><label>Monthly limit (USD)<input id="budget-limit" type="number" min="0.01" max="100000" step="0.01"></label><p class="hint">Spending is calculated from reported usage after requests. The limit prevents starting further requests once reached; requests already running may exceed it. Resets monthly (UTC). ChatGPT plan limits are managed in ChatGPT.</p></div>
+  </${onboarding ? "section" : "details"}>
+  ${
+    onboarding
+      ? ""
+      : `<details class="settings-section"><summary>Backup and restore</summary><p>Save or restore all your apps, conversations, settings and supported app data.</p><button id="backup" type="button" class="quiet">Back up or restore all apps</button></details>
+  <details class="settings-section"><summary>Help and diagnostics</summary><label class="checkbox"><input id="debug" type="checkbox">Debug logging</label><p class="hint">Record extra detail to help investigate problems. Basic errors are always saved. Keys and AI prompts are excluded; logs can include app details.</p><button id="export-log" type="button" class="quiet">Download diagnostic logs</button><p id="diagnostic-status" class="hint" role="status"></p></details>`
+  }
   <p id="settings-status" class="dialog-status" role="status" aria-live="polite"></p>
-  <div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button id="save-settings" type="submit" class="primary">Save settings</button></div>
+  <div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button id="save-settings" type="submit" class="primary">${onboarding ? "Continue" : "Save settings"}</button></div>
  </form>
 </dialog>`;
+  if (!onboarding) return markup;
+  return markup
+    .replace(
+      /id="([^"]+)"/g,
+      (_, id) =>
+        `id="${id === "settings-dialog" ? "onboarding-dialog" : `onboarding-${id}`}"`,
+    )
+    .replace(
+      /(aria-labelledby|aria-describedby|for)="([^"]+)"/g,
+      (_, attribute, id) => `${attribute}="onboarding-${id}"`,
+    );
+}
+export const SETTINGS_DIALOG = settingsDialog();
+export const ONBOARDING_DIALOG = settingsDialog(true);
 
 export interface SettingsState {
   config: AIConfig;
@@ -50,6 +69,7 @@ export interface SettingsState {
   debug: boolean;
 }
 export interface SettingsOptions {
+  onboarding?: boolean;
   getState(): SettingsState;
   getService(): AIService;
   canSave?(): void;
@@ -66,10 +86,11 @@ export class SettingsController {
   private accountCheck = 0;
   private checking: AbortController | null = null;
   private signingIn: AbortController | null = null;
-  private dialog = document.getElementById(
-    "settings-dialog",
-  ) as HTMLDialogElement;
+  private dialog: HTMLDialogElement;
   constructor(private readonly options: SettingsOptions) {
+    this.dialog = document.getElementById(
+      options.onboarding ? "onboarding-dialog" : "settings-dialog",
+    ) as HTMLDialogElement;
     const planEnabled =
       location.hostname.endsWith(".localhost") ||
       import.meta.env.VITE_CHATGPT_PLAN_ENABLED === "1";
@@ -77,8 +98,13 @@ export class SettingsController {
       "ai-provider",
     ).querySelector<HTMLOptionElement>('option[value="chatgpt"]')!;
     planChoice.disabled = !planEnabled;
-    if (!planEnabled)
-      planChoice.textContent = "ChatGPT plan (local installations)";
+    if (!planEnabled) {
+      planChoice.textContent = "ChatGPT plan (unavailable here)";
+      this.get("account-unavailable").hidden = false;
+    }
+    this.get<HTMLFormElement>("settings-form").addEventListener("input", () => {
+      if (!this.checking) this.setStatus("");
+    });
     this.get<HTMLFormElement>("settings-form").onsubmit = (event) => {
       event.preventDefault();
       void this.save();
@@ -111,7 +137,9 @@ export class SettingsController {
     );
   }
   private get<T extends HTMLElement = HTMLElement>(id: string): T {
-    return document.getElementById(id) as T;
+    return document.getElementById(
+      this.options.onboarding ? `onboarding-${id}` : id,
+    ) as T;
   }
   open(message?: string) {
     this.accountCheck++;
@@ -130,15 +158,18 @@ export class SettingsController {
     this.get<HTMLInputElement>("budget-limit").value = String(
       config.limits.budgetUSD,
     );
-    this.get<HTMLInputElement>("debug").checked = debug;
+    if (!this.options.onboarding)
+      this.get<HTMLInputElement>("debug").checked = debug;
     this.get<HTMLInputElement>("response-speed").value = String(
       SPEEDS.indexOf(config.speed ?? "standard"),
     );
     this.get("usage-summary").textContent =
-      `Estimated usage this month: $${this.options.getService().periodSpentUSD.toFixed(2)}.`;
+      `Recorded spending estimate this month: $${this.options.getService().periodSpentUSD.toFixed(2)}.${this.options.getService().unknownCostCount ? ` ${this.options.getService().unknownCostCount} ${this.options.getService().unknownCostCount === 1 ? "request has" : "requests have"} an unknown cost.` : ""}`;
     this.get("settings-intro").textContent =
       message ??
-      "Good defaults are already selected. Adjust only what you need.";
+      (this.options.onboarding
+        ? "Connect once, then we’ll create your app."
+        : "Good defaults are already selected. Adjust only what you need.");
     this.renderModels();
     this.setStatus("");
     this.disclose();
@@ -165,7 +196,7 @@ export class SettingsController {
           ? "Live voice"
           : category[0]!.toUpperCase() + category.slice(1);
       const select = document.createElement("select");
-      select.id = `model-${category}`;
+      select.id = `${this.options.onboarding ? "onboarding-" : ""}model-${category}`;
       select.setAttribute("aria-label", `${label.textContent} model`);
       const choices =
         category === "voice"
@@ -253,8 +284,19 @@ export class SettingsController {
       if (choice) {
         route.inputPerMillion = choice.input;
         route.outputPerMillion = choice.output;
+        route.cachedInputPerMillion = choice.cachedInput;
+        route.cacheWritePerMillion = choice.input * 1.25;
       }
-      for (const role of roles) next.config.routes[role] = { ...route };
+      for (const role of roles) {
+        const previous = this.snapshot.config.routes[role];
+        if (
+          previous.provider !== route.provider ||
+          previous.model !== model ||
+          speed !== (this.snapshot.config.speed ?? "standard")
+        ) {
+          next.config.routes[role] = { ...route };
+        }
+      }
     }
     // Explicit URL test sessions retain their deterministic routing, never a visible provider choice.
     if (this.snapshot.config.testProviderEnabled) {
@@ -268,13 +310,14 @@ export class SettingsController {
       budgetPeriod: "month",
     };
     next.config.captureContent = false;
-    next.debug = this.get<HTMLInputElement>("debug").checked;
+    if (!this.options.onboarding)
+      next.debug = this.get<HTMLInputElement>("debug").checked;
     return next;
   }
   private connectionChanged(next: SettingsState) {
     return (
-      JSON.stringify(next.config.routes) !==
-        JSON.stringify(this.snapshot.config.routes) ||
+      providerConfigurationIdentity(next.config) !==
+        providerConfigurationIdentity(this.snapshot.config) ||
       (next.credentials.openai ?? "") !==
         (this.snapshot.credentials.openai ?? "") ||
       (next.credentials.chatgpt ?? "") !==
@@ -286,16 +329,23 @@ export class SettingsController {
     node.textContent = message;
     node.setAttribute("role", error ? "alert" : "status");
   }
-  private async validate(next: SettingsState, signal: AbortSignal) {
+  private async validate(
+    next: SettingsState,
+    signal: AbortSignal,
+    force = false,
+  ) {
     if (missingProviderRoles(next.config, next.credentials).length)
       throw new Error("Add an OpenAI API key or connect your ChatGPT account.");
-    await this.options
-      .getService()
-      .testConfiguration(next.config, next.credentials, {
+    await this.options.getService().testConfiguration(
+      next.config,
+      next.credentials,
+      {
         appId: "settings",
         correlationId: crypto.randomUUID(),
         signal,
-      });
+      },
+      { force },
+    );
   }
   private async check() {
     if (this.checking) return;
@@ -304,10 +354,7 @@ export class SettingsController {
     this.get<HTMLButtonElement>("check-connection").disabled = true;
     try {
       this.setStatus("Checking the connection and application actions…");
-      await this.validate(
-        this.draft(),
-        AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
-      );
+      await this.validate(this.draft(), controller.signal, true);
       this.setStatus("Connection checked. Save to use these settings.");
     } catch (error) {
       if (!controller.signal.aborted)
@@ -331,13 +378,10 @@ export class SettingsController {
     this.get<HTMLButtonElement>("save-settings").disabled = true;
     try {
       const next = this.draft();
-      if (this.connectionChanged(next)) {
+      if (this.connectionChanged(next) || this.options.onboarding) {
         this.options.canSave?.();
         this.setStatus("Checking your AI connection…");
-        await this.validate(
-          next,
-          AbortSignal.any([controller.signal, AbortSignal.timeout(120_000)]),
-        );
+        await this.validate(next, controller.signal);
       }
       controller.signal.throwIfAborted();
       await this.options.onSave(next);
@@ -474,4 +518,17 @@ export class SettingsController {
         error instanceof Error ? error.message : "Could not sign out.";
     }
   }
+}
+
+/** Only parameters affecting provider capability checks belong in this identity. No credentials are logged. */
+export function providerConfigurationIdentity(config: AIConfig): string {
+  return JSON.stringify(
+    Object.entries(config.routes).map(([role, route]) => [
+      role,
+      route.provider,
+      route.model,
+      route.reasoningEffort,
+      route.serviceTier,
+    ]),
+  );
 }

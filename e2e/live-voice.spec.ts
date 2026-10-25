@@ -111,6 +111,7 @@ test("live voice keeps a conversation going during verified app work, supports s
   await page.locator("#more-options > summary").click();
   await page.getByRole("button", { name: "Settings", exact: true }).click();
   await page
+    .locator("#settings-dialog")
     .getByLabel("OpenAI API key", { exact: true })
     .fill("voice-test-credential");
   await page

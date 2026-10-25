@@ -621,13 +621,19 @@ dialog .hint {
 }
 #advanced-settings > summary::before,
 .advanced-settings > summary::before {
-  content: "+";
-  font-size: 18px;
-  width: 24px;
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+  margin-right: 14px;
+  flex: 0 0 auto;
 }
 #advanced-settings[open] > summary::before,
 .advanced-settings[open] > summary::before {
-  content: "−";
+  transform: rotate(45deg);
 }
 .model-row {
   min-width: 0;
@@ -867,4 +873,110 @@ dialog .hint {
 #connection-help {
   font-size: 12px;
   margin: 12px 0;
+}
+
+/* Activity follows actual work stages; elapsed time never claims a percentage. */
+.statusbar {
+  flex: 0 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 4px 8px;
+  min-height: 32px;
+}
+#status {
+  flex: 1 1 180px;
+}
+.statusbar .quiet {
+  padding: 6px 8px;
+  font-size: 12px;
+}
+#status.is-active {
+  color: #3e4941;
+  background: linear-gradient(100deg, #3e4941 32%, #647468 47%, #3e4941 62%);
+  background-size: 240% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  animation: work-shimmer 2.8s linear infinite;
+}
+@keyframes work-shimmer {
+  from {
+    background-position: 100% 0;
+  }
+  to {
+    background-position: -100% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  #status.is-active {
+    animation: none;
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+@media (forced-colors: active) {
+  #status.is-active {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+  }
+}
+.rail-footer #more-options {
+  margin-left: auto;
+}
+#provider-badge[data-state="error"]::before {
+  content: "!";
+  display: inline-grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border: 1px solid currentColor;
+  border-radius: 50%;
+  margin-right: 5px;
+}
+.settings-section > summary {
+  display: flex;
+  align-items: center;
+}
+.settings-section > summary::before,
+#connection-help > summary::before {
+  content: "";
+  display: inline-block;
+  width: 7px;
+  height: 7px;
+  margin-right: 14px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.settings-section[open] > summary::before,
+#connection-help[open] > summary::before {
+  transform: rotate(45deg);
+}
+.dialog-status[role="status"] {
+  color: var(--muted);
+}
+.preferences-heading {
+  margin-top: 24px !important;
+}
+#onboarding-dialog .advanced-settings {
+  margin-top: 8px;
+  padding-top: 4px;
+  border-top: 0;
+}
+#onboarding-response-speed {
+  border: 0;
+  padding: 8px 0;
+  accent-color: var(--accent);
+}
+
+#onboarding-dialog .settings-section {
+  padding-top: 14px;
+  margin-top: 12px;
+}
+#onboarding-dialog label {
+  margin-top: 12px;
+}
+#onboarding-dialog .dialog-actions {
+  margin-top: 16px;
 }

@@ -690,6 +690,16 @@ test("a deliberately broken build produces exportable correlated diagnostics", a
   expect(failure?.correlationId).toBeTruthy();
   expect(failure?.timestamp).toBeGreaterThan(0);
   expect(JSON.stringify(diagnostics)).toContain("src/App.tsx");
+  expect(
+    diagnostics.find((event) => event.event === "compile.failed")?.data,
+  ).toMatchObject({
+    compiled: false,
+    diagnosticCount: 1,
+    diagnostics: [{ file: "src/App.tsx" }],
+  });
+  expect(JSON.stringify(diagnostics)).not.toContain(
+    "export default function App(){return <div>broken",
+  );
   await openDiagnostics(page);
   const downloaded = page.waitForEvent("download");
   await page

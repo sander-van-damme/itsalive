@@ -1,4 +1,4 @@
-import { SETTINGS_DIALOG } from "./settings";
+import { SETTINGS_DIALOG, ONBOARDING_DIALOG } from "./settings";
 
 const icon = (path: string) =>
   `<svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${path}</svg>`;
@@ -10,6 +10,13 @@ const close = icon('<path d="m6 6 12 12M18 6 6 18"/>');
 const chevron = icon('<path d="m8 10 4 4 4-4"/>');
 const more = icon(
   '<circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/>',
+);
+const settingsIcon = icon(
+  '<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Z"/><path d="m9 3-1 3-3 1-2 3 2 2-1 3 2 3 3-1 2 3h3l1-3 3-1 2-3-2-2 1-3-2-3-3 1-2-3Z"/>',
+);
+const historyIcon = icon('<path d="M3 10a9 9 0 1 1 2 8M3 4v6h6m3-3v6l4 2"/>');
+const renameIcon = icon(
+  '<path d="m15 5 4 4M4 20l4-1L20 7a2.8 2.8 0 0 0-4-4L4 15v5Z"/>',
 );
 const microphone = icon(
   '<rect x="9" y="3" width="6" height="12" rx="3"/><path d="M5 10v2a7 7 0 0 0 14 0v-2m-7 9v3m-4 0h8"/>',
@@ -32,7 +39,7 @@ export const SHELL_VIEW = `
     <div id="app-container"></div>
   </div>
   <section id="history" class="view" aria-labelledby="history-title" hidden>
-    <div class="view-heading"><h2 id="history-title">Restore this app to a previous version</h2><button type="button" class="icon-button" data-tab="preview" aria-label="Back to application">${close}</button></div>
+    <div class="view-heading"><h2 id="history-title">Version history</h2><button type="button" class="icon-button" data-tab="preview" aria-label="Back to application">${close}</button></div>
     <p class="hint">Your saved application data stays with you.</p><div id="revision-list"></div>
   </section>
 </main>
@@ -49,14 +56,16 @@ export const SHELL_VIEW = `
     <div id="chat" role="log" aria-label="Conversation" aria-live="polite" aria-relevant="additions text"><div class="chat-intro"><p>Tell me what you would like help with.</p></div></div>
     <div id="suggestion" class="assistance-prompt" hidden></div>
     <div id="proposal" class="assistance-prompt" hidden></div>
-    <div class="statusbar"><span id="status" role="status" aria-live="polite">Ready</span></div>
-    <section id="voice-panel" class="voice-panel" aria-label="Voice conversation" hidden><p id="voice-status" role="status"></p><div id="voice-captions" aria-live="off"></div><label class="checkbox"><input id="voice-audio" type="checkbox" checked>Spoken replies</label><button id="voice-mute" type="button" class="quiet">Mute microphone</button><button id="voice-stop" type="button" class="quiet">End conversation</button></section><form id="chat-form"><label for="message" class="sr-only">Message</label><textarea id="message" placeholder="Ask or describe a change…" rows="2"></textarea><div class="composer-actions"><button type="button" id="speak" class="quiet" aria-label="Start voice conversation">${microphone}<span>Voice</span></button><button type="submit" aria-label="Send" class="primary">Send</button></div></form>
-    <footer class="rail-footer"><span id="provider-badge" class="hint">Connect AI to begin</span><details id="more-options" class="popover-anchor"><summary class="icon-button" aria-label="More options">${more}</summary><nav class="popover" aria-label="More options"><button id="settings" type="button">Settings</button><button id="restore-version" type="button" data-tab="history">Restore this app to a previous version</button></nav></details></footer>
+    <div class="statusbar"><span id="status" role="status" aria-live="polite">Ready</span><span id="work-elapsed" class="hint" aria-live="off" hidden></span><button id="cancel-work" type="button" class="quiet" hidden>Cancel</button><button id="retry-work" type="button" class="quiet" hidden>Try again</button></div>
+    <section id="voice-panel" class="voice-panel" aria-label="Voice conversation" hidden><p id="voice-status" role="status"></p><div id="voice-captions" aria-live="off"></div><label class="checkbox"><input id="voice-audio" type="checkbox" checked>Spoken replies</label><button id="voice-mute" type="button" class="quiet">Mute microphone</button><button id="voice-stop" type="button" class="quiet">End conversation</button></section><form id="chat-form"><label for="message" class="sr-only">Message</label><textarea id="message" placeholder="Describe the app you want to create…" rows="2"></textarea><div class="composer-actions"><button type="button" id="speak" class="quiet" aria-label="Start voice conversation">${microphone}<span>Voice</span></button><button type="submit" aria-label="Send" class="primary">Send</button></div></form>
+    <footer class="rail-footer"><button id="provider-badge" type="button" class="hint quiet">Connect AI to begin</button><details id="more-options" class="popover-anchor"><summary class="icon-button" aria-label="More options">${more}</summary><nav class="popover" aria-label="More options"><button id="settings" type="button">${settingsIcon}Settings</button><button id="rename-app" type="button">${renameIcon}Rename app</button><button id="restore-version" type="button" data-tab="history">${historyIcon}Version history</button></nav></details></footer>
   </div>
 </aside>
 <nav class="mobile-navigation" aria-label="Workspace views"><button id="mobile-app" type="button" aria-label="View application" aria-pressed="false">${app}<span>Application</span></button><button id="mobile-assistant" type="button" aria-label="View assistant" aria-pressed="true">${chat}<span>Assistant</span></button></nav>
 <dialog id="create-dialog" aria-labelledby="create-title"><button type="button" class="dialog-close icon-button" data-close aria-label="Close new app">${close}</button><form id="create-form"><h2 id="create-title">New app</h2><label>What would you like to do?<textarea name="idea" rows="4" required autofocus placeholder="I want to learn violin chords and scales."></textarea></label><label>App name <span class="hint">(optional)</span><input name="name" aria-label="App name" maxlength="80" autocomplete="off" placeholder="Give it a name"></label><div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button type="submit" class="primary">Create app</button></div></form></dialog>
 ${SETTINGS_DIALOG}
+${ONBOARDING_DIALOG}
+<dialog id="rename-dialog" aria-labelledby="rename-title"><button type="button" class="dialog-close icon-button" data-close aria-label="Close rename app">${close}</button><form id="rename-form"><h2 id="rename-title">Rename app</h2><label>App name<input id="rename-name" name="name" required maxlength="80" autocomplete="off"></label><div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button type="submit" class="primary">Save name</button></div></form></dialog>
 <dialog id="backup-dialog" aria-labelledby="backup-title"><button type="button" class="dialog-close icon-button" data-close aria-label="Close backup and restore">${close}</button><h2 id="backup-title">Back up or restore all apps</h2><p>Save your applications, conversations and supported app data in a backup file.</p><p class="hint">Backups are unencrypted and can contain personal data. Provider keys are excluded. Close other app tabs before continuing. The backup reports any storage it could not include.</p><div class="backup-actions"><button id="download-backup" type="button" class="primary">Download backup</button><label class="file-button">Restore backup<input id="restore-file" type="file" accept=".json,.itsalive,application/json"></label><button id="cancel-backup" type="button" class="quiet" hidden>Cancel operation</button></div><section id="restore-confirmation" class="restore-confirmation" aria-labelledby="restore-confirm-title" hidden><h3 id="restore-confirm-title">Replace your current workspace?</h3><p id="restore-confirm-description">Restoring this backup replaces your applications, conversations and saved app data on this device.</p><div class="dialog-actions"><button id="cancel-restore" type="button" class="quiet">Cancel restore</button><button id="confirm-restore" type="button" class="primary">Restore this backup</button></div></section><p id="backup-status" role="status"></p><div class="dialog-actions"><button type="button" data-close class="quiet">Close</button></div></dialog>`;
 
 export interface ShellViewActions {

@@ -32,7 +32,10 @@ const steps=['Make a loop in the rope.','Pass the working end around the standin
 export default function App(){const [step,setStep]=useState(0);return <main><h1>Climbing knot practice</h1><p>Figure-eight follow-through: a practice guide. Learn and verify with a qualified instructor before climbing.</p><section><h2>Step {step+1} of 4</h2><p>{steps[step]}</p><button disabled={step===0} onClick={()=>setStep(step-1)}>Previous step</button><button disabled={step===3} onClick={()=>setStep(step+1)}>Next step</button></section></main>}`;
 export const GOAL_CSS = `:root{font-family:system-ui,sans-serif;color:#202a27;background:#fff}body{margin:0}main{max-width:780px;padding:clamp(24px,5vw,64px);margin:auto}h1{font-size:32px;line-height:1.2;margin:10px 0 16px}h2{font-size:21px}p{line-height:1.65;color:#45534e}.eyebrow{font-size:12px;letter-spacing:.09em;color:#486757}section{padding:22px 0;border-top:1px solid #dce4df;margin-top:24px}button,select{font:inherit;border:1px solid #8da097;border-radius:7px;padding:10px 14px;background:#f3f7f4;color:#172c21;cursor:pointer;margin:4px 8px 4px 0}button:focus-visible,select:focus-visible{outline:3px solid #275d41;outline-offset:3px}button:disabled{opacity:.5;cursor:default}label{display:block;font-weight:600}`;
 
-function reply(content: string, tools: { name: string; args: unknown }[] = []) {
+export function reply(
+  content: string,
+  tools: { name: string; args: unknown }[] = [],
+) {
   return {
     id: "deterministic-product-acceptance",
     status: "completed",
@@ -47,7 +50,7 @@ function reply(content: string, tools: { name: string; args: unknown }[] = []) {
         : []),
       ...tools.map((tool, index) => ({
         type: "function_call",
-        call_id: `call-${index}-${tool.name}`,
+        call_id: `call-${crypto.randomUUID()}-${index}-${tool.name}`,
         name: tool.name,
         arguments: JSON.stringify(tool.args),
       })),
@@ -55,7 +58,7 @@ function reply(content: string, tools: { name: string; args: unknown }[] = []) {
     usage: { input_tokens: 30, output_tokens: 20 },
   };
 }
-function toolsFor(request: ProviderRequest) {
+export function toolsFor(request: ProviderRequest) {
   const names = new Map(
     request.messages
       .flatMap((message) => message.tool_calls ?? [])
@@ -69,9 +72,14 @@ function toolsFor(request: ProviderRequest) {
     }));
 }
 export function goalResponse(request: ProviderRequest): unknown {
-  const latest =
+  const latestRaw =
     [...request.messages].reverse().find((message) => message.role === "user")
       ?.content ?? "";
+  // The harness now supplies full source up front. Route the deterministic fixture
+  // by the authorized request, not words that happen to occur in that source.
+  const latest = latestRaw
+    .split("\nCurrent project (complete source):")[0]!
+    .replace(/^Authorized request: /, "");
   if (request.tools?.some((tool) => tool.function.name === "connection_check"))
     return reply("", [{ name: "connection_check", args: { ready: true } }]);
   if (request.tools?.some((tool) => tool.function.name === "write_file")) {
@@ -95,6 +103,11 @@ export function goalResponse(request: ProviderRequest): unknown {
         source = current.replace(
           "</main>",
           "<section><h2>Chord progression</h2><p>Practice D → G → A → D, holding each chord for four slow beats.</p></section></main>",
+        );
+      else if (/improve feedback/i.test(latest))
+        source = current.replace(
+          "Play each note slowly, using one bow per note.",
+          "Practice started. Play each note slowly, using one bow per note.",
         );
       else if (/start|click|respond/i.test(latest))
         source = current.replace(
@@ -132,6 +145,9 @@ export function goalResponse(request: ProviderRequest): unknown {
     const dangerous = /delete all/i.test(latest);
     return reply(
       JSON.stringify({
+        appName: /knot|climbing/i.test(latest)
+          ? "Climbing Knots"
+          : "Violin Trainer",
         reply: question
           ? "A two-string chord can feel difficult because the bow must contact both strings evenly. Try a slow bow on the open D and A strings."
           : dangerous
@@ -161,10 +177,15 @@ export function goalResponse(request: ProviderRequest): unknown {
 }
 export async function installGoalProvider(context: BrowserContext) {
   const requests: ProviderRequest[] = [];
+  const decisionRequests: Array<Record<string, any>> = [];
   const control = {
     requests,
+    decisionRequests,
     failNext: false,
     holdCoding: undefined as Promise<void> | undefined,
+    intercept: undefined as
+      | ((request: ProviderRequest, route: Route) => Promise<boolean> | boolean)
+      | undefined,
   };
   const handler = async (route: Route) => {
     if (route.request().method() === "OPTIONS")
@@ -205,6 +226,7 @@ export async function installGoalProvider(context: BrowserContext) {
         : undefined,
     };
     requests.push(request);
+    if (await control.intercept?.(request, route)) return;
     if (
       request.tools?.some((tool) => tool.function.name === "write_file") &&
       control.holdCoding
@@ -223,6 +245,23 @@ export async function installGoalProvider(context: BrowserContext) {
       headers: { "access-control-allow-origin": "*" },
     });
   };
+  await context.route("**/api/ai/decisions", async (route) => {
+    const request = route.request().postDataJSON();
+    decisionRequests.push(request);
+    await route.fulfill({
+      status: 200,
+      json: {
+        id: `decision-${crypto.randomUUID()}`,
+        model: "gpt-6-luna",
+        answers: request.questions.map((question: any) => ({
+          type: "predicate",
+          name: question.name,
+          probability: 0.99,
+        })),
+        usage: { input_tokens: 12, output_tokens: 1 },
+      },
+    });
+  });
   await context.route("**/api/ai/responses", handler);
   await context.route("http://127.0.0.1:1456/responses", handler);
   return control;

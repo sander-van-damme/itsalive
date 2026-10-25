@@ -76,10 +76,12 @@ try {
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("I want an app that teaches me violin chords and scales.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  await expect(page.locator("#settings-dialog")).toBeVisible();
-  await page.locator("#ai-key").fill("production-deterministic-provider-key");
-  await page.locator("#save-settings").click();
-  await expect(page.locator("#settings-dialog")).not.toBeVisible({
+  await expect(page.locator("#onboarding-dialog")).toBeVisible();
+  await page
+    .locator("#onboarding-ai-key")
+    .fill("production-deterministic-provider-key");
+  await page.locator("#onboarding-save-settings").click();
+  await expect(page.locator("#onboarding-dialog")).not.toBeVisible({
     timeout: 20000,
   });
   const app = page.frameLocator("iframe[data-mode=app]");

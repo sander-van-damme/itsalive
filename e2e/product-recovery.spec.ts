@@ -16,7 +16,10 @@ async function openSettings(page: Page) {
   await page.getByRole("button", { name: "Settings", exact: true }).click();
 }
 async function connect(page: Page) {
-  const dialog = page.locator("#settings-dialog");
+  const onboarding = page.locator("#onboarding-dialog");
+  const dialog = (await onboarding.isVisible())
+    ? onboarding
+    : page.locator("#settings-dialog");
   if (!(await dialog.isVisible())) await openSettings(page);
   await dialog
     .getByRole("combobox", { name: "Connect with", exact: true })
@@ -25,7 +28,9 @@ async function connect(page: Page) {
     .getByLabel("OpenAI API key", { exact: true })
     .fill("acceptance-test-credential");
   await dialog
-    .getByRole("button", { name: /^(Connect and save|Save settings)$/ })
+    .getByRole("button", {
+      name: /^(Continue|Connect and save|Save settings)$/,
+    })
     .click();
   await expect(dialog).not.toBeVisible();
 }
@@ -65,8 +70,8 @@ test("first run resumes a goal after provider setup, creates useful practice and
   await ready(page);
   await expect(page.locator("#provider-badge")).not.toContainText(/demo/i);
   await send(page, "I want an app that teaches me violin chords and scales.");
-  await expect(page.locator("#settings-dialog")).toBeVisible();
-  await expect(page.locator("#settings-dialog")).toContainText(
+  await expect(page.locator("#onboarding-dialog")).toBeVisible();
+  await expect(page.locator("#onboarding-dialog")).toContainText(
     /connect|provider|AI/i,
   );
   expect(provider.requests).toHaveLength(0);
@@ -362,7 +367,7 @@ test("settings support keyboard close, cancel, useful defaults and connection er
     .getByRole("button", { name: "Save settings", exact: true })
     .click();
   await expect(dialog).not.toBeVisible();
-  await expect(page.locator("#provider-badge")).toContainText("AI connected");
+  await expect(page.locator("#provider-badge")).not.toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });
   await openSettings(page);
   await screenshot(page, "after-mobile-settings");
@@ -495,7 +500,7 @@ test("cancelled onboarding never runs a stale request after a later settings sav
   await ready(page);
   const goal = "Create a violin practice app.";
   await send(page, goal);
-  await expect(page.locator("#settings-dialog")).toBeVisible();
+  await expect(page.locator("#onboarding-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(
     page.getByRole("textbox", { name: "Message", exact: true }),
@@ -641,7 +646,7 @@ test("invalid saved credentials recover to setup without a scripted fallback", a
   );
   await ready(page);
   await send(page, "Create a violin practice app.");
-  await expect(page.locator("#settings-dialog")).toBeVisible();
+  await expect(page.locator("#onboarding-dialog")).toBeVisible();
   expect(provider.requests).toHaveLength(0);
   await expect(page.locator("#provider-badge")).not.toContainText(
     /demo|scripted/i,
@@ -670,5 +675,5 @@ test("a failed AI request updates health, preserves the working app and draft, a
   await expect(
     app(page).getByRole("heading", { name: "Chord progression", exact: true }),
   ).toBeVisible();
-  await expect(page.locator("#provider-badge")).toContainText("AI connected");
+  await expect(page.locator("#provider-badge")).not.toBeVisible();
 });

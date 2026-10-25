@@ -1,147 +1,58 @@
 #!/usr/bin/env node
-/** Explicitly opt-in, low-budget smoke test. No credentials or raw responses are printed. */
-import { build } from "esbuild";
-import { resolve } from "node:path";
-
-const args = new Map(
+/** Opt-in real Chromium → provider → coding → verification → commit test.
+ * No token ceilings, pre-request reservations, credential output or browser traces.
+ */
+import { spawn } from "node:child_process";
+const options = new Map(
   process.argv.slice(2).map((arg) => {
-    const [key, ...parts] = arg.split("=");
-    return [key, parts.join("=")];
+    const [key, ...value] = arg.split("=");
+    return [key, value.join("=")];
   }),
 );
-if (!args.has("--live")) {
+if (!options.has("--live")) {
   console.error(
-    "Live tests are disabled. Use --live --provider=openai with the secure OPENAI_API_KEY environment variable. This sends at most three requests.",
+    "Live tests are disabled. Use npm run test:live -- --live with OPENAI_API_KEY supplied securely. This creates and updates a real application and incurs provider charges measured after requests.",
   );
   process.exitCode = 2;
+} else if ((options.get("--provider") ?? "openai") !== "openai") {
+  console.error("The live browser scenario currently supports OpenAI.");
+  process.exitCode = 2;
+} else if (!process.env.OPENAI_API_KEY) {
+  console.error(
+    "LIVE PROVIDER VERIFICATION NOT RUN: OPENAI_API_KEY is unavailable. Deterministic browser tests do not establish real-provider readiness.",
+  );
+  process.exitCode = 1;
 } else {
-  try {
-    const provider = args.get("--provider") ?? "openai";
-    if (provider !== "openai") throw new Error("Provider must be openai.");
-    const credential = process.env.OPENAI_API_KEY;
-    if (!credential)
-      throw new Error(
-        "The selected provider API-key environment variable is missing.",
-      );
-    const inputPrice = Number(args.get("--input-price") ?? "0.1");
-    const outputPrice = Number(args.get("--output-price") ?? "0.5");
-    const budget = Number(args.get("--budget") ?? "0.01");
-    if (!Number.isFinite(budget) || budget <= 0 || budget > 0.1)
-      throw new Error(
-        "Live-test budget must be above zero and at most USD 0.10.",
-      );
-    const model = args.get("--model") ?? "gpt-6-luna";
-    // Bundle the real application adapter in memory. Secrets are read above at runtime, never included in generated code.
-    const built = await build({
-      entryPoints: [resolve("src/ai/index.ts")],
-      bundle: true,
-      write: false,
-      platform: "node",
-      format: "esm",
-      target: "node22",
-    });
-    const api = await import(
-      `data:text/javascript;base64,${Buffer.from(built.outputFiles[0].contents).toString("base64")}`
+  const budget = options.get("--budget");
+  if (
+    budget !== undefined &&
+    (!Number.isFinite(Number(budget)) || Number(budget) <= 0)
+  ) {
+    console.error(
+      "An optional --budget must be a positive USD amount. It prevents further requests after recorded spending reaches the threshold; it cannot cap an in-flight request.",
     );
-    const config = api.defaultAIConfig();
-    const route = {
-      provider,
-      model,
-      maxOutputTokens: 2048,
-      reasoningEffort: "low",
-      serviceTier: "default",
-      inputPerMillion: inputPrice,
-      outputPerMillion: outputPrice,
-    };
-    config.routes.application = route;
-    config.routes["coding-simple"] = route;
-    config.limits = {
-      requestsPerMinute: 3,
-      concurrency: 1,
-      budgetUSD: budget,
-      budgetEnabled: true,
-    };
-    const service = new api.AIService(config, {
-      credentials: () => ({ [provider]: credential }),
-    });
-    const context = {
-      appId: "live-smoke-test",
-      correlationId: crypto.randomUUID(),
-      signal: AbortSignal.timeout(60_000),
-    };
-    const text = await service.generate(
-      "application",
+    process.exitCode = 2;
+  } else {
+    const child = spawn(
+      process.platform === "win32" ? "npx.cmd" : "npx",
+      ["playwright", "test", "e2e/live-provider.spec.ts", "--reporter=line"],
       {
-        messages: [
-          { role: "user", content: "Reply with the word OK and nothing else." },
-        ],
-      },
-      context,
-    );
-    if (text.text.trim() !== "OK")
-      throw new Error("Text probe did not return the expected result.");
-    const decision = await service.application(
-      { method: "decide", prompt: "Is 2 plus 2 equal to 4? Return true." },
-      context,
-    );
-    if (decision !== true) throw new Error("Structured-decision probe failed.");
-    const tools = await service.generate(
-      "coding-simple",
-      {
-        messages: [
-          {
-            role: "user",
-            content:
-              "Call the echo tool exactly once with message OK. Do not answer in text.",
-          },
-        ],
-        tools: [
-          {
-            name: "echo",
-            description: "Echo a test message without side effects.",
-            parameters: {
-              type: "object",
-              properties: { message: { type: "string" } },
-              required: ["message"],
-              additionalProperties: false,
-            },
-          },
-        ],
-      },
-      context,
-    );
-    if (
-      tools.toolCalls.length !== 1 ||
-      tools.toolCalls[0].name !== "echo" ||
-      JSON.parse(tools.toolCalls[0].arguments).message !== "OK"
-    )
-      throw new Error("Function-tool probe failed.");
-    console.log(
-      JSON.stringify(
-        {
-          ok: true,
-          provider,
-          model,
-          checks: ["text", "structured decision", "function tool"],
-          requests: service.usage.length,
-          costUSD: service.spentUSD,
-          estimated: service.usage.some((record) => record.estimated),
-          latencyMs: service.usage.reduce(
-            (sum, record) => sum + record.latencyMs,
-            0,
-          ),
+        stdio: "inherit",
+        env: {
+          ...process.env,
+          ITSALIVE_LIVE: "1",
+          ...(budget ? { ITSALIVE_LIVE_BUDGET: budget } : {}),
         },
-        null,
-        2,
-      ),
+      },
     );
-  } catch (error) {
-    // Never echo arbitrary provider response bodies or credentials, even when a transport library embeds them.
-    let message =
-      error instanceof Error ? error.message : "Live provider test failed.";
-    for (const key of [process.env.OPENAI_API_KEY])
-      if (key) message = message.split(key).join("[REDACTED]");
-    console.error(message.replace(/\bsk-[\w-]{8,}/g, "[REDACTED]"));
-    process.exitCode = 1;
+    child.on("exit", (code) => {
+      process.exitCode = code ?? 1;
+    });
+    child.on("error", () => {
+      console.error(
+        "Could not start the live browser test. Install dependencies and Chromium first.",
+      );
+      process.exitCode = 1;
+    });
   }
 }

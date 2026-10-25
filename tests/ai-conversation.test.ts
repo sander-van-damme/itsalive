@@ -131,6 +131,64 @@ describe("conversation and optional behavioral adaptations", () => {
         converse(service, "What's this?", [], context),
       ).rejects.toThrow("incomplete response");
   });
+  it("preserves long messages, complete history and the unresolved goal", async () => {
+    const text = "Create exercises. ".repeat(1000);
+    const originalRequest = "Preserve all practice goals. ".repeat(400);
+    const history = Array.from({ length: 30 }, (_, i) => ({
+      role: "user" as const,
+      content: `${i}: ${"practice ".repeat(600)}`,
+    }));
+    const provider = new ScriptedProvider([
+      {
+        text: JSON.stringify({
+          reply: "Understanding your goal. ".repeat(1000),
+          appName: "Violin Practice",
+          workLevel: "medium",
+          intent: "change",
+          changeRequest: text,
+          confirmationReason: null,
+        }),
+        toolCalls: [],
+      },
+    ]);
+    const generate = vi.spyOn(provider, "generate");
+    const service = new AIService(demoAIConfig(), {
+      providers: { demo: provider },
+    });
+    const reply = await converse(service, text, history, context, {
+      originalRequest,
+      unresolved: true,
+    });
+    const messages = generate.mock.calls[0]![1].messages;
+    expect(messages).toHaveLength(history.length + 3);
+    expect(messages[1]!.content).toContain(originalRequest);
+    expect(messages[2]).toEqual(history[0]);
+    expect(messages.at(-1)!.content).toBe(text);
+    expect(reply.changeRequest).toBe(text);
+    expect(reply.reply.length).toBeGreaterThan(12000);
+    expect(reply.appName).toBe("Violin Practice");
+  });
+  it("uses a safe fallback when the model returns a request instead of a concise title", async () => {
+    const provider = new ScriptedProvider([
+      {
+        text: JSON.stringify({
+          reply: "I’ll create your app.",
+          appName: "I want to learn to play chords and scales on the violin",
+          workLevel: "medium",
+          intent: "change",
+          changeRequest: "Build a violin practice app",
+          confirmationReason: null,
+        }),
+        toolCalls: [],
+      },
+    ]);
+    const service = new AIService(demoAIConfig(), {
+      providers: { demo: provider },
+    });
+    expect(
+      (await converse(service, "Build a violin trainer", [], context)).appName,
+    ).toBeNull();
+  });
   it("filters signals, offers once, and never turns dismissal/ignoring into coding", async () => {
     let now = 100_000;
     const service = new AIService(demoAIConfig());

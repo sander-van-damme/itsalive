@@ -50,11 +50,11 @@ test("ChatGPT plan loads account models and creates an app without placing OAuth
     .getByRole("textbox", { name: "Message", exact: true })
     .fill("Create a violin practice app.");
   await page.getByRole("button", { name: "Send", exact: true }).click();
-  const settings = page.locator("#settings-dialog");
+  const settings = page.locator("#onboarding-dialog");
   await settings
     .getByRole("combobox", { name: "Connect with", exact: true })
     .selectOption("chatgpt");
-  await expect(settings.locator("#chatgpt-status")).toContainText(
+  await expect(settings.locator("#onboarding-chatgpt-status")).toContainText(
     "plan usage enabled",
   );
   await settings.getByText("AI choices", { exact: true }).click();
@@ -64,9 +64,7 @@ test("ChatGPT plan loads account models and creates an app without placing OAuth
   await expect(
     settings.getByLabel("Low model", { exact: true }).locator("option"),
   ).toHaveText(["Sol for this account"]);
-  await settings
-    .getByRole("button", { name: "Save settings", exact: true })
-    .click();
+  await settings.getByRole("button", { name: "Continue", exact: true }).click();
   await expect(settings).not.toBeVisible();
   await expect(
     page
@@ -83,11 +81,11 @@ test("ChatGPT plan loads account models and creates an app without placing OAuth
       JSON.parse(localStorage.getItem("itsalive.credentials")!),
     ),
   ).toEqual({ openai: "" });
-  await expect(page.locator("#provider-badge")).toContainText("AI connected");
+  await expect(page.locator("#provider-badge")).not.toBeVisible();
   await page
     .getByRole("button", { name: "Start voice conversation", exact: true })
     .click();
-  await expect(settings).toContainText(
+  await expect(page.locator("#settings-dialog")).toContainText(
     "Add an OpenAI API key to use live voice",
   );
 });
