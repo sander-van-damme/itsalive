@@ -138,8 +138,6 @@ export class CompilerCore {
       const project = structuredClone(input);
       const existingLock = project.lock;
       project.lock = {};
-      if (Object.keys(project.files).length > 512)
-        throw new Error("Projects are limited to 512 source files.");
       for (const path of Object.keys(project.files))
         if (
           normalizePath(path) !== path ||

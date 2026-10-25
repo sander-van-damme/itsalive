@@ -1,3 +1,6 @@
+import { safeProviderFailure } from "./provider-error";
+import { validateDecisionInput } from "../ai/decisions";
+
 /** Same-origin, bring-your-own-key API boundary. No platform credential is shared. */
 export async function handleAPI(
   request: Request,
@@ -22,21 +25,12 @@ export async function handleAPI(
   try {
     const reader = request.body?.getReader();
     const decoder = new TextDecoder();
-    let size = 0;
     bodyText = "";
     if (reader)
       try {
         for (;;) {
           const { done, value } = await reader.read();
           if (done) break;
-          size += value.byteLength;
-          if (size > 256_000) {
-            await reader.cancel();
-            return reply(
-              413,
-              "This request is too large. Try a smaller change.",
-            );
-          }
           bodyText += decoder.decode(value, { stream: true });
         }
         bodyText += decoder.decode();
@@ -61,6 +55,20 @@ export async function handleAPI(
       return reply(400, "Choose an AI model in Settings.");
     endpoint = "https://api.openai.com/v1/responses";
     body = { ...input, store: false, stream: true };
+  } else if (url.pathname === "/api/ai/decisions") {
+    if (input.model !== "gpt-6-luna")
+      return reply(400, "This model does not support OpenAI Decisions.");
+    try {
+      validateDecisionInput({ input: input.input, questions: input.questions });
+    } catch {
+      return reply(400, "Invalid bounded decision request.");
+    }
+    endpoint = "https://api.openai.com/v1/decisions";
+    body = {
+      model: input.model,
+      input: input.input,
+      questions: input.questions,
+    };
   } else if (url.pathname === "/api/voice/sessions") {
     if (
       typeof input.sdp !== "string" ||
@@ -79,10 +87,9 @@ export async function handleAPI(
               ["user", "assistant"].includes(item.role) &&
               typeof item.content === "string",
           )
-          .slice(-12)
           .map((item: any) => ({
             role: item.role,
-            content: item.content.slice(0, 3000),
+            content: item.content,
           }))
       : [];
     endpoint = "https://api.openai.com/v1/live/sessions";
@@ -107,18 +114,22 @@ export async function handleAPI(
       body: JSON.stringify(body),
       signal: request.signal,
     });
-    // Error bodies may contain user content. Preserve only safe metadata.
-    if (!result.ok)
+    if (!result.ok) {
+      const safe = safeProviderFailure(await result.json().catch(() => null));
       return Response.json(
         {
-          error:
-            result.status === 401
-              ? "The OpenAI API key was not accepted. Check it in Settings."
-              : result.status === 403
-                ? "Your OpenAI account cannot use this model or speed."
-                : result.status === 429
-                  ? "OpenAI usage limits were reached. Check your allowance or try again shortly."
-                  : "OpenAI could not complete this request. Download diagnostic logs in Settings for details.",
+          ...safe,
+          error: {
+            ...(safe.error as Record<string, unknown>),
+            message:
+              result.status === 401
+                ? "The OpenAI API key was not accepted. Check it in Settings."
+                : result.status === 403
+                  ? "Your OpenAI account cannot use this model or speed."
+                  : result.status === 429
+                    ? "OpenAI usage limits were reached. Check your allowance or try again shortly."
+                    : "OpenAI could not complete this request. Download diagnostic logs in Settings for details.",
+          },
         },
         {
           status: result.status,
@@ -128,6 +139,7 @@ export async function handleAPI(
           },
         },
       );
+    }
     return new Response(result.body, {
       status: result.status,
       headers: {

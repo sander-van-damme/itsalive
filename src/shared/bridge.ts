@@ -101,7 +101,7 @@ export class PortRPC {
     {
       resolve(value: unknown): void;
       reject(error: Error): void;
-      timer: ReturnType<typeof setTimeout>;
+      timer: ReturnType<typeof setTimeout> | undefined;
     }
   >();
   private readonly active = new Set<string>();
@@ -131,17 +131,20 @@ export class PortRPC {
   request<T = unknown>(
     method: string,
     payload: unknown = null,
-    timeoutMs = 30_000,
+    timeoutMs: number | null = 30_000,
   ): Promise<T> {
     if (this.closed) return Promise.reject(new Error("Bridge is closed"));
     if (this.pending.size >= 100)
       return Promise.reject(new Error("Too many outstanding bridge requests"));
     const id = crypto.randomUUID();
     return new Promise<T>((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.pending.delete(id);
-        reject(new Error(`Bridge request timed out: ${method}`));
-      }, timeoutMs);
+      const timer =
+        timeoutMs === null
+          ? undefined
+          : setTimeout(() => {
+              this.pending.delete(id);
+              reject(new Error(`Bridge request timed out: ${method}`));
+            }, timeoutMs);
       this.pending.set(id, {
         resolve: (value) => resolve(value as T),
         reject,

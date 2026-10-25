@@ -23,6 +23,16 @@ const compiler = (fetcher?: typeof fetch) =>
   new CompilerCore(new DependencyCache(fetcher), async () => {});
 
 describe("actual SWC module compiler", () => {
+  it("accepts a legitimate project beyond the former source-file ceiling", async () => {
+    const project = seed();
+    for (let i = 0; i < 520; i++)
+      project.files[`lessons/lesson-${i}.json`] = JSON.stringify({
+        title: `Lesson ${i}`,
+      });
+    const result = await compiler().compile(project, "large-project");
+    expect(result.ok).toBe(true);
+    if (result.ok) expect(Object.keys(result.project.files)).toHaveLength(522);
+  });
   it("compiles multi-file TSX and rewrites imports without corrupting Unicode strings", async () => {
     const project = seed();
     project.files["src/App.tsx"] =

@@ -64,6 +64,8 @@ describe("OpenAI Responses integration", () => {
     );
     const request = fetcher.mock.calls[0]![1]!;
     const body = JSON.parse(String(request.body));
+    expect(body.max_output_tokens).toBeUndefined();
+    expect(body.truncation).toBe("disabled");
     expect(body.service_tier).toBe("ultrafast");
     expect(body.reasoning.effort).toBe("medium");
     expect(body.tools[0].name).toBe("read_files");
@@ -208,7 +210,7 @@ describe("OpenAI Responses integration", () => {
   });
 });
 describe("accounting and burst scheduling", () => {
-  it("leaves limits optional, then reserves actual selected-speed costs when enabled", async () => {
+  it("leaves limits optional and blocks new requests after recorded spending reaches the limit", async () => {
     const config = defaultAIConfig();
     config.limits.budgetUSD = 0.00001;
     const provider = new ScriptedProvider([answer]);
@@ -239,12 +241,15 @@ describe("accounting and burst scheduling", () => {
     });
     await service.generate("conversation", input, context);
     expect(service.usage[0]!.costUSD).toBeCloseTo(
-      ((10 * 2 + 5 * 10) * 2) / 1e6,
+      ((7 * 2 + 3 * 0.1 + 5 * 10) * 2) / 1e6,
+      12,
     );
     await expect(
       service.generate("conversation", input, context),
     ).rejects.toThrow("Disconnected");
-    expect(service.usage[1]!.costUSD).toBeGreaterThan(0);
+    expect(service.usage[1]!.costStatus).toBe("unknown");
+    expect(service.usage[1]!.usageStatus).toBe("unknown");
+    expect(service.unknownCostCount).toBe(1);
   });
   it("queues cross-app bursts and gives conversation priority without rejecting normal work", async () => {
     let release!: (answer: AIResponse) => void;

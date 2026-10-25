@@ -5,3 +5,4 @@ export * from "./demo";
 export * from "./harness";
 export * from "./conversation";
 export * from "./speech";
+export * from "./decisions";

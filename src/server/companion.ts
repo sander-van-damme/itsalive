@@ -1,3 +1,5 @@
+import { safeProviderFailure } from "./provider-error";
+import { once } from "node:events";
 import {
   createServer,
   type IncomingMessage,
@@ -446,15 +448,19 @@ export async function createCompanion(options: Options = {}) {
             "Content-Type": "application/json",
           },
           ...(body ? { body: JSON.stringify(body) } : {}),
-          signal: AbortSignal.any([
-            controller.signal,
-            AbortSignal.timeout(180_000),
-          ]),
+          signal: controller.signal,
         });
         if (!result.ok) {
+          const safe = safeProviderFailure(
+            await result.json().catch(() => null),
+          );
           send(result.status, {
-            error:
-              "ChatGPT could not complete the request. Check your connection, model access and plan allowance.",
+            ...safe,
+            error: {
+              ...(safe.error as Record<string, unknown>),
+              message:
+                "ChatGPT could not complete the request. Check your connection, model access and plan allowance.",
+            },
           });
           return;
         }
@@ -487,10 +493,7 @@ export async function createCompanion(options: Options = {}) {
 }
 async function readBody(request: IncomingMessage): Promise<string> {
   const parts: Buffer[] = [];
-  let size = 0;
   for await (const chunk of request) {
-    size += chunk.length;
-    if (size > 256_000) throw new Error("Request too large");
     parts.push(chunk);
   }
   return Buffer.concat(parts).toString("utf8");
@@ -502,7 +505,18 @@ async function copyBody(result: Response, response: ServerResponse) {
       for (;;) {
         const { done, value } = await reader.read();
         if (done) break;
-        response.write(value);
+        // Honor the browser's backpressure instead of buffering an unbounded
+        // model response in the local helper's memory.
+        if (!response.write(value)) {
+          const controller = new AbortController();
+          const closed = () => controller.abort();
+          response.once("close", closed);
+          try {
+            await once(response, "drain", { signal: controller.signal });
+          } finally {
+            response.off("close", closed);
+          }
+        }
       }
     } finally {
       reader.releaseLock();

@@ -89,6 +89,61 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 describe("AI live voice", () => {
+  it("preserves long spoken goals, earlier context and complete delegated results", async () => {
+    const result = "A detailed result. ".repeat(900);
+    const opts = options({ onDelegate: vi.fn(async () => result) });
+    const voice = new LiveVoice(opts);
+    await voice.start();
+    const originalGoal =
+      "Keep this original musical practice requirement. ".repeat(600);
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: originalGoal,
+      end_ms: 1,
+    });
+    const history: Array<{ role: "user" | "assistant"; content: string }> = [
+      { role: "user", content: originalGoal },
+    ];
+    for (let i = 0; i < 14; i++) {
+      const role = i % 2 === 0 ? "assistant" : "user";
+      const content = `Turn ${i}`;
+      history.push({ role, content });
+      voice.acceptEvent({
+        type:
+          role === "user"
+            ? "session.input_transcript.delta"
+            : "session.output_transcript.delta",
+        delta: content,
+        end_ms: i + 2,
+      });
+    }
+    voice.acceptEvent({
+      type: "session.output_transcript.delta",
+      delta: "Ready?",
+      end_ms: 20,
+    });
+    history.push({ role: "assistant", content: "Ready?" });
+    voice.acceptEvent({
+      type: "session.input_transcript.delta",
+      delta: "Yes, build that.",
+      end_ms: 21,
+    });
+    voice.acceptEvent({
+      type: "session.delegation.created",
+      delegation: { id: "long-session", target: "client" },
+    });
+    expect(opts.onDelegate).toHaveBeenCalledExactlyOnceWith(
+      "Yes, build that.",
+      history,
+    );
+    await Promise.resolve();
+    expect(
+      peer.channel.send.mock.calls
+        .map(([raw]) => JSON.parse(raw))
+        .find((event) => event.delegation_id === "long-session")?.content,
+    ).toBe(result);
+    voice.acceptEvent({ type: "session.closed", usage: { seconds: 30 } });
+  });
   it("includes conversational context for an accepted spoken suggestion", async () => {
     const opts = options();
     const voice = new LiveVoice(opts);
@@ -197,21 +252,27 @@ describe("AI live voice", () => {
     await Promise.resolve();
     voice.acceptEvent({ type: "session.closed", usage: { seconds: 20 } });
   });
-  it("releases the microphone after connection failure and never falls back to browser recognition", async () => {
-    vi.stubGlobal(
-      "fetch",
-      vi.fn(async () =>
-        Response.json({ error: "Key rejected" }, { status: 401 }),
-      ),
-    );
-    const opts = options();
-    const voice = new LiveVoice(opts);
-    await voice.start();
-    expect(opts.onError).toHaveBeenCalled();
-    expect(track.stop).toHaveBeenCalledOnce();
-    expect(voice.active).toBe(false);
-    expect((globalThis as any).SpeechRecognition).not.toHaveBeenCalled();
-  });
+  it.each([
+    "Key rejected",
+    { code: "invalid_api_key", message: "Key rejected" },
+  ])(
+    "releases the microphone and explains a sanitized connection failure (%j)",
+    async (error) => {
+      vi.stubGlobal(
+        "fetch",
+        vi.fn(async () => Response.json({ error }, { status: 401 })),
+      );
+      const opts = options();
+      const voice = new LiveVoice(opts);
+      await voice.start();
+      expect(opts.onError).toHaveBeenCalledWith(
+        expect.objectContaining({ message: "Key rejected" }),
+      );
+      expect(track.stop).toHaveBeenCalledOnce();
+      expect(voice.active).toBe(false);
+      expect((globalThis as any).SpeechRecognition).not.toHaveBeenCalled();
+    },
+  );
   it("handles microphone denial without contacting the provider", async () => {
     vi.stubGlobal("navigator", {
       mediaDevices: {

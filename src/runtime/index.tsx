@@ -130,7 +130,7 @@ export function start(port: MessagePort, init: RuntimeInit): void {
     });
   };
   const inspect = (): RuntimeInspection => ({
-    text: mount.innerText.slice(0, 40_000),
+    text: mount.innerText,
     errors: [...errors],
     revisionId,
   });
@@ -143,7 +143,9 @@ export function start(port: MessagePort, init: RuntimeInit): void {
       return Promise.reject(
         new Error("AI is disabled during candidate verification and backup"),
       );
-    return rpc.request("ai", { method, prompt, ...extra }, 120_000);
+    // Provider work has no universal duration. Closing the app bridge rejects
+    // pending calls; provider failures are returned by the shell.
+    return rpc.request("ai", { method, prompt, ...extra }, null);
   };
   const ai = {
     text: (prompt: string) => requestAI("text", prompt) as Promise<string>,

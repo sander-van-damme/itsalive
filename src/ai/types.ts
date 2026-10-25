@@ -19,9 +19,11 @@ export type ReasoningEffort = "low" | "medium" | "high";
 export interface ModelRoute {
   provider: ProviderId;
   model: string;
-  maxOutputTokens: number;
+  /** Catalog price; monetary charges remain estimates unless reported by the provider. */
   inputPerMillion: number;
   outputPerMillion: number;
+  cachedInputPerMillion?: number;
+  cacheWritePerMillion?: number;
   reasoningEffort?: ReasoningEffort;
   serviceTier?: ServiceTier;
 }
@@ -65,6 +67,7 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 export interface GenerateInput {
+  decisions?: import("./decisions").DecisionInput;
   messages: AIMessage[];
   tools?: ToolDefinition[];
   jsonSchema?: { name: string; schema: Record<string, unknown> };
@@ -74,9 +77,17 @@ export interface AIUsage {
   inputTokens: number;
   outputTokens: number;
   cachedTokens: number;
+  cacheWriteTokens?: number;
   costUSD?: number;
 }
 export interface AIResponse {
+  endpoint?: "responses" | "decisions";
+  answers?: import("./decisions").DecisionAnswer[];
+  completion?: {
+    status: "completed" | "incomplete" | "failed";
+    reason?: string;
+    recoverable: boolean;
+  };
   text: string;
   responseItems?: Array<Record<string, unknown>>;
   toolCalls: ToolCall[];
@@ -111,7 +122,11 @@ export interface UsageRecord {
   outputTokens: number;
   cachedTokens: number;
   costUSD: number;
+  /** Compatibility field: monetary amount is an estimate, not a provider invoice. */
   estimated: boolean;
+  costStatus?: "unknown" | "estimated" | "reported" | "not-billed";
+  usageStatus?: "unknown" | "reported";
+  cacheWriteTokens?: number;
   latencyMs: number;
   status: "pending" | "success" | "failed";
   serviceTier?: ServiceTier;
@@ -146,6 +161,7 @@ export const MODEL_CHOICES = [
     name: "GPT-6 Luna",
     input: 0.1,
     output: 0.5,
+    cachedInput: 0.01,
     fastest: false,
   },
   {
@@ -153,6 +169,7 @@ export const MODEL_CHOICES = [
     name: "GPT-6.1 Sol",
     input: 2,
     output: 10,
+    cachedInput: 0.1,
     fastest: true,
   },
   {
@@ -160,6 +177,7 @@ export const MODEL_CHOICES = [
     name: "GPT-6 Astra",
     input: 10,
     output: 50,
+    cachedInput: 1,
     fastest: true,
   },
 ] as const;
@@ -190,9 +208,10 @@ export function defaultModelRoute(
         : category === "voice"
           ? "gpt-live-1"
           : model.id,
-    maxOutputTokens: category === "high" ? 16384 : 8192,
     inputPerMillion: provider === "demo" ? 0 : model.input,
     outputPerMillion: provider === "demo" ? 0 : model.output,
+    cachedInputPerMillion: provider === "demo" ? 0 : model.cachedInput,
+    cacheWritePerMillion: provider === "demo" ? 0 : model.input * 1.25,
     reasoningEffort:
       category === "high" ? "high" : category === "low" ? "low" : "medium",
     serviceTier: "default",
@@ -256,3 +275,18 @@ export const MODEL_REGISTRY = MODEL_CHOICES.map((model) => ({
   audio: false,
   endpoint: "/v1/responses",
 }));
+
+/** Drop obsolete V3 output allowances at every configuration boundary. */
+export function normalizeAIConfig(config: AIConfig): AIConfig {
+  const copy = structuredClone(config);
+  for (const route of Object.values(copy.routes)) {
+    delete (route as ModelRoute & { maxOutputTokens?: unknown })
+      .maxOutputTokens;
+    const catalog = MODEL_CHOICES.find((model) => model.id === route.model);
+    if (catalog && route.inputPerMillion === catalog.input) {
+      route.cachedInputPerMillion ??= catalog.cachedInput;
+      route.cacheWritePerMillion ??= catalog.input * 1.25;
+    }
+  }
+  return copy;
+}

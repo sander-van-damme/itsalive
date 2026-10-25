@@ -1,8 +1,15 @@
+import {
+  supportsDecisions,
+  validateDecisionInput,
+  type DecisionInput,
+  type DecisionResponse,
+} from "./decisions";
 import type {
   AIConfig,
   AIContext,
   AIEvent,
   AIResponse,
+  ModelRoute,
   AIRole,
   ApplicationAIRequest,
   GenerateInput,
@@ -12,7 +19,7 @@ import type {
   ProviderCredentials,
 } from "./types";
 import { AIError, HTTPProvider } from "./providers";
-import { tierMultiplier } from "./types";
+import { MODEL_CHOICES, normalizeAIConfig, tierMultiplier } from "./types";
 import { RequestQueue } from "./queue";
 import { DemoProvider } from "./demo";
 
@@ -22,7 +29,7 @@ export interface AIServiceOptions {
   onHealth?: (health: ConnectionHealth) => void;
   providers?: Partial<Record<ProviderId, Provider>>;
   log?: (event: AIEvent) => void;
-  onUsage?: (record: UsageRecord) => void;
+  onUsage?: (record: UsageRecord) => void | Promise<void>;
   now?: () => number;
 }
 export interface ConnectionHealth {
@@ -78,9 +85,6 @@ function checkConfig(config: AIConfig): void {
       !["demo", "openai", "chatgpt"].includes(route.provider) ||
       !route.model ||
       route.model.length > 160 ||
-      !Number.isInteger(route.maxOutputTokens) ||
-      route.maxOutputTokens < 1 ||
-      route.maxOutputTokens > 32_768 ||
       !Number.isFinite(route.inputPerMillion) ||
       !Number.isFinite(route.outputPerMillion) ||
       route.inputPerMillion < 0 ||
@@ -88,12 +92,12 @@ function checkConfig(config: AIConfig): void {
     )
       throw new Error("Invalid AI model configuration.");
     if (
-      route.provider !== "demo" &&
-      (route.inputPerMillion === 0 || route.outputPerMillion === 0)
+      [route.cachedInputPerMillion, route.cacheWritePerMillion].some(
+        (price) =>
+          price !== undefined && (!Number.isFinite(price) || price < 0),
+      )
     )
-      throw new Error(
-        "Set nonzero input and output prices for external models so the spending limit can reserve costs.",
-      );
+      throw new Error("Invalid cached-token pricing.");
   }
 }
 
@@ -102,10 +106,13 @@ export class AIService {
   private active = 0;
   private testingConfiguration = false;
   private records: UsageRecord[] = [];
+  private readonly unpersistedUsage = new Set<string>();
   private readonly providers: Record<ProviderId, Provider>;
   private readonly now: () => number;
   private readonly queue: RequestQueue;
   private validated = "";
+  // Private in-memory comparison only; never logged or persisted.
+  private validatedCredentials: ProviderCredentials = {};
   health: ConnectionHealth = { state: "unchecked" };
   private updateHealth(health: ConnectionHealth) {
     this.health = health;
@@ -116,7 +123,7 @@ export class AIService {
     private readonly options: AIServiceOptions = {},
   ) {
     checkConfig(config);
-    this.configuration = structuredClone(config);
+    this.configuration = normalizeAIConfig(config);
     this.providers = {
       demo: new DemoProvider(),
       openai: new HTTPProvider("openai"),
@@ -136,7 +143,14 @@ export class AIService {
     return this.queue.size + (this.testingConfiguration ? 1 : 0);
   }
   get spentUSD(): number {
-    return this.records.reduce((sum, record) => sum + record.costUSD, 0);
+    return this.records.reduce(
+      (sum, record) =>
+        sum +
+        (record.costStatus === "unknown" || record.status === "pending"
+          ? 0
+          : record.costUSD),
+      0,
+    );
   }
   get periodSpentUSD(): number {
     const date = new Date(this.now());
@@ -145,32 +159,53 @@ export class AIService {
         ? Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), 1)
         : 0;
     return this.records
-      .filter((record) => record.timestamp >= start)
+      .filter(
+        (record) =>
+          record.timestamp >= start &&
+          record.status !== "pending" &&
+          record.costStatus !== "unknown",
+      )
       .reduce((sum, record) => sum + record.costUSD, 0);
   }
-  private checkBudget(cost: number) {
+  get unknownCostCount(): number {
+    return this.records.filter((record) => record.costStatus === "unknown")
+      .length;
+  }
+  private connectionIdentity(config: AIConfig): string {
+    return JSON.stringify(
+      Object.entries(config.routes).map(([role, route]) => [
+        role,
+        route.provider,
+        route.model,
+        route.reasoningEffort,
+        route.serviceTier,
+      ]),
+    );
+  }
+  private checkBudget() {
     if (
-      this.configuration.limits.budgetEnabled !== false &&
-      this.periodSpentUSD + cost > this.configuration.limits.budgetUSD
+      this.configuration.limits.budgetEnabled === true &&
+      this.periodSpentUSD >= this.configuration.limits.budgetUSD
     )
       throw new AIError(
-        "Your spending limit would be exceeded. You can change it in Settings → Usage.",
+        "Your recorded spending has reached your spending limit. You can change it in Settings → Usage. Requests already in progress may add further costs.",
         "limit",
       );
   }
   resetHealth(): void {
     this.validated = "";
+    this.validatedCredentials = {};
     this.updateHealth({ state: "unchecked" });
   }
   configure(config: AIConfig): void {
     checkConfig(config);
     const changed =
-      JSON.stringify(config.routes) !==
-      JSON.stringify(this.configuration.routes);
-    this.configuration = structuredClone(config);
+      this.connectionIdentity(config) !==
+      this.connectionIdentity(this.configuration);
+    this.configuration = normalizeAIConfig(config);
     if (changed)
       this.updateHealth(
-        JSON.stringify(config.routes) === this.validated
+        this.connectionIdentity(config) === this.validated
           ? { state: "ready", checkedAt: this.now() }
           : { state: "unchecked" },
       );
@@ -178,9 +213,9 @@ export class AIService {
   startVoice(context: AIContext): {
     update(seconds: number, final?: boolean, confirmed?: boolean): void;
   } {
-    // Reserve the initialization minimum, then a small rolling allowance while live.
+    // Voice uses observed duration until provider usage is available; never reserve invented future usage.
     const rate = 0.05 / 60;
-    this.checkBudget(15 * rate);
+    this.checkBudget();
     const record: UsageRecord = {
       id: crypto.randomUUID(),
       timestamp: this.now(),
@@ -192,27 +227,45 @@ export class AIService {
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
-      costUSD: 15 * rate,
+      costUSD: 0,
+      costStatus: "unknown",
+      usageStatus: "unknown",
       estimated: true,
       latencyMs: 0,
       status: "pending",
       seconds: 0,
     };
     this.records.push(record);
-    this.options.onUsage?.(structuredClone(record));
+    const persist = () => {
+      const failed = () => {
+        this.unpersistedUsage.add(record.id);
+        this.event(context, "ai.accounting.persist.failure", {
+          requestId: record.id,
+          role: "speech",
+        });
+      };
+      try {
+        const write = this.options.onUsage?.(structuredClone(record));
+        if (write)
+          void write
+            .then(() => this.unpersistedUsage.delete(record.id))
+            .catch(failed);
+        else this.unpersistedUsage.delete(record.id);
+      } catch {
+        failed();
+      }
+    };
+    persist();
     return {
       update: (seconds, final = false, confirmed = false) => {
-        const cost =
-          final && seconds === 0
-            ? 0
-            : Math.max(15, seconds + (final ? 0 : 5)) * rate;
-        if (!final) this.checkBudget(Math.max(0, cost - record.costUSD));
+        const cost = Math.max(0, seconds) * rate;
         record.seconds = seconds;
         record.costUSD = cost;
+        record.costStatus = seconds > 0 ? "estimated" : "unknown";
         record.latencyMs = seconds * 1000;
         record.status = final ? (confirmed ? "success" : "failed") : "pending";
         record.estimated = true;
-        this.options.onUsage?.(structuredClone(record));
+        persist();
       },
     };
   }
@@ -229,7 +282,35 @@ export class AIService {
       )
     )
       throw new Error("Invalid accounting records.");
-    this.records = structuredClone(records);
+    this.records = structuredClone(records).map((record) => {
+      // Interrupted old ledgers contain reservations, not charges. Do not carry them into recorded spending.
+      if (
+        record.status === "pending" ||
+        (!record.costStatus &&
+          record.status === "failed" &&
+          !record.inputTokens &&
+          !record.outputTokens)
+      )
+        return {
+          ...record,
+          status: "failed" as const,
+          costUSD: 0,
+          estimated: true,
+          costStatus:
+            record.provider === "openai"
+              ? ("unknown" as const)
+              : ("not-billed" as const),
+          usageStatus: "unknown" as const,
+        };
+      return {
+        ...record,
+        costStatus:
+          record.costStatus ?? (record.estimated ? "estimated" : "reported"),
+        usageStatus:
+          record.usageStatus ??
+          (record.inputTokens || record.outputTokens ? "reported" : "unknown"),
+      };
+    });
   }
   private event(
     context: AIContext,
@@ -272,9 +353,41 @@ export class AIService {
   ): Promise<AIResponse> {
     this.options.beforeRequest?.();
     context.signal?.throwIfAborted();
+    // A previous final write may have failed after billing. Repair that durable
+    // ledger before starting any further request, including explicit retries.
+    for (const id of [...this.unpersistedUsage]) {
+      const record = this.records.find((item) => item.id === id);
+      if (!record) {
+        this.unpersistedUsage.delete(id);
+        continue;
+      }
+      try {
+        await this.options.onUsage?.(structuredClone(record));
+        this.unpersistedUsage.delete(id);
+      } catch {
+        throw new AIError(
+          "Previous AI usage could not be saved. Free some browser storage before retrying.",
+          "accounting",
+          { reason: "usage_persistence_failed", requestId: id },
+        );
+      }
+    }
+    context.signal?.throwIfAborted();
     if (this.testingConfiguration)
       throw new Error("Wait for the AI connection check to finish.");
-    const route = this.configuration.routes[role];
+    const configuredRoute = this.configuration.routes[role];
+    // Decisions bills input only and does not accept a service tier parameter.
+    const route =
+      input.decisions && configuredRoute
+        ? {
+            ...configuredRoute,
+            inputPerMillion: 0.1,
+            cachedInputPerMillion: 0.01,
+            cacheWritePerMillion: 0.125,
+            outputPerMillion: 0,
+            serviceTier: "default" as const,
+          }
+        : configuredRoute;
     if (!route || role === "speech")
       throw new Error(
         "Start a voice conversation to use the live voice model.",
@@ -287,15 +400,15 @@ export class AIService {
       throw new Error(
         "Connect AI in Settings. Scripted responses require the explicit test URL.",
       );
+    if (input.decisions) {
+      validateDecisionInput(input.decisions);
+      if (!supportsDecisions(route))
+        throw new AIError(
+          "The selected provider or model does not support OpenAI Decisions.",
+          "model",
+        );
+    }
     const encoded = JSON.stringify(input);
-    if (
-      encoded.length > 160_000 ||
-      input.messages.length > 80 ||
-      (input.tools && input.tools.length > 16)
-    )
-      throw new Error(
-        "AI context exceeds the bounded request size. Read fewer files or narrow the task.",
-      );
     const credential =
       route.provider === "demo"
         ? ""
@@ -303,19 +416,7 @@ export class AIService {
     if (route.provider !== "demo" && !credential)
       throw new Error(`Add a ${route.provider} key in Settings.`);
     const now = this.now();
-    // UTF-8 bytes + framing is deliberately conservative for tokenizers. Catalog prices are conservative estimates; cached-token discounts are not assumed.
-    const reservedInput =
-      new TextEncoder().encode(encoded).length +
-      input.messages.length * 32 +
-      256;
-    const reserved =
-      route.provider === "demo" || route.provider === "chatgpt"
-        ? 0
-        : ((reservedInput * route.inputPerMillion +
-            route.maxOutputTokens * route.outputPerMillion) /
-            1_000_000) *
-          tierMultiplier(route.serviceTier);
-    this.checkBudget(reserved);
+    if (route.provider === "openai") this.checkBudget();
     const record: UsageRecord = {
       id: crypto.randomUUID(),
       timestamp: now,
@@ -327,8 +428,10 @@ export class AIService {
       inputTokens: 0,
       outputTokens: 0,
       cachedTokens: 0,
-      costUSD: reserved,
-      estimated: true,
+      costUSD: 0,
+      costStatus: route.provider === "openai" ? "unknown" : "not-billed",
+      usageStatus: "unknown",
+      estimated: route.provider === "openai",
       latencyMs: 0,
       status: "pending",
       serviceTier: route.serviceTier,
@@ -336,20 +439,42 @@ export class AIService {
     this.records.push(record);
     this.active++;
     try {
-      this.options.onUsage?.(structuredClone(record));
+      await this.options.onUsage?.(structuredClone(record));
     } catch {
       this.active--;
-      this.records.pop();
-      throw new Error("Could not reserve AI accounting before request.");
+      this.records = this.records.filter((item) => item.id !== record.id);
+      const detail = {
+        requestId: record.id,
+        reason: "pending_usage_persistence_failed",
+      };
+      this.event(context, "ai.accounting.persist.failure", detail);
+      throw new AIError(
+        "Could not save AI usage before starting the request. Free some browser storage and retry.",
+        "accounting",
+        detail,
+      );
     }
     this.event(context, "ai.request", {
       role,
       provider: route.provider,
       model: route.model,
       requestId: record.id,
-      reservedUSD: reserved,
+      costStatus: record.costStatus,
       inputCharacters: encoded.length,
     });
+    this.event(
+      context,
+      "ai.request.parameters",
+      {
+        role,
+        model: route.model,
+        reasoningEffort: route.reasoningEffort,
+        serviceTier: route.serviceTier,
+        messageCount: input.messages.length,
+        toolCount: input.tools?.length ?? 0,
+      },
+      "DEBUG",
+    );
     if (this.configuration.captureContent)
       this.event(
         context,
@@ -357,41 +482,22 @@ export class AIService {
         { messages: input.messages },
         "DEBUG",
       );
+    let providerStarted = false;
+    let outcome: AIResponse | undefined;
+    let providerFailure: unknown;
     try {
-      const signals = [
-        AbortSignal.timeout(180_000),
-        ...(context.signal ? [context.signal] : []),
-      ];
+      context.signal?.throwIfAborted();
+      if (route.provider === "openai") this.checkBudget();
+      providerStarted = true;
       const result = await this.providers[route.provider].generate(
         route,
         input,
         credential,
-        AbortSignal.any(signals),
+        context.signal,
       );
-      const usage = result.usage;
-      if (
-        usage &&
-        [usage.inputTokens, usage.outputTokens, usage.cachedTokens].every(
-          (value) => Number.isFinite(value) && value >= 0,
-        ) &&
-        (usage.costUSD === undefined ||
-          (Number.isFinite(usage.costUSD) && usage.costUSD >= 0))
-      ) {
-        record.inputTokens = usage.inputTokens;
-        record.outputTokens = usage.outputTokens;
-        record.cachedTokens = usage.cachedTokens;
-        record.costUSD =
-          route.provider === "demo" || route.provider === "chatgpt"
-            ? 0
-            : (usage.costUSD ??
-              ((usage.inputTokens * route.inputPerMillion +
-                usage.outputTokens * route.outputPerMillion) /
-                1_000_000) *
-                tierMultiplier(result.serviceTier ?? route.serviceTier));
-        record.serviceTier = result.serviceTier ?? route.serviceTier;
-        record.estimated =
-          usage.costUSD === undefined && route.provider !== "demo";
-      }
+      outcome = result;
+      this.applyUsage(record, result, route);
+      context.signal?.throwIfAborted();
       record.status = "success";
       if (route.provider !== "demo")
         this.updateHealth({ state: "ready", checkedAt: this.now() });
@@ -400,8 +506,12 @@ export class AIService {
         requestId: result.requestId ?? record.id,
         inputTokens: record.inputTokens,
         outputTokens: record.outputTokens,
-        costUSD: record.costUSD,
+        costUSD: record.costStatus === "unknown" ? null : record.costUSD,
         estimated: record.estimated,
+        usageStatus: record.usageStatus,
+        costStatus: record.costStatus,
+        completion: result.completion,
+        latencyMs: this.now() - now,
         toolCalls: result.toolCalls.map((call) => call.name),
       });
       if (this.configuration.captureContent)
@@ -413,34 +523,134 @@ export class AIService {
         );
       return result;
     } catch (error) {
+      providerFailure = error;
+      if (error instanceof AIError) outcome = error.response;
       record.status = "failed";
+      if (!providerStarted) {
+        record.costStatus = "not-billed";
+        record.estimated = false;
+      }
+      if (error instanceof AIError && error.response)
+        this.applyUsage(record, error.response, route);
       if (
         route.provider !== "demo" &&
         error instanceof AIError &&
-        error.kind !== "response"
-      )
+        !["response", "cancelled", "context"].includes(error.kind)
+      ) {
+        this.validated = "";
+        this.validatedCredentials = {};
         this.updateHealth({ state: "error", message: error.message });
-      // An interrupted request may still be billed. Retain its reservation instead of falsely reporting zero.
+      }
+      // Missing provider usage remains explicitly unknown; it is never presented as a precise charge.
       this.event(context, "ai.failure", {
         role,
         requestId: record.id,
         error:
           error instanceof Error ? error.message : "Unknown provider failure",
-        reservedUSD: reserved,
-        ...(error instanceof AIError ? error.detail : {}),
+        costStatus: record.costStatus,
+        usageStatus: record.usageStatus,
+        costUSD: record.costStatus === "unknown" ? null : record.costUSD,
+        inputTokens:
+          record.usageStatus === "unknown" ? null : record.inputTokens,
+        outputTokens:
+          record.usageStatus === "unknown" ? null : record.outputTokens,
+        latencyMs: this.now() - now,
+        ...(error instanceof AIError
+          ? { kind: error.kind, ...error.detail }
+          : {}),
       });
       throw error;
     } finally {
       record.latencyMs = this.now() - now;
-      this.active--;
       try {
-        this.options.onUsage?.(structuredClone(record));
+        await this.options.onUsage?.(structuredClone(record));
+        this.unpersistedUsage.delete(record.id);
       } catch {
-        this.event(context, "ai.accounting.persist.failure", {
+        this.unpersistedUsage.add(record.id);
+        const detail = {
           requestId: record.id,
-        });
+          reason: "usage_persistence_failed",
+          ...(providerFailure instanceof AIError
+            ? {
+                providerFailureKind: providerFailure.kind,
+                providerFailureReason: providerFailure.detail.reason,
+              }
+            : {}),
+        };
+        this.event(context, "ai.accounting.persist.failure", detail);
+        throw new AIError(
+          "The AI request finished, but its usage could not be saved. Free some browser storage before retrying. The working application is safe.",
+          "accounting",
+          detail,
+          outcome
+            ? {
+                ...outcome,
+                completion: {
+                  status: outcome.completion?.status ?? "completed",
+                  reason: "usage_persistence_failed",
+                  recoverable: false,
+                },
+              }
+            : undefined,
+        );
+      } finally {
+        this.active--;
       }
     }
+  }
+  private applyUsage(
+    record: UsageRecord,
+    result: AIResponse,
+    route: ModelRoute,
+  ): void {
+    const usage = result.usage;
+    if (
+      !usage ||
+      ![
+        usage.inputTokens,
+        usage.outputTokens,
+        usage.cachedTokens,
+        usage.cacheWriteTokens ?? 0,
+      ].every((value) => Number.isFinite(value) && value >= 0) ||
+      usage.cachedTokens + (usage.cacheWriteTokens ?? 0) > usage.inputTokens ||
+      (usage.costUSD !== undefined &&
+        (!Number.isFinite(usage.costUSD) || usage.costUSD < 0))
+    )
+      return;
+    record.inputTokens = usage.inputTokens;
+    record.outputTokens = usage.outputTokens;
+    record.cachedTokens = usage.cachedTokens;
+    record.cacheWriteTokens = usage.cacheWriteTokens ?? 0;
+    record.usageStatus = "reported";
+    record.serviceTier = result.serviceTier ?? route.serviceTier;
+    const notBilled = route.provider === "demo" || route.provider === "chatgpt";
+    const longContext =
+      MODEL_CHOICES.some((model) => model.id === route.model) &&
+      usage.inputTokens > 272_000;
+    const inputRate = route.inputPerMillion * (longContext ? 2 : 1);
+    const cachedRate =
+      (route.cachedInputPerMillion ?? route.inputPerMillion) *
+      (longContext ? 2 : 1);
+    const writeRate =
+      (route.cacheWritePerMillion ?? route.inputPerMillion) *
+      (longContext ? 2 : 1);
+    const outputRate = route.outputPerMillion * (longContext ? 1.5 : 1);
+    record.costUSD = notBilled
+      ? 0
+      : (usage.costUSD ??
+        (((usage.inputTokens - usage.cachedTokens - record.cacheWriteTokens) *
+          inputRate +
+          usage.cachedTokens * cachedRate +
+          record.cacheWriteTokens * writeRate +
+          usage.outputTokens * outputRate) /
+          1_000_000) *
+          tierMultiplier(record.serviceTier));
+    record.costStatus = notBilled
+      ? "not-billed"
+      : usage.costUSD === undefined
+        ? "estimated"
+        : "reported";
+    record.estimated = record.costStatus === "estimated";
   }
   /** Probe actual configured models without committing credentials or routing on failure.
    * Probe requests share the durable accounting ledger and block competing requests.
@@ -449,29 +659,61 @@ export class AIService {
     config: AIConfig,
     credentials: ProviderCredentials,
     context: AIContext,
+    options: { force?: boolean } = {},
   ): Promise<void> {
+    context.signal?.throwIfAborted();
+    const identity = this.connectionIdentity(config);
+    const currentCredentials =
+      this.options.credentials?.() ?? this.validatedCredentials;
+    const checkingSavedConnection =
+      identity === this.connectionIdentity(this.configuration) &&
+      Object.entries(credentials).every(
+        ([key, value]) =>
+          currentCredentials[key as keyof ProviderCredentials] === value,
+      );
+    if (
+      !options.force &&
+      identity === this.validated &&
+      Object.keys(credentials).length ===
+        Object.keys(this.validatedCredentials).length &&
+      Object.entries(credentials).every(
+        ([key, value]) =>
+          this.validatedCredentials[key as keyof ProviderCredentials] === value,
+      )
+    ) {
+      this.updateHealth({ state: "ready", checkedAt: this.now() });
+      return;
+    }
     if (this.activeRequestCount || this.testingConfiguration)
       throw new Error(
         "Wait for the current AI request before changing the connection.",
       );
     checkConfig(config);
-    const candidate = structuredClone(config);
-    for (const route of Object.values(candidate.routes))
-      route.maxOutputTokens = 2048;
+    const candidate = normalizeAIConfig(config);
     const probe = new AIService(candidate, {
       providers: this.providers,
       credentials: () => credentials,
       beforeRequest: this.options.beforeRequest,
       log: this.options.log,
       now: this.now,
-      onUsage: (record) => {
+      onUsage: async (record) => {
         const index = this.records.findIndex((item) => item.id === record.id);
         if (index === -1) this.records.push(record);
         else this.records[index] = record;
-        this.options.onUsage?.(record);
+        try {
+          await this.options.onUsage?.(record);
+          this.unpersistedUsage.delete(record.id);
+        } catch (error) {
+          // A probe that never started must not leave a phantom pending charge in the parent ledger.
+          if (record.status === "pending")
+            this.records = this.records.filter((item) => item.id !== record.id);
+          else this.unpersistedUsage.add(record.id);
+          throw error;
+        }
       },
     });
     probe.importUsage(this.usage);
+    for (const id of this.unpersistedUsage) probe.unpersistedUsage.add(id);
     this.testingConfiguration = true;
     const prior = this.health;
     this.updateHealth({ state: "checking" });
@@ -551,11 +793,45 @@ export class AIService {
             "model",
           );
       }
-      this.validated = JSON.stringify(config.routes);
+      if (supportsDecisions(candidate.routes.decision)) {
+        const decision = await probe.decide(
+          {
+            input: "2 is greater than 1.",
+            questions: [
+              {
+                type: "predicate",
+                name: "connection_check",
+                instructions:
+                  "Is the statement true? This is an inert connection capability check.",
+              },
+            ],
+          },
+          context,
+        );
+        const answer = decision.answers[0];
+        if (
+          answer?.type !== "predicate" ||
+          answer.name !== "connection_check" ||
+          !Number.isFinite(answer.probability) ||
+          answer.probability < 0.5 ||
+          answer.probability > 1
+        )
+          throw new AIError(
+            "The connection could generate replies but could not make the requested bounded decision. Check the decision model access.",
+            "model",
+          );
+      }
+      context.signal?.throwIfAborted();
+      this.validated = identity;
+      this.validatedCredentials = { ...credentials };
       this.updateHealth({ state: "ready", checkedAt: this.now() });
     } catch (error) {
+      if (identity === this.validated) {
+        this.validated = "";
+        this.validatedCredentials = {};
+      }
       this.updateHealth(
-        prior.state === "ready"
+        prior.state === "ready" && !checkingSavedConnection
           ? prior
           : {
               state: "error",
@@ -568,6 +844,22 @@ export class AIService {
       this.testingConfiguration = false;
     }
   }
+  /** Detailed answers preserve uncertainty; callers, not this API, authorize actions. */
+  async decide(
+    input: DecisionInput,
+    context: AIContext,
+  ): Promise<DecisionResponse> {
+    const result = await this.generate(
+      "decision",
+      { messages: [], decisions: input },
+      context,
+    );
+    if (!result.answers)
+      throw new Error(
+        "The configured provider did not return bounded decisions.",
+      );
+    return result as DecisionResponse;
+  }
   async application(
     request: ApplicationAIRequest,
     context: AIContext,
@@ -575,7 +867,6 @@ export class AIService {
     if (
       !request ||
       typeof request.prompt !== "string" ||
-      request.prompt.length > 16_000 ||
       !["text", "decide", "choose", "score"].includes(request.method)
     )
       throw new Error("Invalid application AI request.");
@@ -594,29 +885,72 @@ export class AIService {
       if (
         !Array.isArray(request.options) ||
         request.options.length < 2 ||
-        request.options.length > 30 ||
-        request.options.some(
-          (option) => typeof option !== "string" || option.length > 200,
-        ) ||
+        request.options.some((option) => typeof option !== "string") ||
         new Set(request.options).size !== request.options.length
       )
-        throw new Error("Choose requires 2–30 distinct text options.");
+        throw new Error("Choose requires at least two distinct text options.");
       valueSchema = { type: "string", enum: request.options };
     } else {
       if (
         !Array.isArray(request.levels) ||
         request.levels.length < 2 ||
-        request.levels.length > 20 ||
-        request.levels.some(
-          (level) => typeof level !== "string" || level.length > 200,
-        )
+        request.levels.some((level) => typeof level !== "string")
       )
-        throw new Error("Score requires 2–20 named levels.");
+        throw new Error("Score requires at least two named levels.");
       valueSchema = {
         type: "number",
         minimum: 0,
         maximum: request.levels.length - 1,
       };
+    }
+    // Supported bounded judgments use Decisions. Larger cardinalities or other
+    // configured models keep the general structured-output contract via Responses.
+    if (
+      supportsDecisions(this.configuration.routes.decision) &&
+      (request.method !== "choose" || request.options!.length <= 255) &&
+      (request.method !== "score" || request.levels!.length <= 10)
+    ) {
+      const question =
+        request.method === "decide"
+          ? {
+              type: "predicate" as const,
+              name: "result",
+              instructions: request.prompt,
+            }
+          : request.method === "choose"
+            ? {
+                type: "choice" as const,
+                name: "result",
+                instructions: request.prompt,
+                choices: request.options!.map((value) => ({ value })),
+              }
+            : {
+                type: "score" as const,
+                name: "result",
+                instructions: request.prompt,
+                levels: request.levels!.map((label) => ({ label })),
+              };
+      const result = await this.decide(
+        {
+          input:
+            request.context === undefined
+              ? ""
+              : JSON.stringify(request.context),
+          questions: [question],
+        },
+        context,
+      );
+      const answer = result.answers[0]!;
+      if (answer.type === "refusal")
+        throw new Error(
+          "The AI could not make this decision. Try a different question.",
+        );
+      // Existing primitive API uses the most likely answer, never authorization
+      // for destructive platform changes. Internal callers can use decide() for
+      // the complete probabilities and choose their own evidence-based threshold.
+      if (answer.type === "predicate") return answer.probability >= 0.5;
+      if (answer.type === "choice") return answer.choice;
+      return answer.score;
     }
     const response = await this.generate(
       "application",

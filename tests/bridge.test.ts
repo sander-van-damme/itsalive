@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { MessageChannel } from "node:worker_threads";
 import {
   appOriginFor,
@@ -62,6 +62,32 @@ describe("authenticated bootstrap", () => {
 });
 
 describe("dedicated RPC channel", () => {
+  it("keeps provider requests pending beyond universal timeouts and rejects on app close", async () => {
+    vi.useFakeTimers();
+    const channel = new MessageChannel();
+    const app = new PortRPC(channel.port1 as unknown as MessagePort);
+    try {
+      let settled = false;
+      const request = app.request("ai", { prompt: "A complex task" }, null);
+      const outcome = request.then(
+        () => {
+          settled = true;
+        },
+        (error: Error) => {
+          settled = true;
+          return error;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(300_000);
+      expect(settled).toBe(false);
+      app.close("Application closed");
+      expect(await outcome).toMatchObject({ message: "Application closed" });
+    } finally {
+      app.close();
+      channel.port2.close();
+      vi.useRealTimers();
+    }
+  });
   it("correlates requests, propagates denied capabilities, and rejects pending calls on close", async () => {
     const channel = new MessageChannel();
     const shell = new PortRPC(

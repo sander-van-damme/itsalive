@@ -26,11 +26,11 @@ export class RequestQueue {
     priority: number,
     parent?: AbortSignal,
   ): Promise<T> {
-    const signal = AbortSignal.any([
-      AbortSignal.timeout(120_000),
-      ...(parent ? [parent] : []),
-    ]);
+    // Queueing is not a model deadline: a valid long task may hold a slot.
+    const signal = parent ?? new AbortController().signal;
     signal.throwIfAborted();
+    // A bounded pending queue protects the browser from generated-app request floods.
+    // It never limits a running model response or the number of calls in a coding task.
     if (this.waiting.length >= 128)
       throw new Error(
         "Too much work is waiting. Please let the current tasks finish.",

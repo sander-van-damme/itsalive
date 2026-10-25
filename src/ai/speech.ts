@@ -34,7 +34,6 @@ export class LiveVoice {
   private transcripts: Transcript[] = [];
   private delegated = new Set<string>();
   private lastDelegatedEnd = -1;
-  private transcriptBytes = 0;
   private creationAttempted = false;
   constructor(private readonly options: VoiceOptions) {}
   get active() {
@@ -127,10 +126,10 @@ export class LiveVoice {
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => ({}))) as {
-          error?: string;
+          error?: string | { message?: string };
         };
         throw new Error(
-          body.error ??
+          (typeof body.error === "string" ? body.error : body.error?.message) ??
             "Live voice could not connect. Check your OpenAI API key in Settings.",
         );
       }
@@ -222,9 +221,6 @@ export class LiveVoice {
             : Date.now() - this.startedAt,
       } as Transcript;
       this.transcripts.push(transcript);
-      this.transcriptBytes += event.delta.length;
-      while (this.transcriptBytes > 24000 && this.transcripts.length > 1)
-        this.transcriptBytes -= this.transcripts.shift()!.text.length;
       this.options.onTranscript(role, event.delta);
     } else if (
       event.type === "session.delegation.created" &&
@@ -234,14 +230,6 @@ export class LiveVoice {
       if (typeof id !== "string" || this.delegated.has(id) || this.closing)
         return;
       this.delegated.add(id);
-      if (this.delegated.size > 100) {
-        this.fail(
-          new Error(
-            "This voice session has completed many tasks. Start a new conversation to continue.",
-          ),
-        );
-        return;
-      }
       // Preserve the live dialogue so follow-ups such as “yes, add that” retain
       // their meaning. Already-delegated user fragments are context, never a new action.
       const cutoff =
@@ -288,8 +276,7 @@ export class LiveVoice {
       const text = current.content.trim();
       const history = turns
         .slice(0, currentIndex)
-        .slice(-8)
-        .map(({ role, content }) => ({ role, content: content.slice(-3000) }));
+        .map(({ role, content }) => ({ role, content }));
       void this.options
         .onDelegate(text, history)
         .then((result) => this.sendResult(id, result))
@@ -328,7 +315,7 @@ export class LiveVoice {
           type: "session.commentary.append",
           event_id: crypto.randomUUID(),
           delegation_id: id,
-          content: content.slice(0, 12000),
+          content,
         }),
       );
   }
