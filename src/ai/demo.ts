@@ -77,9 +77,14 @@ export class DemoProvider implements Provider {
         (result) => result.name === "write_file" && !result.value.error,
       );
       if (!wrote) {
-        const intent =
+        const request =
           input.messages.find((message) => message.role === "user")?.content ??
           "";
+        // The coding harness includes complete source after the authorized goal.
+        // Quoted project keys are not a request to rename the application.
+        const intent = request
+          .split("\nCurrent project (complete source):")[0]!
+          .replace(/^Authorized request: /, "");
         const source =
           (read.files as Record<string, string> | undefined)?.[path] ?? "";
         if (

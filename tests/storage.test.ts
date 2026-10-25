@@ -3,6 +3,7 @@ import { describe, it, expect } from "vitest";
 import { Repository, validateShellSnapshot } from "../src/storage/repository";
 import { encodeGraph, decodeGraph } from "../src/storage/codec";
 import type { AppRecord, Revision } from "../src/shared/types";
+import type { UsageRecord } from "../src/ai/types";
 const appId = "39bca62c-8c5d-4f4f-9b7f-181555ef7b1c";
 const revision = (id: string, parent: string | null = null): Revision => ({
   id,
@@ -31,6 +32,57 @@ async function repository(): Promise<Repository> {
   return repo;
 }
 describe("transactional source repository", () => {
+  it("merges concurrent tab usage and never overwrites settled charges with pending data", async () => {
+    const name = `usage-${crypto.randomUUID()}`;
+    const first = new Repository(name);
+    const second = new Repository(name);
+    const usage = (
+      id: string,
+      status: UsageRecord["status"],
+      costUSD: number,
+    ): UsageRecord => ({
+      id,
+      timestamp: Date.now(),
+      role: "application",
+      provider: "openai",
+      model: "gpt-6-luna",
+      appId,
+      correlationId: id,
+      inputTokens: status === "pending" ? 0 : 1000,
+      outputTokens: status === "pending" ? 0 : 200,
+      cachedTokens: 0,
+      costUSD,
+      costStatus: status === "pending" ? "unknown" : "estimated",
+      usageStatus: status === "pending" ? "unknown" : "reported",
+      estimated: true,
+      latencyMs: 20,
+      status,
+    });
+    try {
+      await Promise.all([
+        first.recordUsage(usage("one", "pending", 0)),
+        second.recordUsage(usage("two", "pending", 0)),
+      ]);
+      await Promise.all([
+        first.recordUsage(usage("one", "success", 0.1)),
+        second.recordUsage(usage("two", "failed", 0.2)),
+      ]);
+      await second.recordUsage(usage("one", "pending", 0));
+      const records = await first.getSetting<UsageRecord[]>("ai.usage");
+      expect(records).toHaveLength(2);
+      expect(records?.find((record) => record.id === "one")).toMatchObject({
+        status: "success",
+        costUSD: 0.1,
+      });
+      expect(records?.find((record) => record.id === "two")).toMatchObject({
+        status: "failed",
+        costUSD: 0.2,
+      });
+    } finally {
+      await first.close();
+      await second.close();
+    }
+  });
   it("allows exactly one concurrent candidate and keeps immutable revisions", async () => {
     const repo = await repository();
     const result = await Promise.allSettled([
@@ -191,5 +243,128 @@ describe("portable structured-clone codec", () => {
         nodes: [{ type: "Function", value: "alert(1)" }],
       }),
     ).toThrow();
+  });
+});
+
+import type { CodingCheckpoint } from "../src/ai/checkpoint";
+function checkpoint(): CodingCheckpoint {
+  return {
+    version: 1,
+    id: crypto.randomUUID(),
+    appId,
+    baseRevisionId: "first",
+    intent: "Build a violin trainer",
+    originalRequest: "I want to learn violin scales",
+    role: "coding-standard",
+    correlationId: "trace",
+    createdAt: Date.now(),
+    updatedAt: Date.now(),
+    project: revision("draft").project,
+    changedFiles: ["src/App.tsx"],
+    messages: [{ role: "user", content: "Private candidate context" }],
+    turns: 3,
+    toolCalls: 7,
+    finishRequested: false,
+    summary: "",
+    status: "paused",
+  };
+}
+describe("private recoverable candidate storage", () => {
+  it("persists across repository reload, never exports continuation, and atomically invalidates after commit", async () => {
+    const name = `draft-${crypto.randomUUID()}`;
+    let repo = new Repository(name);
+    await repo.createApp(app(), revision("first"));
+    const draft = checkpoint();
+    await repo.saveCodingCheckpoint(draft);
+    await repo.close();
+    repo = new Repository(name);
+    expect(await repo.getCodingCheckpoint(appId)).toEqual(draft);
+    expect(JSON.stringify(await repo.exportData())).not.toContain(
+      "Private candidate context",
+    );
+    expect((await repo.getApp(appId))?.currentRevision).toBe("first");
+    await repo.commitRevision(appId, "first", revision("complete", "first"));
+    expect(await repo.getCodingCheckpoint(appId)).toBeUndefined();
+    await expect(repo.saveCodingCheckpoint(draft)).rejects.toThrow(
+      "earlier application version",
+    );
+    await repo.close();
+  });
+
+  it("keeps drafts on failed commits and clears them only for their owning app or requested session", async () => {
+    const repo = await repository();
+    const draft = checkpoint();
+    await repo.saveCodingCheckpoint(draft);
+    await expect(
+      repo.commitRevision(appId, "wrong", revision("bad", "wrong")),
+    ).rejects.toThrow("Stale");
+    expect(await repo.getCodingCheckpoint(appId)).toEqual(draft);
+    await repo.clearCodingCheckpoint(appId, "another-session");
+    expect(await repo.getCodingCheckpoint(appId)).toEqual(draft);
+    await repo.deleteApp(appId);
+    expect(await repo.getCodingCheckpoint(appId)).toBeUndefined();
+    await repo.close();
+  });
+
+  it("discards private drafts when restoring a workspace and preserves concurrent name, state and revision updates", async () => {
+    const repo = await repository();
+    const saved = await repo.exportData();
+    await repo.saveCodingCheckpoint(checkpoint());
+    await repo.importData(saved);
+    expect(await repo.getCodingCheckpoint(appId)).toBeUndefined();
+    await Promise.all([
+      repo.renameApp(appId, "Violin Trainer"),
+      repo.updateState(appId, { practiced: 4 }),
+      repo.commitRevision(appId, "first", revision("next", "first")),
+    ]);
+    expect(await repo.getApp(appId)).toMatchObject({
+      name: "Violin Trainer",
+      state: { practiced: 4 },
+      currentRevision: "next",
+    });
+    await repo.close();
+  });
+
+  it("upgrades existing databases without losing source, state or settings", async () => {
+    const name = `legacy-${crypto.randomUUID()}`;
+    const legacy = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = indexedDB.open(name, 1);
+      request.onupgradeneeded = () => {
+        const db = request.result;
+        db.createObjectStore("apps", { keyPath: "id" });
+        db.createObjectStore("revisions", { keyPath: "id" });
+        db.createObjectStore("chat", { keyPath: "id" }).createIndex(
+          "appId",
+          "appId",
+        );
+        db.createObjectStore("diagnostics", { keyPath: "id" }).createIndex(
+          "timestamp",
+          "timestamp",
+        );
+        db.createObjectStore("settings", { keyPath: "key" });
+      };
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    await new Promise<void>((resolve, reject) => {
+      const tx = legacy.transaction(
+        ["apps", "revisions", "settings"],
+        "readwrite",
+      );
+      tx.objectStore("apps").put(app());
+      tx.objectStore("revisions").put(revision("first"));
+      tx.objectStore("settings").put({ key: "debug", value: true });
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(tx.error);
+    });
+    legacy.close();
+    const repo = new Repository(name);
+    expect((await repo.getApp(appId))?.state).toEqual({ count: 4 });
+    expect(await repo.getSetting("debug")).toBe(true);
+    await repo.saveCodingCheckpoint(checkpoint());
+    expect((await repo.getCodingCheckpoint(appId))?.baseRevisionId).toBe(
+      "first",
+    );
+    await repo.close();
   });
 });

@@ -32,7 +32,11 @@ export class Workspace {
   onBehavior = (_observation: BehaviorObservation) => {};
   onBackupProgress = (_progress: BackupProgress) => {};
   backupSummary = "";
-  onAI: (payload: unknown, appId: string) => Promise<unknown> = async () => {
+  onAI: (
+    payload: unknown,
+    appId: string,
+    signal?: AbortSignal,
+  ) => Promise<unknown> = async () => {
     throw new Error("AI is not configured");
   };
   private generation = 0;
@@ -47,7 +51,7 @@ export class Workspace {
   }
   constructor(private container: HTMLElement) {}
 
-  async createApp(name: string): Promise<AppRecord> {
+  async createApp(name: string, goal?: string): Promise<AppRecord> {
     this.assertAvailable();
     const id = crypto.randomUUID();
     const revision: Revision = {
@@ -56,7 +60,7 @@ export class Workspace {
       parent: null,
       createdAt: Date.now(),
       message: "Created application",
-      project: starterProject(name),
+      project: starterProject(name, goal),
     };
     const app: AppRecord = {
       id,
@@ -73,6 +77,14 @@ export class Workspace {
       { appId: id, revisionId: revision.id },
     );
     return app;
+  }
+
+  async renameApp(name: string) {
+    const appId = this.current?.id;
+    if (!appId) throw new Error("Open an application first");
+    await this.repo.renameApp(appId, name);
+    if (this.current?.id === appId) this.current.name = name.trim();
+    this.onChange();
   }
 
   async openApp(id: string) {
@@ -105,10 +117,14 @@ export class Workspace {
       mode: "app",
       state: app.state,
       observe: this.observe,
-      onRequest: async (method: string, payload: unknown) => {
+      onRequest: async (
+        method: string,
+        payload: unknown,
+        signal: AbortSignal,
+      ) => {
         if (method !== "ai")
           throw new Error(`Capability is not available: ${method}`);
-        return this.onAI(payload, id);
+        return this.onAI(payload, id, signal);
       },
       onEvent: (event: string, payload: unknown) => {
         if (event === "state" && !this.applying.has(id))
@@ -180,6 +196,7 @@ export class Workspace {
     artifact: BuildArtifact,
     trace: { appId?: string; correlationId?: string } = {},
   ): Promise<RuntimeInspection> {
+    const started = performance.now();
     const host = document.createElement("div");
     host.className = "verification-host";
     host.setAttribute("aria-hidden", "true");
@@ -206,10 +223,21 @@ export class Workspace {
         throw new Error(inspection.errors.join("\n"));
       await this.diagnostics.record(
         "candidate.verified",
-        { inspection },
+        {
+          passed: true,
+          errorCount: inspection.errors.length,
+          durationMs: performance.now() - started,
+        },
         { appId: this.current?.id, revisionId: artifact.revisionId, ...trace },
       );
       return inspection;
+    } catch (error) {
+      await this.diagnostics.record(
+        "candidate.verification.failed",
+        { passed: false, durationMs: performance.now() - started },
+        { appId: this.current?.id, revisionId: artifact.revisionId, ...trace },
+      );
+      throw error;
     } finally {
       if (candidate) {
         candidate.close();
@@ -282,12 +310,22 @@ export class Workspace {
             const build = prebuilt
               ? { ok: true as const, artifact: prebuilt, project }
               : await this.compiler.compile(project, revisionId);
-            if (!build.ok)
+            if (!build.ok) {
+              await this.diagnostics.record(
+                "compile.failed",
+                {
+                  compiled: false,
+                  diagnosticCount: build.diagnostics.length,
+                  diagnostics: build.diagnostics.map(({ file }) => ({ file })),
+                },
+                { appId, revisionId, correlationId },
+              );
               throw new Error(
                 build.diagnostics
                   .map((d) => `${d.file ?? ""}: ${d.message}`)
                   .join("\n"),
               );
+            }
             if (!stillActive())
               throw new Error("Application changed while compiling this edit");
             await this.diagnostics.record(

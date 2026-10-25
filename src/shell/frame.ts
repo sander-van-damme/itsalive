@@ -4,7 +4,6 @@ import {
   PortRPC,
   PROTOCOL_VERSION,
   type EventHandler,
-  type RequestHandler,
 } from "../shared/bridge";
 import type { Json, RuntimeMode } from "../shared/types";
 import { runtimeSource } from "./runtime-source.generated";
@@ -15,7 +14,11 @@ export interface MountFrameOptions {
   mode: RuntimeMode;
   state?: Record<string, Json>;
   observe?: boolean;
-  onRequest?: RequestHandler;
+  onRequest?: (
+    method: string,
+    payload: unknown,
+    signal: AbortSignal,
+  ) => unknown | Promise<unknown>;
   onEvent?: EventHandler;
   timeoutMs?: number;
 }
@@ -24,9 +27,11 @@ export class FrameSession {
   private constructor(
     readonly iframe: HTMLIFrameElement,
     private readonly rpc: PortRPC,
+    private readonly lifetime: AbortController,
   ) {}
 
   static mount(options: MountFrameOptions): Promise<FrameSession> {
+    const lifetime = new AbortController();
     const origin = appOriginFor(options.appId, location.origin);
     const iframe = document.createElement("iframe");
     iframe.title =
@@ -55,6 +60,7 @@ export class FrameSession {
         if (finished) return;
         finished = true;
         cleanup();
+        lifetime.abort();
         rpc?.close();
         iframe.remove();
         reject(error);
@@ -76,15 +82,23 @@ export class FrameSession {
         )
           return;
         const channel = new MessageChannel();
-        rpc = new PortRPC(channel.port1, options.onRequest, (name, payload) => {
-          if (name === "ready" && !finished) {
-            finished = true;
-            cleanup();
-            resolve(new FrameSession(iframe, rpc!));
-          }
-          if (name === "fatal" && !finished) fail(new Error(String(payload)));
-          options.onEvent?.(name, payload);
-        });
+        rpc = new PortRPC(
+          channel.port1,
+          (method, payload) => {
+            lifetime.signal.throwIfAborted();
+            if (!options.onRequest) throw new Error("Capability unavailable");
+            return options.onRequest(method, payload, lifetime.signal);
+          },
+          (name, payload) => {
+            if (name === "ready" && !finished) {
+              finished = true;
+              cleanup();
+              resolve(new FrameSession(iframe, rpc!, lifetime));
+            }
+            if (name === "fatal" && !finished) fail(new Error(String(payload)));
+            options.onEvent?.(name, payload);
+          },
+        );
         iframe.contentWindow!.postMessage(
           {
             kind: "itsalive:bootstrap",
@@ -116,6 +130,7 @@ export class FrameSession {
     return this.rpc.request<T>(method, payload, timeoutMs);
   }
   close(): void {
+    this.lifetime.abort();
     this.rpc.close();
     this.iframe.remove();
   }

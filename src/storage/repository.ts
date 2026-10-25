@@ -1,4 +1,6 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
+import type { CodingCheckpoint } from "../ai/checkpoint";
+import type { UsageRecord } from "../ai/types";
 import type {
   AppRecord,
   ChatMessage,
@@ -8,6 +10,7 @@ import type {
 } from "../shared/types";
 
 interface DatabaseSchema extends DBSchema {
+  codingDrafts: { key: string; value: CodingCheckpoint };
   apps: { key: string; value: AppRecord };
   revisions: { key: string; value: Revision };
   chat: { key: string; value: ChatMessage; indexes: { appId: string } };
@@ -188,19 +191,23 @@ export function validateShellSnapshot(snapshot: ShellSnapshot): void {
 export class Repository {
   private readonly database: Promise<IDBPDatabase<DatabaseSchema>>;
   constructor(name = "itsalive-v2") {
-    this.database = openDB<DatabaseSchema>(name, 1, {
-      upgrade(db) {
-        db.createObjectStore("apps", { keyPath: "id" });
-        db.createObjectStore("revisions", { keyPath: "id" });
-        db.createObjectStore("chat", { keyPath: "id" }).createIndex(
-          "appId",
-          "appId",
-        );
-        db.createObjectStore("diagnostics", { keyPath: "id" }).createIndex(
-          "timestamp",
-          "timestamp",
-        );
-        db.createObjectStore("settings", { keyPath: "key" });
+    this.database = openDB<DatabaseSchema>(name, 2, {
+      upgrade(db, oldVersion) {
+        if (oldVersion < 1) {
+          db.createObjectStore("apps", { keyPath: "id" });
+          db.createObjectStore("revisions", { keyPath: "id" });
+          db.createObjectStore("chat", { keyPath: "id" }).createIndex(
+            "appId",
+            "appId",
+          );
+          db.createObjectStore("diagnostics", { keyPath: "id" }).createIndex(
+            "timestamp",
+            "timestamp",
+          );
+          db.createObjectStore("settings", { keyPath: "key" });
+        }
+        if (oldVersion < 2)
+          db.createObjectStore("codingDrafts", { keyPath: "appId" });
       },
       blocking(_current, _blocked, event) {
         (event.target as IDBDatabase).close();
@@ -214,6 +221,70 @@ export class Repository {
   }
   async getApp(id: string): Promise<AppRecord | undefined> {
     return (await this.database).get("apps", id);
+  }
+  async renameApp(appId: string, name: string): Promise<void> {
+    if (!name.trim()) throw new Error("Enter an application name.");
+    const tx = (await this.database).transaction("apps", "readwrite");
+    const app = await tx.store.get(appId);
+    if (!app) throw new Error("Application no longer exists");
+    await tx.store.put({ ...app, name: name.trim() });
+    await tx.done;
+  }
+  async getCodingCheckpoint(
+    appId: string,
+  ): Promise<CodingCheckpoint | undefined> {
+    return (await this.database).get("codingDrafts", appId);
+  }
+  async saveCodingCheckpoint(checkpoint: CodingCheckpoint): Promise<void> {
+    if (checkpoint.version !== 1 || !checkpoint.id || !checkpoint.intent.trim())
+      throw new Error("Invalid coding checkpoint");
+    validateRevision({
+      id: checkpoint.id,
+      appId: checkpoint.appId,
+      parent: checkpoint.baseRevisionId,
+      createdAt: checkpoint.createdAt,
+      message: checkpoint.intent,
+      project: checkpoint.project,
+    });
+    const tx = (await this.database).transaction(
+      ["apps", "codingDrafts"],
+      "readwrite",
+    );
+    try {
+      const app = await tx.objectStore("apps").get(checkpoint.appId);
+      if (!app || app.currentRevision !== checkpoint.baseRevisionId)
+        throw new Error(
+          "This draft belongs to an earlier application version.",
+        );
+      const previous = await tx
+        .objectStore("codingDrafts")
+        .get(checkpoint.appId);
+      if (
+        previous &&
+        previous.id !== checkpoint.id &&
+        previous.createdAt >= checkpoint.createdAt
+      )
+        throw new Error("A newer coding draft already exists.");
+      await tx.objectStore("codingDrafts").put(checkpoint);
+      await tx.done;
+    } catch (error) {
+      try {
+        tx.abort();
+      } catch {
+        /* completed */
+      }
+      void tx.done.catch(() => undefined);
+      throw error;
+    }
+  }
+  async clearCodingCheckpoint(
+    appId: string,
+    checkpointId: string,
+  ): Promise<void> {
+    const tx = (await this.database).transaction("codingDrafts", "readwrite");
+    if ((await tx.store.get(appId))?.id === checkpointId)
+      await tx.store.delete(appId);
+    await tx.done;
   }
   async createApp(app: AppRecord, revision: Revision): Promise<void> {
     validateApp(app);
@@ -298,7 +369,10 @@ export class Repository {
   ): Promise<void> {
     validateRevision(revision);
     const db = await this.database;
-    const tx = db.transaction(["apps", "revisions"], "readwrite");
+    const tx = db.transaction(
+      ["apps", "revisions", "codingDrafts"],
+      "readwrite",
+    );
     try {
       const app = await tx.objectStore("apps").get(appId);
       if (
@@ -316,6 +390,7 @@ export class Repository {
       await tx
         .objectStore("apps")
         .put({ ...app, currentRevision: revision.id });
+      await tx.objectStore("codingDrafts").delete(appId);
       await tx.done;
     } catch (error) {
       try {
@@ -329,8 +404,12 @@ export class Repository {
   }
   async deleteApp(id: string): Promise<void> {
     const db = await this.database;
-    const tx = db.transaction(["apps", "chat", "revisions"], "readwrite");
+    const tx = db.transaction(
+      ["apps", "chat", "revisions", "codingDrafts"],
+      "readwrite",
+    );
     await tx.objectStore("apps").delete(id);
+    await tx.objectStore("codingDrafts").delete(id);
     for (const key of await tx
       .objectStore("chat")
       .index("appId")
@@ -380,6 +459,24 @@ export class Repository {
       );
     await (await this.database).put("settings", { key, value });
   }
+  /** Merge one request atomically so separate tabs cannot overwrite each other's ledger. */
+  async recordUsage(record: UsageRecord): Promise<void> {
+    const tx = (await this.database).transaction("settings", "readwrite");
+    const stored = await tx.store.get("ai.usage");
+    const records: UsageRecord[] = Array.isArray(stored?.value)
+      ? stored.value
+      : [];
+    const index = records.findIndex((entry) => entry.id === record.id);
+    // A delayed pending write must never erase a settled usage result.
+    if (index < 0) records.push(record);
+    else if (
+      record.status !== "pending" ||
+      records[index]!.status === "pending"
+    )
+      records[index] = record;
+    await tx.store.put({ key: "ai.usage", value: records });
+    await tx.done;
+  }
   async exportData(): Promise<ShellSnapshot> {
     const db = await this.database;
     const tx = db.transaction([
@@ -414,7 +511,7 @@ export class Repository {
     validateShellSnapshot(snapshot);
     const db = await this.database;
     const tx = db.transaction(
-      ["apps", "revisions", "chat", "diagnostics", "settings"],
+      ["apps", "revisions", "chat", "diagnostics", "settings", "codingDrafts"],
       "readwrite",
     );
     for (const name of [
@@ -423,6 +520,7 @@ export class Repository {
       "chat",
       "diagnostics",
       "settings",
+      "codingDrafts",
     ] as const)
       await tx.objectStore(name).clear();
     for (const app of snapshot.apps) await tx.objectStore("apps").put(app);
