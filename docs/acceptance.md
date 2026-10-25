@@ -20,6 +20,10 @@ Desktop and mobile captures are saved under `work/screenshots/` for visual revie
 
 ## Technical invariants
 
+`e2e/generation-reliability.spec.ts` reconstructs the real incomplete-response failure through HTTP fixtures. It covers completed candidate writes before `max_output_tokens`, compilation failure distinguished from successful check-handler execution, transport failure and reload recovery, cancellation/resumption, exact connection-check reuse, automatic versus explicit names, responsive preference saves during coding, mobile/reduced-motion behavior and cancellation of app AI requests when their frame closes. The compiler, disposable origins, ledger, checkpoints and revision commits are real browser implementations.
+
+Capacity/accounting unit tests exercise contexts beyond the former character/message ceilings, long output, obsolete V3 caps, productive work beyond 12 turns/36 calls, genuine context errors, tool replay, incomplete/failed usage, cached-token prices, concurrent threshold crossings, disabled spending limits and unknown charges. Provider metadata and DEBUG diagnostics must remain content-free.
+
 `e2e/platform.spec.ts` installs an explicit counter fixture for architectural tests. It is never the product starter. Its coverage retains:
 
 - multi-file compilation, scoped source updates, compatible hook and durable state, reload and rollback;
@@ -38,6 +42,8 @@ Desktop and mobile captures are saved under `work/screenshots/` for visual revie
 `npm run test:production` builds both sites, serves their static assets and uses the same deterministic HTTP replay through the normal UI. It checks initial setup and request resumption, goal generation, conversational modification, hidden source tools, same app frame, transient and durable state retention, reload, and absence of development hooks and uncaught browser errors.
 
 ## Evidence boundaries
+
+`npm run test:live -- --live` is the separate real OpenAI creation/interaction/update test. It requires `OPENAI_API_KEY`, uses no output-token caps, and must report unavailable credentials as unverified. `node scripts/benchmark-decisions.mjs --live` similarly requires a real key to compare endpoint latency and after-request usage. CI exercises deterministic provider fixtures without credentials; a green CI run is not live-provider acceptance.
 
 Deterministic replay verifies integration and outcomes for specified responses, not external model quality, live credentials, current model availability or real cost. Connection setup probes structured output and required function calls for each distinct configured model/reasoning/speed combination. Unit tests exercise SSE completion, late stream errors, encrypted reasoning continuation, queue priority/cancellation, accounting, same-origin forwarding and local OAuth state/PKCE/identity/token isolation. WebRTC media and events are simulated; real microphone quality and provider access are unverified. Local static production smoke does not establish deployed DNS/TLS or hosted behavior. See [REVIEW_IMPLEMENTATION.md](REVIEW_IMPLEMENTATION.md) for this iteration’s results and remaining limits.
 

@@ -4,7 +4,7 @@ The shell owns AI policy, credentials, usage, conversation and the bounded appli
 
 ## Connections and models
 
-First run is disconnected. Setup preserves the pending request and checks structured output and function-call support for every distinct text model/reasoning/speed combination. A failed setup retains the draft and existing working configuration. The badge distinguishes unchecked, checking, ready and failed connections; having a key alone never establishes readiness. Success is historical, not a promise of continuous availability.
+First run is disconnected. A dedicated setup dialog preserves the pending request and checks structured output and function-call support for every distinct text model/reasoning/speed combination. A failed setup retains the draft and existing working configuration. Successful validation is reused only for the exact connection configuration and credentials, compared privately in memory. Debug, usage and interface preferences do not require connection probes. Healthy connections have no persistent badge; unchecked or failed connections remain actionable. Success is historical, not a promise of continuous availability.
 
 Only OpenAI API-key and eligible ChatGPT-plan access are offered. OpenRouter has been removed. Compatible-looking APIs are not assumed to implement Responses tools, reasoning, service tiers, OAuth or live voice identically. Future providers need explicit capability tests, not merely a URL substitution.
 
@@ -23,7 +23,15 @@ Standard/Faster/Fastest changes service priority without reducing reasoning qual
 
 Browser requests go to same-origin `/api/ai/responses`, forwarded to `https://api.openai.com/v1/responses` using the caller's key. The Vite development middleware and Cloudflare root Worker implement this boundary. There is no shared server key, custom endpoint input or provider-key exposure to app origins. Keys are retained in shell browser storage and excluded from backups. The server forwards them transiently and does not store or log them.
 
-Responses requests use developer messages, JSON-schema output, function tools and `store:false, stream:true`. Read SSE through `response.completed`; late failures, incomplete responses and interrupted streams are errors. Preserve model output items, including encrypted reasoning and tool namespaces, across stateless tool rounds. Completed assistant output is displayed after validation; token-by-token text rendering is not implemented.
+Responses requests use developer messages, JSON-schema output, function tools and `store:false, stream:true`. They omit `max_output_tokens` and disable silent provider truncation. Old V3 output allowances are removed when configuration is loaded. Read SSE through a terminal event; distinguish completion, incomplete output, failures, cancellation and transport interruption. Preserve model output items, including encrypted reasoning and tool namespaces, across stateless tool rounds. Only complete, parsed tool operations can execute. Completed assistant output is displayed after validation; token-by-token text rendering is not implemented.
+
+There are no application token budgets, serialized-request size ceilings, fixed conversation windows or source/tool content truncation. Provider generation has no universal application timeout. A genuine context-capacity error can trigger explicit reconstruction of the coding context from the full current candidate, original goal and operation receipts, while retaining the old continuation in the private checkpoint. If the required source still cannot fit, preserve the draft and report the provider obstacle; never silently discard source to fit an invented allowance.
+
+## Bounded decisions
+
+OpenAI Luna `decide`, `choose` and `score` use the dedicated same-origin `/api/ai/decisions` proxy to `POST /v1/decisions`. Validate question identity, supported types, probabilities, option membership and score distributions. The detailed service API preserves probabilities/confidence; the existing application primitive API returns a Boolean, option or numeric score. These judgments never authorize structural platform changes. Arbitrary JSON generation, conversational intent and free-form behavior suggestions continue through Responses.
+
+The documented Decisions schema permits 1–400 questions, 2–255 choices and 2–10 scoring levels. These are actual provider requirements. Other configured models or larger application choice/score sets use structured Responses. Do not retry a failed Decisions request through Responses automatically: this could conceal an access problem or duplicate billing. Decisions uses its separate input-only pricing and does not accept Responses' output, reasoning or service-tier parameters.
 
 ## ChatGPT plan connection
 
@@ -37,9 +45,13 @@ Plan usage is separate from API spending and never silently falls back to a bill
 
 ## Spending and scheduling
 
-The optional monthly API spending limit starts disabled. When enabled, estimate/reserve cost before requests and settle from returned usage. UTC month boundaries apply to this browser's ledger. Cached-token discounts are not assumed. Failed or interrupted requests retain conservative reservations because billing is uncertain. ChatGPT-plan tokens are recorded separately at zero API cost. Voice reserves its 15-second initialization minimum, tracks elapsed usage and settles graceful-close usage at the listed $0.05/minute rate.
+The optional monthly API spending limit starts disabled. Record a pending request with unknown cost, then settle from actual provider usage, including usage returned with incomplete or failed responses. Reported token counts are distinct from monetary estimates computed using model pricing, cache read/write prices and the served tier. A provider-reported charge remains distinct from an estimate. Missing usage stays unknown rather than a precise zero charge. There are no output reservations or invented future token estimates. UTC month boundaries apply to this browser's ledger. ChatGPT-plan usage is separate from API spending. Voice uses observed duration and graceful-close provider usage, with its documented initialization minimum and duration pricing explicitly marked as estimates where unconfirmed.
 
-Normal bursts queue rather than failing at two concurrent requests. Internal safeguards allow eight active calls, at most 30 starts/second, a corresponding 1,800/minute ceiling, 128 waiting calls and a two-minute queue timeout. Conversation has priority over queued background work. Coding remains bounded at 12 turns/36 calls; concurrent app edits queue and recheck the target app before execution. These settings have no user-facing rate controls.
+Before each billable request starts, compare completed recorded spending with the enabled threshold. A request may cross it; already running concurrent requests may add more. Do not abort or truncate a response to enforce a token allowance. Unknown charges are displayed separately and cannot be counted as known spending.
+
+Await the pending ledger write before sending a billable request, and await settlement before returning its result. Storage failures pause new work and retain the reported usage in memory for a persistence retry; a reload after lost settlement retains the durable unknown-cost marker. Merge individual request records atomically so concurrent tabs cannot overwrite each other's charges. In-memory tab totals can still lag other tabs, and this is not an account-wide hard cap.
+
+Normal bursts queue rather than failing at two concurrent requests. Internal scheduling allows eight active calls, at most 30 starts/second, a corresponding 1,800/minute pacing rate, and 128 waiting calls to protect against generated-app request floods. Queueing does not impose a model deadline. Conversation has priority over queued background work. Coding has no fixed turn/tool ceiling: repeated identical operations against the same source provide evidence of a non-progressing loop. Concurrent app edits queue and recheck the target app before execution. These settings have no user-facing rate controls.
 
 The ledger is a browser estimate, not an account-wide financial guarantee: parallel tabs, cleared storage, unknown usage, provider prices and external calls can differ. Use provider-side controls for a hard account boundary. Do not report uncertain spending as free.
 
@@ -49,7 +61,15 @@ Voice uses `/api/voice/sessions` to start GPT-Live 1 with WebRTC and `delegation
 
 Client delegations use accumulated user transcripts and enter the same intent, authorization and compile/verify/commit workflow as typed input. The live conversation remains available during work. Results return through `session.commentary.append`, never invented from task-start status. A second requested edit waits for the previous edit. Destructive changes still require their specific confirmation.
 
-**Spoken replies** controls actual playback muting; captions remain visible. Muting does not stop audio generation or billing. **Mute microphone** suspends audio input; **End conversation** requests graceful close, waits for final usage with a bounded timeout and releases media. Unconfirmed usage remains estimated. Startup history is bounded; raw microphone recordings are not stored. The implementation does not add cross-reload persistence of every live transcript fragment.
+**Spoken replies** controls actual playback muting; captions remain visible. Muting does not stop audio generation or billing. **Mute microphone** suspends audio input; **End conversation** requests graceful close, waits for final usage with a bounded timeout and releases media. Unconfirmed usage remains estimated. Startup history and delegated transcript context are preserved without arbitrary clipping; raw microphone recordings are not stored. The implementation does not add cross-reload persistence of every live transcript fragment.
+
+## Draft recovery and remaining technical bounds
+
+Private IndexedDB checkpoints retain the original goal, candidate source, base revision, continuation, operation receipts and pending tool cursor. They survive reload and are excluded from diagnostic exports and portable backups. Save each operation's source and receipt together. Explicit retries resume only against the same base revision; successful commits invalidate the checkpoint atomically. Recheck candidates after reload, and require an explicit completion declaration plus deterministic compilation/runtime verification before commit. An unchanged verified artifact may be reused within one run; a passed compile alone never commits a candidate.
+
+Recovery preserves completed operations from supported incomplete responses without executing truncated arguments. Call IDs prevent replaying successful non-idempotent patches. Repeated incomplete responses without progress pause visibly instead of looping. Transport interruption and cancellation preserve the last durable operation; they do not pretend unreceived output or usage is known.
+
+Security and actual implementation constraints remain separate from model capacity: canonical relative paths, fixed-origin authentication, bridge request saturation, dependency integrity/exact versions, the bootstrap runtime-envelope bound, dependency-download memory bounds and the in-memory backup limit. Compilation workers and browser handshake/media setup retain technical timeouts. These protect browser execution and storage; they are not token controls on model input or output.
 
 Helpful suggestions are ordinary conversational behavior. They are dismissible and do not authorize unsolicited changes. Removing the old preference does not enable passive tracking: repeated-click observation remains disabled in ordinary use, with its internal adapter covered by regression tests.
 
@@ -59,11 +79,17 @@ Settings → Help and diagnostics has one Debug logging switch and Download diag
 
 Deterministic tests exercise actual routing and application tooling using HTTP/media fixtures. They establish protocol and workflow behavior, not model quality, eligibility, microphone performance, actual latency or billed cost. No real provider credentials were available during this implementation.
 
-For an explicitly authorized live text probe, set `OPENAI_API_KEY` securely and run `npm run test:live -- --live --provider=openai`. It checks text, structured decisions and an inert function tool using Luna, sends at most three requests and defaults to a $0.01 estimated cap (maximum allowed $0.10). Never pass keys on the command line. This is separate from live voice or account sign-in validation.
+For the opt-in real-provider browser journey, set `OPENAI_API_KEY` securely and run `npm run test:live -- --live --provider=openai`. It checks the actual connection, requests a small violin practice app through the normal interface, runs the real coding/compile/verify/commit pipeline, exercises durable practice state, requests a reset feature, verifies the update and reloads. There are no output-token ceilings or default spending caps. Optional `--budget=<USD>` prevents subsequent requests after recorded spending reaches the threshold; it cannot cap in-flight charges. Timings, reported usage and accounting states are written to `work/live-provider-results.json` after success. Credential input is not traced, filmed or screenshotted. Never pass keys on the command line. This does not validate a physical microphone or ChatGPT-plan sign-in.
 
-## Official references checked on 2026-10-22
+`node scripts/benchmark-decisions.mjs --live --samples=3` compares the real Decisions and structured Responses endpoints on the same bounded judgment, alternating their order and recording actual usage and latency. Without a securely supplied key it explicitly skips. Deterministic fixtures cannot establish a Decisions speed or cost advantage.
+
+## References
+
+Responses, Decisions and pricing were checked again on 2026-10-25. Account and voice references below were originally checked during the 2026-10-22 implementation.
 
 - [Responses function calling](https://developers.openai.com/api/docs/guides/function-calling) and [reasoning continuation](https://developers.openai.com/api/docs/guides/reasoning)
+- [Decisions guide](https://developers.openai.com/api/docs/guides/decisions) and [create reference](https://developers.openai.com/api/reference/resources/decisions/methods/create)
+- [TypeSafe's System One and Jev reference](https://typesafe.ai/blog/introducing-system-one-models-and-jev): typed probabilistic judgments informed the separation of decisions from generation; no additional provider or account is required.
 - [Pricing](https://developers.openai.com/api/docs/pricing), [Fast mode](https://developers.openai.com/api/docs/guides/fast-mode) and [Ultrafast mode](https://developers.openai.com/api/docs/guides/ultrafast-mode)
 - [Sign in with ChatGPT](https://developers.openai.com/siwc/token-sharing-open-source), [sign-in protocol](https://developers.openai.com/siwc/token-sharing-open-source/sign-in), [models and inference](https://developers.openai.com/siwc/token-sharing-open-source/models-and-inference), [preview limitations](https://developers.openai.com/siwc/token-sharing-open-source/preview-limitations) and [session lifecycle](https://developers.openai.com/siwc/token-sharing-open-source/profiles-and-sessions)
 - [Live WebRTC](https://developers.openai.com/api/docs/guides/voice-webrtc?api=live), [Live conversations](https://developers.openai.com/api/docs/guides/live-conversations) and [client delegation](https://developers.openai.com/api/docs/guides/live-delegation)

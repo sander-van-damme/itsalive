@@ -17,6 +17,18 @@ Read [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md) before architectural or in
 
 The product is beta. Prefer clean current contracts over V1 compatibility layers or data migrations. V1 is preserved on `archive/v1`; do not rewrite its history or merge V2 to main without the owner's instruction.
 
+## AI capacity and resource policy
+
+- Do not impose arbitrary limits on model input tokens, output tokens, usable context, conversation length, or source/tool content. Allow the selected model to use its actual capabilities.
+- Omit `max_output_tokens` when the provider permits omission. Never substitute a small fixed allowance or reduce reasoning to fit one. Obsolete stored configuration must not reactivate a cap.
+- Keep cost control separate from model capacity. Record provider-reported usage after every request, including incomplete and failed responses when usage is available. Monetary estimates and unknown usage must remain distinguishable from reported charges.
+- Spending limits are optional and disabled by default. They may prevent starting additional requests once recorded spending reaches the threshold; they do not truncate requests already running or guarantee a hard financial cap.
+- Preserve recoverable candidate work, the original goal, tool results and continuation state. Retry useful progress safely instead of repeating expensive successful work. Never apply an unverified candidate.
+- A legitimate application-generation request must not fail solely because of an arbitrary turn or tool-call ceiling. Stop on completion, cancellation, a genuine obstacle, the spending policy, or demonstrated lack of progress.
+- Retain only documented provider constraints and justified technical/security protections. Do not disguise a token budget as input validation or silently discard context.
+- **A successful provider connection is not sufficient. Validate the complete real-provider creation, verification, commit, interaction and update workflow when securely supplied credentials are available. Clearly report when it remains unverified.**
+- **Long-running operations must report truthful, user-relevant progress**, remain cancellable, and keep the last working application safe. Diagnostics distinguish successful tool execution from successful compilation and runtime verification.
+
 ## Boundaries
 
 - `src/app` is only the permanent wildcard bootstrap: immutable UUID, exact parent origin/source, versioned envelope, one transferred MessagePort, execution of shell-supplied runtime. Everything else belongs to the shell build.

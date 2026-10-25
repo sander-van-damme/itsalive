@@ -1,5 +1,7 @@
 # Owner review implementation — 22 October 2026
 
+This is a historical report. The 25 October recovery changes supersede its token limits, reservation accounting, small agent ceilings, first-run settings flow and limited live probe. Current contracts are in [providers.md](providers.md), [PRODUCT_VISION.md](PRODUCT_VISION.md) and [acceptance.md](acceptance.md); [MILESTONES.md](MILESTONES.md) records the recovery scope and evidence boundary.
+
 The approved redesign is implemented in this repository. It replaces the developer-oriented controls and legacy AI integration with OpenAI Responses, eligible local ChatGPT-plan access, four model categories, automatic task routing, live voice and simpler settings. The existing compile/verify/commit safeguards, isolated app origins and full backups remain in place.
 
 This is an implemented and locally validated change, not a claim that the deployed application or a real provider account has been verified. No API credentials were available during validation. The owner authorized committing the implementation to main and pushing to the remote on 23 October 2026; deployment verification remains outstanding. Validation base: `37e0a11`; application version: `2.0.0-beta.2`.

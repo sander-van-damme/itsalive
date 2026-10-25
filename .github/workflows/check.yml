@@ -1,7 +1,7 @@
 name: V2 checks
 on:
   push:
-    branches: [v2/browser-native]
+    branches: [main, v2/browser-native, "fix/**", "feature/**"]
   pull_request:
 jobs:
   verify:

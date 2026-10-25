@@ -39,3 +39,20 @@ Validation and reviewed screenshot evidence are recorded in [PRODUCT_RECOVERY.md
 - [ ] Deploy and verify the root Worker/assets through the normal release process.
 
 See [REVIEW_IMPLEMENTATION.md](REVIEW_IMPLEMENTATION.md) for the requirement mapping and exact evidence boundaries.
+
+## Real-world failure recovery — 2026-10-25
+
+- [x] Remove application token/input/workflow caps and obsolete stored output allowances; preserve selected model reasoning.
+- [x] Replace reservations with reported usage and explicitly estimated/unknown costs, cached-token pricing and optional after-request spending thresholds.
+- [x] Persist private candidate checkpoints, safe continuation/operation receipts and original goals; resume after interruption without overwriting working revisions.
+- [x] Distinguish actual compilation/runtime-check results from successful tool execution; add correlation, timing, recovery and privacy-safe DEBUG evidence.
+- [x] Separate onboarding from Settings; reuse exact validation on Save; add naming, real progress, cancellation, retry, keyboard behavior and concise connection/menu controls.
+- [x] Use OpenAI Decisions for supported bounded judgments and retain Responses for text, tools and arbitrary structured generation.
+- [x] Add realistic incomplete-output, reload, cancellation, long-context, accounting and actual Chromium regression coverage.
+- [x] Extend CI to main and development branches; preserve pull-request checks.
+- [ ] Complete real-provider creation/update and Decisions latency/cost comparison with securely supplied credentials. Both opt-in commands were attempted; this environment has no `OPENAI_API_KEY`.
+- [ ] Verify the deployed site, real Windows Chrome and physical voice devices through the release process.
+
+The matched deterministic violin workflow used Node 24.19.0 and Chromium 141 on Linux at 1440×900. Baseline/after request counts were 18/13 (the latter includes a new Decisions capability probe); unchanged Save repeated 6/0 probes. Connection plus creation took 1176/1155 ms, which establishes no meaningful latency improvement. These fixtures measure local integration overhead, not OpenAI latency or actual billed cost. [providers.md](providers.md) defines the new contracts and [acceptance.md](acceptance.md) describes executable coverage.
+
+Validation completed: `npm ci`, `npm run typecheck`, `npm test` (157 tests across 18 files), `npm run build`, `npm run test:e2e` (39 passed, opt-in live-provider/live-CDN cases skipped), `npm run test:production`, `npm run benchmark` (3 passed), and `git diff --check`. `npx playwright install --with-deps chromium` could not elevate to install OS packages; `npx playwright install chromium` succeeded and Chromium ran with the existing libraries. The root bundle-size advisory remains. Real-provider commands were attempted and explicitly reported the missing key. Before/after screenshots were captured and inspected in ignored `work/screenshots/before/` and `work/screenshots/after/`; paired workflow measurements are in `work/workflow-latency-before.json` and `work/workflow-latency-after.json`.
