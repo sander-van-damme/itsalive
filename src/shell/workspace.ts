@@ -5,13 +5,17 @@ import type {
   Revision,
   RuntimeInspection,
   BehaviorObservation,
+  WorkActivity,
+  WorkActivityResult,
 } from "../shared/types";
+import { failureEvidence } from "../shared/errors";
 import { BrowserCompiler } from "../compiler";
 import { Repository } from "../storage/repository";
 import {
   exportBackup,
   restoreBackup,
   inspectBackup,
+  summarizeBackup,
   type BackupProgress,
 } from "../storage/backup";
 import { FrameSession } from "./frame";
@@ -29,9 +33,12 @@ export class Workspace {
   observe = false;
   onChange = () => {};
   onStatus = (_message: string) => {};
+  onWarning = (_message: string) => {};
+  onApplying = (_appId: string, _active: boolean) => {};
   onBehavior = (_observation: BehaviorObservation) => {};
   onBackupProgress = (_progress: BackupProgress) => {};
   backupSummary = "";
+  backupDetails: string[] = [];
   onAI: (
     payload: unknown,
     appId: string,
@@ -44,6 +51,18 @@ export class Workspace {
   private applying = new Set<string>();
   private backupBusy = false;
   private activeEdits = 0;
+  /** Keep recent app runtimes mounted for transient React/task continuity. Four
+   * frames bounds WebGL/audio/DOM resources; older apps retain durable state. */
+  private readonly mountedApps = new Map<
+    string,
+    {
+      app: AppRecord;
+      revision: Revision;
+      artifact: BuildArtifact;
+      frame: FrameSession;
+    }
+  >();
+  private readonly runtimeOperations = new Map<string, string>();
   onRestored: () => Promise<void> = async () => {};
   beforeBackup: () => Promise<void> = async () => {};
   get isBackingUp() {
@@ -97,26 +116,38 @@ export class Workspace {
     this.onStatus("Opening your application…");
     await this.flushState();
     if (generation !== this.generation) return;
-    this.frame?.close();
-    this.frame = null;
+    this.rememberActive();
     const app = await this.repo.getApp(id);
     if (!app) throw new Error("Application not found");
     const revision = await this.repo.getRevision(app.currentRevision);
     if (!revision) throw new Error("Application revision is missing");
+    const cached = this.mountedApps.get(id);
+    if (cached && cached.revision.id === revision.id) {
+      if (generation !== this.generation) return;
+      if (this.frame !== cached.frame) this.frame?.setVisible?.(false);
+      this.current = { ...app, state: cached.app.state };
+      this.revision = cached.revision;
+      this.artifact = cached.artifact;
+      this.frame = cached.frame;
+      cached.frame.setVisible?.(true);
+      this.mountedApps.delete(id);
+      this.mountedApps.set(id, { ...cached, app: this.current });
+      localStorage.setItem("itsalive.lastApp", id);
+      this.onStatus("Ready");
+      this.onChange();
+      return;
+    }
     const build = await this.compiler.compile(revision.project, revision.id);
     if (!build.ok)
       throw new Error(build.diagnostics.map((d) => d.message).join("\n"));
     if (generation !== this.generation) return;
-    this.current = app;
-    this.revision = revision;
-    this.artifact = build.artifact;
-    this.container.replaceChildren();
     const frame = await FrameSession.mount({
       appId: id,
       container: this.container,
       mode: "app",
       state: app.state,
       observe: this.observe,
+      visible: false,
       onRequest: async (
         method: string,
         payload: unknown,
@@ -129,7 +160,7 @@ export class Workspace {
       onEvent: (event: string, payload: unknown) => {
         if (event === "state" && !this.applying.has(id))
           this.persistState(id, payload);
-        if (event === "behavior" && this.observe)
+        if (event === "behavior" && this.observe && this.current?.id === id)
           this.onBehavior(payload as BehaviorObservation);
         if (
           event === "diagnostic" ||
@@ -138,7 +169,8 @@ export class Workspace {
         )
           void this.diagnostics.record(`runtime.${event}`, payload, {
             appId: id,
-            revisionId: this.revision?.id,
+            revisionId: this.mountedApps.get(id)?.revision.id ?? revision.id,
+            correlationId: this.runtimeOperations.get(id),
           });
       },
     });
@@ -146,11 +178,76 @@ export class Workspace {
       frame.close();
       return;
     }
+    try {
+      await frame.request("apply", build.artifact);
+    } catch (error) {
+      frame.close();
+      throw error;
+    }
+    if (generation !== this.generation) {
+      frame.close();
+      return;
+    }
+    this.frame?.setVisible?.(false);
+    if (cached) cached.frame.close();
+    this.current = app;
+    this.revision = revision;
+    this.artifact = build.artifact;
     this.frame = frame;
-    await frame.request("apply", build.artifact);
+    frame.setVisible?.(true);
+    this.mountedApps.delete(id);
+    this.mountedApps.set(id, {
+      app,
+      revision,
+      artifact: build.artifact,
+      frame,
+    });
+    await this.trimMountedApps();
     localStorage.setItem("itsalive.lastApp", id);
     this.onStatus("Ready");
     this.onChange();
+  }
+
+  private rememberActive() {
+    if (this.current && this.revision && this.artifact && this.frame) {
+      this.mountedApps.delete(this.current.id);
+      this.mountedApps.set(this.current.id, {
+        app: this.current,
+        revision: this.revision,
+        artifact: this.artifact,
+        frame: this.frame,
+      });
+    }
+  }
+
+  private async trimMountedApps() {
+    while (this.mountedApps.size > 4) {
+      const oldest = [...this.mountedApps].find(
+        ([id]) => id !== this.current?.id,
+      );
+      if (!oldest) return;
+      const [id, entry] = oldest;
+      const state = await entry.frame.request<AppRecord["state"]>("snapshot");
+      this.persistState(id, state);
+      await this.stateWrites;
+      entry.frame.close();
+      this.mountedApps.delete(id);
+      await this.diagnostics.record(
+        "app.runtime.suspended",
+        { reason: "recent-runtime-resource-budget", durableStateSaved: true },
+        { appId: id, revisionId: entry.revision.id },
+      );
+    }
+  }
+
+  private closeMountedApps() {
+    const frames = new Set(
+      [...this.mountedApps.values()].map((entry) => entry.frame),
+    );
+    if (this.frame) frames.add(this.frame);
+    for (const frame of frames) frame.close();
+    this.mountedApps.clear();
+    this.frame = null;
   }
 
   private persistState(appId: string, payload: unknown) {
@@ -161,6 +258,8 @@ export class Workspace {
         const state = payload as AppRecord["state"];
         await this.repo.updateState(appId, state);
         if (this.current?.id === appId) this.current.state = state;
+        const cached = this.mountedApps.get(appId);
+        if (cached) cached.app.state = state;
       });
     void this.stateWrites.catch((error) => {
       this.onStatus(
@@ -178,18 +277,52 @@ export class Workspace {
   async setObservation(enabled: boolean) {
     this.assertAvailable();
     if (!enabled) this.observe = false;
-    if (this.frame) await this.frame.request("set-observation", enabled);
+    const frames = new Set(
+      [...this.mountedApps.values()].map((entry) => entry.frame),
+    );
+    if (this.frame) frames.add(this.frame);
+    await Promise.all(
+      [...frames].map((frame) => frame.request("set-observation", enabled)),
+    );
     this.observe = enabled;
   }
 
   async flushState() {
-    const frame = this.frame;
-    const appId = this.current?.id;
-    if (frame && appId) {
-      const state = await frame.request<AppRecord["state"]>("snapshot");
-      this.persistState(appId, state);
-    }
+    const snapshots = new Map(
+      [...this.mountedApps].map(([id, entry]) => [id, entry.frame]),
+    );
+    if (this.frame && this.current) snapshots.set(this.current.id, this.frame);
+    await Promise.all(
+      [...snapshots].map(async ([appId, frame]) => {
+        const state = await frame.request<AppRecord["state"]>("snapshot");
+        this.persistState(appId, state);
+      }),
+    );
     await this.stateWrites;
+  }
+
+  async setActivity(
+    activity: WorkActivity,
+    appId = this.current?.id,
+  ): Promise<WorkActivityResult> {
+    const frame =
+      appId === this.current?.id
+        ? this.frame
+        : appId
+          ? this.mountedApps.get(appId)?.frame
+          : null;
+    if (!frame) return { resolved: [], rejected: activity.targets };
+    return frame.request<WorkActivityResult>("set-activity", activity);
+  }
+
+  async clearActivity(appId = this.current?.id): Promise<void> {
+    const frame =
+      appId === this.current?.id
+        ? this.frame
+        : appId
+          ? this.mountedApps.get(appId)?.frame
+          : null;
+    if (frame) await frame.request("clear-activity");
   }
 
   async verify(
@@ -221,10 +354,19 @@ export class Workspace {
       const inspection = await candidate.request<RuntimeInspection>("inspect");
       if (inspection.errors.length)
         throw new Error(inspection.errors.join("\n"));
+      const qualityErrorCount = inspection.quality?.issues.filter(
+        (issue) => issue.severity === "error",
+      ).length;
       await this.diagnostics.record(
         "candidate.verified",
         {
-          passed: true,
+          passed:
+            qualityErrorCount === undefined ? true : qualityErrorCount === 0,
+          runtimePassed: true,
+          qualityPassed:
+            qualityErrorCount === undefined ? null : qualityErrorCount === 0,
+          qualityErrorCount: qualityErrorCount ?? null,
+          scope: "current-render",
           errorCount: inspection.errors.length,
           durationMs: performance.now() - started,
         },
@@ -234,7 +376,11 @@ export class Workspace {
     } catch (error) {
       await this.diagnostics.record(
         "candidate.verification.failed",
-        { passed: false, durationMs: performance.now() - started },
+        {
+          passed: false,
+          error: failureEvidence(error),
+          durationMs: performance.now() - started,
+        },
         { appId: this.current?.id, revisionId: artifact.revisionId, ...trace },
       );
       throw error;
@@ -284,7 +430,8 @@ export class Workspace {
     baseRevisionId: string,
     message: string,
     prebuilt?: BuildArtifact,
-    correlationId = crypto.randomUUID(),
+    correlationId: string = crypto.randomUUID(),
+    signal?: AbortSignal,
   ) {
     this.assertAvailable();
     const appId = this.current?.id;
@@ -293,13 +440,18 @@ export class Workspace {
     const stillActive = () =>
       this.current?.id === appId && this.generation === generation;
     const started = performance.now();
+    let candidateRevisionId = prebuilt?.revisionId;
+    let failureStage = "snapshot";
+    this.runtimeOperations.set(appId, correlationId);
     this.activeEdits++;
     try {
       return await navigator.locks.request(
         `itsalive:revision:${appId}`,
         async () => {
           try {
+            signal?.throwIfAborted();
             await this.flushState();
+            signal?.throwIfAborted();
             const current = await this.repo.getApp(appId);
             if (current?.currentRevision !== baseRevisionId || !stillActive())
               throw new Error(
@@ -307,6 +459,8 @@ export class Workspace {
               );
             this.onStatus("Checking your changes…");
             const revisionId = prebuilt?.revisionId ?? crypto.randomUUID();
+            candidateRevisionId = revisionId;
+            failureStage = "compile";
             const build = prebuilt
               ? { ok: true as const, artifact: prebuilt, project }
               : await this.compiler.compile(project, revisionId);
@@ -316,7 +470,7 @@ export class Workspace {
                 {
                   compiled: false,
                   diagnosticCount: build.diagnostics.length,
-                  diagnostics: build.diagnostics.map(({ file }) => ({ file })),
+                  diagnostics: build.diagnostics,
                 },
                 { appId, revisionId, correlationId },
               );
@@ -328,12 +482,15 @@ export class Workspace {
             }
             if (!stillActive())
               throw new Error("Application changed while compiling this edit");
+            signal?.throwIfAborted();
             await this.diagnostics.record(
               "compile.completed",
               build.artifact.metrics,
               { appId, revisionId, correlationId },
             );
+            failureStage = "verification";
             await this.verify(build.artifact, { appId, correlationId });
+            signal?.throwIfAborted();
             if (!stillActive() || !this.frame)
               throw new Error("Application changed while checking this edit");
             const frame = this.frame;
@@ -350,24 +507,116 @@ export class Workspace {
               await frame.request<AppRecord["state"]>("snapshot");
             if (!stillActive() || this.frame !== frame)
               throw new Error("Application changed before applying this edit");
+            signal?.throwIfAborted();
+            // Once live application begins, complete its atomic commit or verified
+            // rollback. Cancellation remains available through verification.
             this.applying.add(appId);
+            this.onApplying(appId, true);
             try {
+              failureStage = "live-apply";
+              await this.diagnostics.record(
+                "revision.apply.started",
+                { baseRevisionId, candidateRevisionId: revisionId },
+                { appId, revisionId, correlationId },
+              );
               await frame.request("apply", build.artifact);
+              failureStage = "persistence";
               await this.repo.commitRevision(appId, baseRevisionId, revision);
             } catch (error) {
+              let rollbackSucceeded = false;
+              let rollbackError: unknown;
+              await this.diagnostics.record(
+                "revision.rollback.started",
+                {
+                  baseRevisionId,
+                  candidateRevisionId: revisionId,
+                  stage: failureStage,
+                  error: failureEvidence(error),
+                },
+                { appId, revisionId, correlationId },
+              );
               if (stillActive() && this.frame === frame) {
-                if (oldArtifact) await frame.request("apply", oldArtifact);
-                await frame.request("restore-state", oldState);
+                try {
+                  const active =
+                    await frame.request<RuntimeInspection>("inspect");
+                  if (
+                    oldArtifact &&
+                    active.revisionId !== oldArtifact.revisionId
+                  )
+                    await frame.request("apply", oldArtifact);
+                  await frame.request("restore-state", oldState);
+                  const restored =
+                    await frame.request<RuntimeInspection>("inspect");
+                  rollbackSucceeded =
+                    restored.revisionId === baseRevisionId &&
+                    restored.errors.length === 0;
+                  if (!rollbackSucceeded)
+                    throw new Error(
+                      "The previous application could not be verified after rollback.",
+                    );
+                } catch (failed) {
+                  rollbackError = failed;
+                }
               }
-              throw error;
+              await this.diagnostics.record(
+                "revision.rollback.completed",
+                {
+                  baseRevisionId,
+                  candidateRevisionId: revisionId,
+                  rollbackSucceeded,
+                  ...(rollbackError
+                    ? { error: failureEvidence(rollbackError) }
+                    : {}),
+                },
+                { appId, revisionId: baseRevisionId, correlationId },
+              );
+              throw Object.assign(
+                new Error(
+                  error instanceof Error ? error.message : String(error),
+                  { cause: error },
+                ),
+                {
+                  name:
+                    failureStage === "live-apply"
+                      ? "LiveApplicationError"
+                      : "RevisionPersistenceError",
+                  detail: {
+                    stage: failureStage,
+                    baseRevisionId,
+                    candidateRevisionId: revisionId,
+                    rollbackSucceeded,
+                    ...(rollbackError
+                      ? { rollbackError: failureEvidence(rollbackError) }
+                      : {}),
+                  },
+                },
+              );
             } finally {
               this.applying.delete(appId);
+              this.onApplying(appId, false);
             }
             if (stillActive() && this.frame === frame && this.current) {
               this.artifact = build.artifact;
               this.revision = revision;
               this.current.currentRevision = revision.id;
-              await this.flushState();
+              this.rememberActive();
+              try {
+                await this.flushState();
+              } catch (error) {
+                // The source revision has already committed. A later activity-save
+                // failure must not resurrect its checkpoint or claim the edit failed.
+                const warning =
+                  "Your changes are ready, but your latest activity could not be saved. Keep this app open and try again.";
+                await this.diagnostics.record(
+                  "revision.state-save.failed",
+                  {
+                    revisionCommitted: true,
+                    error: failureEvidence(error),
+                  },
+                  { appId, revisionId, correlationId },
+                );
+                this.onWarning(warning);
+              }
             }
             await this.diagnostics.record(
               "revision.applied",
@@ -387,8 +636,20 @@ export class Workspace {
               error instanceof Error ? error.message : String(error);
             await this.diagnostics.record(
               "revision.failed",
-              { message },
-              { appId, revisionId: baseRevisionId, correlationId },
+              {
+                message,
+                error: failureEvidence(error),
+                stage: failureStage,
+                baseRevisionId,
+                candidateRevisionId,
+                activeRevisionId:
+                  this.current?.id === appId ? this.revision?.id : undefined,
+              },
+              {
+                appId,
+                revisionId: candidateRevisionId ?? baseRevisionId,
+                correlationId,
+              },
             );
             this.onStatus(
               "This change could not be completed. Your previous app is still available.",
@@ -399,6 +660,7 @@ export class Workspace {
       );
     } finally {
       this.activeEdits--;
+      this.runtimeOperations.delete(appId);
     }
   }
 
@@ -458,8 +720,7 @@ export class Workspace {
     try {
       await this.beforeBackup();
       await this.flushState();
-      this.frame?.close();
-      this.frame = null;
+      this.closeMountedApps();
       await this.stateWrites;
     } catch (error) {
       this.backupBusy = false;
@@ -485,10 +746,19 @@ export class Workspace {
       const missing = manifest.dependencies.filter(
         (resource) => resource.bytes === null,
       ).length;
-      this.backupSummary = `Archive created: ${manifest.shell.apps.length} apps. ${failed + reports.filter((r) => r.status === "failed").length} failures, ${reports.filter((r) => r.status === "skipped").length} skipped storage categories, ${missing} uncached dependency resources. See the archive manifest for details.`;
+      const failures =
+        failed + reports.filter((r) => r.status === "failed").length;
+      const summary = summarizeBackup(manifest);
+      this.backupSummary = summary.summary;
+      this.backupDetails = summary.details;
       await this.diagnostics.record("backup.exported", {
         bytes: blob.size,
         summary: this.backupSummary,
+        failures,
+        skippedStorageCategories: reports.filter((r) => r.status === "skipped")
+          .length,
+        missingDependencies: missing,
+        storageReports: reports,
       });
       return blob;
     } finally {
@@ -506,7 +776,18 @@ export class Workspace {
         { signal, onProgress: this.onBackupProgress },
       );
       const reports = result.reports.flatMap((origin) => origin.reports);
-      this.backupSummary = `Restored ${result.manifest.shell.apps.length} apps. ${reports.filter((r) => r.status === "skipped").length} storage categories skipped. Provider keys stay on this device.`;
+      const coverage = summarizeBackup(result.manifest);
+      const partial =
+        !coverage.complete ||
+        reports.some((report) => report.status === "failed");
+      this.backupSummary = partial
+        ? `Restored ${result.manifest.shell.apps.length} ${result.manifest.shell.apps.length === 1 ? "app" : "apps"}, with some data unavailable. See backup details.`
+        : `Restored ${result.manifest.shell.apps.length} ${result.manifest.shell.apps.length === 1 ? "app" : "apps"} and saved activity. Your AI connection stays on this device.`;
+      this.backupDetails = coverage.details;
+      if (reports.some((report) => report.status === "failed"))
+        this.backupDetails.push(
+          "Some app data could not be restored. Review the storage reports before continuing.",
+        );
       await this.diagnostics.record("backup.restored", { bytes: blob.size });
       this.current = null;
       this.revision = null;

@@ -1,5 +1,6 @@
 import { test, expect } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
+import { createAppFromGoal } from "./fixtures/shell-controls";
 
 // No recording may capture the API-key entry or provider request headers.
 test.use({ trace: "off", screenshot: "off", video: "off" });
@@ -23,12 +24,10 @@ test("real OpenAI creates, verifies, commits and updates a usable violin trainer
   try {
     await page.goto("/");
     await page.waitForFunction(() => Boolean(window.__itsalive));
-    await page
-      .getByRole("textbox", { name: "Message", exact: true })
-      .fill(
-        "Create a small violin practice app titled Violin Trainer. Show the D-major scale notes and a short open D/A double-stop exercise. Include a button named Complete practice and a visible counter formatted Completed sessions: 0. Each click increments the counter using durable storage. This is a visual practice guide, with no microphone or pitch detection. Keep it simple and functional.",
-      );
-    await page.getByRole("button", { name: "Send", exact: true }).click();
+    await createAppFromGoal(
+      page,
+      "Create a small violin practice app titled Violin Trainer. Show the D-major scale notes and a short open D/A double-stop exercise. Include a button named Complete practice and a visible counter formatted Completed sessions: 0. Each click increments the counter using durable storage. This is a visual practice guide, with no microphone or pitch detection. Keep it simple and functional.",
+    );
     const onboarding = page.locator("#onboarding-dialog");
     await expect(onboarding).toBeVisible();
     const keyInput = onboarding.getByLabel("OpenAI API key", { exact: true });
@@ -38,14 +37,6 @@ test("real OpenAI creates, verifies, commits and updates a usable violin trainer
       (input as HTMLInputElement).value = value;
       input.dispatchEvent(new Event("input", { bubbles: true }));
     }, credential);
-    if (process.env.ITSALIVE_LIVE_BUDGET) {
-      await onboarding
-        .getByLabel("Enable spending limit", { exact: true })
-        .check();
-      await onboarding
-        .getByLabel("Monthly limit (USD)", { exact: true })
-        .fill(process.env.ITSALIVE_LIVE_BUDGET);
-    }
     const connectionStarted = Date.now();
     await onboarding
       .getByRole("button", { name: "Check connection", exact: true })
@@ -57,6 +48,20 @@ test("real OpenAI creates, verifies, commits and updates a usable violin trainer
     const creationStarted = Date.now();
     await onboarding
       .getByRole("button", { name: "Continue", exact: true })
+      .click();
+    const spending = onboarding.getByRole("slider", {
+      name: /Monthly API spending/,
+    });
+    await expect(spending).toBeVisible();
+    if (process.env.ITSALIVE_LIVE_BUDGET) {
+      await spending.focus();
+      await spending.press("Home");
+      await onboarding
+        .getByLabel("Exact monthly limit (USD)", { exact: true })
+        .fill(process.env.ITSALIVE_LIVE_BUDGET);
+    }
+    await onboarding
+      .getByRole("button", { name: "Start creating", exact: true })
       .click();
     await expect(onboarding).not.toBeVisible({ timeout: 30_000 });
     const app = page.frameLocator('iframe[data-mode="app"]');

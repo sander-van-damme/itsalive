@@ -6,7 +6,12 @@ import {
   demoAIConfig,
 } from "../src/ai";
 import type { AIResponse, ToolCall } from "../src/ai";
-import type { BuildArtifact, BuildResult, Project } from "../src/shared/types";
+import type {
+  BuildArtifact,
+  BuildResult,
+  Project,
+  RuntimeInspection,
+} from "../src/shared/types";
 const project: Project = {
   entry: "src/App.tsx",
   dependencies: {},
@@ -56,6 +61,87 @@ function callbacks() {
 }
 
 describe("file-oriented coding harness", () => {
+  it("repairs confirmed rendered accessibility defects before commit while keeping small text advisory", async () => {
+    const provider = new ScriptedProvider([
+      turn(
+        tool("write_file", { path: project.entry, content: "low contrast" }),
+        tool("finish", { summary: "First attempt" }),
+      ),
+      (input) => {
+        expect(JSON.stringify(input.messages)).toContain("text-contrast");
+        expect(JSON.stringify(input.messages)).toContain("p#instruction");
+        return turn(
+          tool("write_file", {
+            path: project.entry,
+            content: "readable contrast",
+          }),
+          tool("finish", { summary: "Instructions are readable." }),
+        );
+      },
+    ]);
+    const host = callbacks();
+    const verify = vi
+      .fn<() => Promise<RuntimeInspection>>()
+      .mockResolvedValueOnce({
+        text: "Instruction",
+        errors: [],
+        revisionId: "candidate",
+        quality: {
+          scope: "visible-current-view",
+          checkedTextElements: 1,
+          checkedControls: 0,
+          inconclusive: [],
+          issues: [
+            {
+              code: "text-contrast",
+              severity: "error",
+              element: "p#instruction",
+              message: "Text contrast is 2.32:1; use at least 4.5:1.",
+              actual: 2.32,
+              expected: 4.5,
+            },
+          ],
+        },
+      })
+      .mockResolvedValue({
+        text: "Instruction",
+        errors: [],
+        revisionId: "candidate",
+        quality: {
+          scope: "visible-current-view",
+          checkedTextElements: 2,
+          checkedControls: 0,
+          inconclusive: [
+            {
+              element: "p#gradient",
+              reason: "Gradient needs visual inspection.",
+            },
+          ],
+          issues: [
+            {
+              code: "small-text",
+              severity: "warning",
+              element: "small",
+              message: "Check readable secondary text.",
+              actual: 12,
+            },
+          ],
+        },
+      });
+    const result = await new CodingHarness(
+      new AIService(demoAIConfig(), { providers: { demo: provider } }),
+      { ...host, verify },
+    ).run({
+      project,
+      baseRevisionId: "base",
+      intent: "Improve readability",
+      authorized: true,
+      context,
+    });
+    expect(verify).toHaveBeenCalledTimes(2);
+    expect(host.commit).toHaveBeenCalledTimes(1);
+    expect(result.project.files[project.entry]).toBe("readable contrast");
+  });
   it("repairs a broken candidate without committing or mutating the working project", async () => {
     const provider = new ScriptedProvider([
       turn(tool("write_file", { path: "src/App.tsx", content: "broken" })),
@@ -500,9 +586,16 @@ describe("recoverable coding sessions", () => {
         check: { compiled: false, verified: false, diagnosticCount: 1 },
       }),
     );
-    expect(JSON.stringify(host.onEvent.mock.calls)).not.toContain(
-      "Private source",
-    );
+    expect(
+      JSON.stringify(
+        host.onEvent.mock.calls.filter(([event]) => event.level !== "DEBUG"),
+      ),
+    ).not.toContain("Private source");
+    expect(
+      JSON.stringify(
+        host.onEvent.mock.calls.filter(([event]) => event.level === "DEBUG"),
+      ),
+    ).toContain("Private source");
     expect(host.onEvent).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "coding.check",
@@ -665,4 +758,180 @@ it("honors a completed finish tool in a second incomplete response after verifie
   expect(host.compile).toHaveBeenCalledTimes(1);
   expect(host.verify).toHaveBeenCalledTimes(1);
   expect(host.commit).toHaveBeenCalledTimes(1);
+});
+
+it("repairs a failed live apply from exact failure evidence rather than blindly retrying finish", async () => {
+  const host = durableHost();
+  host.commit.mockRejectedValueOnce(
+    Object.assign(new Error("Hook order changed in Practice"), {
+      name: "LiveApplicationError",
+      detail: {
+        stage: "live-apply",
+        rollbackSucceeded: true,
+        baseRevisionId: "base",
+        candidateRevisionId: "candidate",
+      },
+    }),
+  );
+  const provider = new ScriptedProvider([
+    turn(
+      tool("write_file", { path: project.entry, content: "first candidate" }),
+      tool("finish", { summary: "Practice updated" }),
+    ),
+    (input) => {
+      expect(JSON.stringify(input.messages)).toContain(
+        "Hook order changed in Practice",
+      );
+      expect(JSON.stringify(input.messages)).toContain(
+        "previous app and durable state were restored",
+      );
+      return turn(
+        tool("inspect", {}),
+        tool("write_file", {
+          path: project.entry,
+          content: "repaired candidate",
+        }),
+      );
+    },
+    turn(
+      tool("finish", {
+        summary:
+          "Practice now keeps your current exercise while changing chords.",
+      }),
+    ),
+  ]);
+  const result = await runner(provider, host).run(codingRequest());
+  expect(host.commit).toHaveBeenCalledTimes(2);
+  expect(host.verify).toHaveBeenCalledTimes(2);
+  expect(result.project.files[project.entry]).toBe("repaired candidate");
+  expect(result.summary).toContain("current exercise");
+  expect(host.onEvent).toHaveBeenCalledWith(
+    expect.objectContaining({ event: "coding.live_apply.repair" }),
+  );
+});
+
+it("does not automatically repair when restoration of the previous app is unconfirmed", async () => {
+  const host = durableHost();
+  const failure = Object.assign(new Error("WebGL update failed"), {
+    detail: { stage: "live-apply", rollbackSucceeded: false },
+  });
+  host.commit.mockRejectedValueOnce(failure);
+  const provider = new ScriptedProvider([
+    turn(
+      tool("write_file", { path: project.entry, content: "candidate" }),
+      tool("finish", { summary: "Updated" }),
+    ),
+  ]);
+  await expect(runner(provider, host).run(codingRequest())).rejects.toThrow(
+    "WebGL update failed",
+  );
+  expect(host.commit).toHaveBeenCalledTimes(1);
+  expect(host.saved()?.finishRequested).toBe(false);
+  expect(host.saved()?.lastFailure?.error?.message).toBe("WebGL update failed");
+  expect(host.saved()?.lastFailure?.error?.detail?.rollbackSucceeded).toBe(
+    false,
+  );
+});
+
+it("revisits a legacy saved finish after workflow failure before another commit", async () => {
+  const host = durableHost();
+  await host.saveCheckpoint({
+    version: 1,
+    id: "saved",
+    appId: "app",
+    baseRevisionId: "base",
+    intent: "Build violin exercises",
+    originalRequest: "Violin",
+    role: "coding-standard",
+    correlationId: "old",
+    createdAt: 1,
+    updatedAt: 1,
+    project: {
+      ...project,
+      files: {
+        ...project.files,
+        "src/activity.ts": "export const practice = true",
+      },
+    },
+    changedFiles: ["src/activity.ts"],
+    messages: [],
+    turns: 1,
+    toolCalls: 1,
+    finishRequested: true,
+    summary: "Done",
+    status: "paused",
+    lastFailure: { kind: "workflow" },
+  });
+  const provider = new ScriptedProvider([
+    (input) => {
+      expect(host.commit).not.toHaveBeenCalled();
+      expect(JSON.stringify(input.messages)).toContain(
+        "Do not simply finish again",
+      );
+      return turn(
+        tool("inspect", {}),
+        tool("finish", { summary: "Checked the current app before resuming." }),
+      );
+    },
+  ]);
+  await runner(provider, host).run({ ...codingRequest(), resume: true });
+  expect(provider.requests).toHaveLength(1);
+  expect(host.commit).toHaveBeenCalledTimes(1);
+});
+
+it("passes progress targets through runtime resolution and records complete tool evidence at DEBUG", async () => {
+  const host = {
+    ...durableHost(),
+    onActivity: vi.fn(async () => ({
+      resolved: ["region-2"],
+      rejected: ["invented"],
+    })),
+    onProgress: vi.fn(),
+  };
+  const provider = new ScriptedProvider([
+    turn(
+      tool("report_progress", {
+        message:
+          "I found both tabs were showing the same lesson. I’m separating the exercises.",
+        targets: ["region-2", "invented"],
+      }),
+    ),
+    (input) => {
+      expect(
+        JSON.parse(
+          input.messages.find((message) => message.role === "tool")!.content,
+        ).rejected,
+      ).toEqual(["invented"]);
+      return turn(
+        tool("write_file", {
+          path: project.entry,
+          content: "separate learning and practice",
+        }),
+        tool("finish", {
+          summary:
+            "Learn explains the chord; Practice now gives you exercises.",
+        }),
+      );
+    },
+  ]);
+  await runner(provider, host).run(codingRequest());
+  expect(host.onActivity).toHaveBeenCalledWith(
+    expect.objectContaining({ targets: ["region-2", "invented"] }),
+  );
+  expect(host.onProgress).toHaveBeenCalledWith(
+    expect.objectContaining({
+      message: expect.stringContaining("same lesson"),
+    }),
+  );
+  expect(host.onEvent).toHaveBeenCalledWith(
+    expect.objectContaining({
+      event: "coding.tool.content",
+      level: "DEBUG",
+      data: expect.objectContaining({
+        name: "report_progress",
+        arguments: expect.any(String),
+        output: expect.stringContaining("invented"),
+      }),
+    }),
+  );
 });

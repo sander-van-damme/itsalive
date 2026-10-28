@@ -186,6 +186,12 @@ describe("transactional source repository", () => {
       });
     expect(await repo.listDiagnostics()).toHaveLength(2000);
     expect((await repo.listDiagnostics())[0]?.timestamp).toBe(5);
+    expect((await repo.diagnosticSnapshot()).retention).toMatchObject({
+      droppedCount: 5,
+      maxEntries: 2000,
+      firstRecordedAt: 0,
+      lastRecordedAt: 2004,
+    });
     await repo.deleteApp(appId);
     expect(await repo.listApps()).toEqual([]);
     expect(await repo.listRevisions(appId)).toEqual([]);
@@ -270,7 +276,7 @@ function checkpoint(): CodingCheckpoint {
   };
 }
 describe("private recoverable candidate storage", () => {
-  it("persists across repository reload, never exports continuation, and atomically invalidates after commit", async () => {
+  it("persists across reload and portable backup, then atomically invalidates after commit", async () => {
     const name = `draft-${crypto.randomUUID()}`;
     let repo = new Repository(name);
     await repo.createApp(app(), revision("first"));
@@ -279,9 +285,12 @@ describe("private recoverable candidate storage", () => {
     await repo.close();
     repo = new Repository(name);
     expect(await repo.getCodingCheckpoint(appId)).toEqual(draft);
-    expect(JSON.stringify(await repo.exportData())).not.toContain(
-      "Private candidate context",
-    );
+    const exported = await repo.exportData();
+    expect(exported.codingDrafts).toEqual([draft]);
+    const restored = new Repository(`draft-restored-${crypto.randomUUID()}`);
+    await restored.importData(exported);
+    expect(await restored.getCodingCheckpoint(appId)).toEqual(draft);
+    await restored.close();
     expect((await repo.getApp(appId))?.currentRevision).toBe("first");
     await repo.commitRevision(appId, "first", revision("complete", "first"));
     expect(await repo.getCodingCheckpoint(appId)).toBeUndefined();

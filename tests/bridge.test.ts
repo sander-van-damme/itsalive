@@ -50,6 +50,18 @@ describe("authenticated bootstrap", () => {
       init: { appId, mode: "app", state: {}, observe: false },
     };
     expect(validBootstrap(envelope, appId)).toBe(true);
+    expect(
+      validBootstrap(
+        { ...envelope, init: { ...envelope.init, appearance: "dark" } },
+        appId,
+      ),
+    ).toBe(true);
+    expect(
+      validBootstrap(
+        { ...envelope, init: { ...envelope.init, appearance: "unexpected" } },
+        appId,
+      ),
+    ).toBe(false);
     expect(validBootstrap({ ...envelope, version: 1 }, appId)).toBe(false);
     expect(
       validBootstrap(
@@ -115,6 +127,41 @@ describe("dedicated RPC channel", () => {
       isWireMessage({ v: 2, kind: "request", id: "one", method: {} }),
     ).toBe(false);
   });
+  it("preserves remote exception identity, stack and cause across the app bridge", async () => {
+    const channel = new MessageChannel();
+    const shell = new PortRPC(channel.port1 as unknown as MessagePort, () => {
+      throw Object.assign(
+        new TypeError("Live update failed", {
+          cause: new Error("Hook order changed"),
+        }),
+        {
+          detail: { stage: "live-apply", candidateRevisionId: "candidate" },
+        },
+      );
+    });
+    const app = new PortRPC(channel.port2 as unknown as MessagePort);
+    try {
+      await expect(app.request("apply")).rejects.toMatchObject({
+        name: "TypeError",
+        message: "Live update failed",
+        remoteStack: expect.stringContaining("Live update failed"),
+        detail: { stage: "live-apply", candidateRevisionId: "candidate" },
+        cause: expect.objectContaining({ message: "Hook order changed" }),
+      });
+      expect(
+        isWireMessage({
+          v: 2,
+          kind: "response",
+          id: "bad",
+          error: "Failure",
+          failure: { name: "Error", message: 42 },
+        }),
+      ).toBe(false);
+    } finally {
+      app.close();
+      shell.close();
+    }
+  });
   it("captures the port transport before app code can replace its methods", async () => {
     const channel = new MessageChannel();
     const shell = new PortRPC(
@@ -131,6 +178,38 @@ describe("dedicated RPC channel", () => {
     await expect(app.request("echo")).resolves.toBe("kept private");
     shell.close();
     app.close();
+  });
+  it("delivers generated errors with circular or non-cloneable details instead of timing out", async () => {
+    const channel = new MessageChannel();
+    const detail: Record<string, unknown> = {
+      stage: "live-apply",
+      callback: function retry() {},
+      count: 4n,
+    };
+    detail.self = detail;
+    let cause = new Error("Innermost failure");
+    for (let index = 0; index < 40; index++)
+      cause = new Error(`Cause ${index}`, { cause });
+    const shell = new PortRPC(channel.port1 as unknown as MessagePort, () => {
+      throw Object.assign(new Error("Generated failure", { cause }), {
+        detail,
+      });
+    });
+    const app = new PortRPC(channel.port2 as unknown as MessagePort);
+    try {
+      await expect(app.request("apply")).rejects.toMatchObject({
+        message: "Generated failure",
+        detail: {
+          stage: "live-apply",
+          callback: "[Function retry]",
+          count: "4n",
+          self: "[Circular or repeated reference]",
+        },
+      });
+    } finally {
+      app.close();
+      shell.close();
+    }
   });
 });
 

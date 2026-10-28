@@ -1,5 +1,6 @@
 import type { Project } from "../shared/types";
 import type { AIMessage, AIRole, ToolCall } from "./types";
+import type { FailureEvidence } from "../shared/errors";
 
 /** Private shell data. Drafts are never executable revisions or diagnostic exports. */
 export interface CodingCheckpoint {
@@ -28,5 +29,10 @@ export interface CodingCheckpoint {
   finishRequested: boolean;
   summary: string;
   status: "working" | "paused";
-  lastFailure?: { kind: string; reason?: string };
+  lastFailure?: {
+    kind: string;
+    reason?: string;
+    stage?: string;
+    error?: FailureEvidence;
+  };
 }

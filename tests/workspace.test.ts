@@ -45,9 +45,14 @@ function deferred<T>() {
 function frame(
   request = vi.fn(async (_method: string): Promise<unknown> => ({})),
 ) {
-  return { request, close: vi.fn() } as unknown as FrameSession & {
+  return {
+    request,
+    close: vi.fn(),
+    setVisible: vi.fn(),
+  } as unknown as FrameSession & {
     request: ReturnType<typeof vi.fn>;
     close: ReturnType<typeof vi.fn>;
+    setVisible: ReturnType<typeof vi.fn>;
   };
 }
 const workspaces: Workspace[] = [];
@@ -119,6 +124,150 @@ afterEach(async () => {
 });
 
 describe("workspace asynchronous application ownership", () => {
+  it("distinguishes successful rendering from failed measured quality in candidate diagnostics", async () => {
+    const work = workspace();
+    const host = { className: "", setAttribute: vi.fn(), remove: vi.fn() };
+    vi.stubGlobal("document", {
+      createElement: () => host,
+      body: { append: vi.fn() },
+    });
+    const inspection = {
+      text: "Instruction",
+      errors: [],
+      revisionId: "candidate",
+      quality: {
+        scope: "visible-current-view" as const,
+        checkedTextElements: 1,
+        checkedControls: 0,
+        inconclusive: [],
+        issues: [
+          {
+            code: "text-contrast" as const,
+            severity: "error" as const,
+            element: "p",
+            message: "Low contrast",
+            actual: 2.3,
+            expected: 4.5,
+          },
+        ],
+      },
+    };
+    mocks.mount.mockResolvedValue(
+      frame(
+        vi.fn(async (method: string) =>
+          method === "inspect" ? inspection : undefined,
+        ),
+      ),
+    );
+    expect(await work.verify(artifact("candidate"))).toEqual(inspection);
+    const diagnostic = (await work.repo.listDiagnostics()).find(
+      (row) => row.event === "candidate.verified",
+    );
+    expect(diagnostic?.data).toMatchObject({
+      passed: false,
+      runtimePassed: true,
+      qualityPassed: false,
+      qualityErrorCount: 1,
+    });
+    expect(host.remove).toHaveBeenCalledOnce();
+  });
+  it("keeps recent runtimes mounted so switching apps preserves transient activity", async () => {
+    const work = workspace();
+    const a = await app(work, "A");
+    const b = await app(work, "B");
+    const aFrame = frame(vi.fn(async () => a.app.state));
+    const bFrame = frame(vi.fn(async () => b.app.state));
+    mocks.mount.mockResolvedValueOnce(aFrame).mockResolvedValueOnce(bFrame);
+    await work.openApp(a.app.id);
+    await work.openApp(b.app.id);
+    await work.openApp(a.app.id);
+    expect(mocks.mount).toHaveBeenCalledTimes(2);
+    expect(work.frame).toBe(aFrame);
+    expect(aFrame.close).not.toHaveBeenCalled();
+    expect(bFrame.close).not.toHaveBeenCalled();
+    expect(aFrame.setVisible).toHaveBeenLastCalledWith(true);
+    expect(bFrame.setVisible).toHaveBeenLastCalledWith(false);
+  });
+
+  it("bounds mounted app resources and saves durable state before suspending an older runtime", async () => {
+    const work = workspace();
+    const fixtures = await Promise.all(
+      ["A", "B", "C", "D", "E"].map((name) => app(work, name)),
+    );
+    const frames = fixtures.map((fixture) =>
+      frame(vi.fn(async () => ({ ...fixture.app.state, saved: true }))),
+    );
+    for (const session of frames) mocks.mount.mockResolvedValueOnce(session);
+    for (const fixture of fixtures) await work.openApp(fixture.app.id);
+    expect(frames[0]!.close).toHaveBeenCalledOnce();
+    expect(
+      frames.slice(1).every((session) => session.close.mock.calls.length === 0),
+    ).toBe(true);
+    expect((await work.repo.getApp(fixtures[0]!.app.id))?.state.saved).toBe(
+      true,
+    );
+  });
+
+  it("preserves live apply failure evidence and verifies rollback before allowing repair", async () => {
+    const work = workspace();
+    const fixture = await app(work, "Practice");
+    const candidate = artifact("candidate-id");
+    const active = frame(
+      vi.fn(async (method: string) => {
+        if (method === "apply")
+          throw new Error("Hook order changed in Practice");
+        if (method === "inspect")
+          return {
+            text: "Old app",
+            errors: [],
+            revisionId: fixture.revision.id,
+          };
+        return fixture.app.state;
+      }),
+    );
+    select(work, fixture, active);
+    vi.spyOn(work, "verify").mockResolvedValue({
+      text: "Cold check passed",
+      errors: [],
+      revisionId: candidate.revisionId,
+    });
+    await expect(
+      work.applyProject(
+        project,
+        fixture.revision.id,
+        "Practice change",
+        candidate,
+        "operation-id",
+      ),
+    ).rejects.toMatchObject({
+      name: "LiveApplicationError",
+      message: "Hook order changed in Practice",
+      detail: {
+        stage: "live-apply",
+        rollbackSucceeded: true,
+        baseRevisionId: fixture.revision.id,
+        candidateRevisionId: candidate.revisionId,
+      },
+    });
+    expect(
+      active.request.mock.calls.filter(([method]) => method === "apply"),
+    ).toHaveLength(1);
+    expect(active.request).toHaveBeenCalledWith(
+      "restore-state",
+      fixture.app.state,
+    );
+    expect((await work.repo.getApp(fixture.app.id))?.currentRevision).toBe(
+      fixture.revision.id,
+    );
+    const events = await work.repo.listDiagnostics();
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "revision.failed",
+        correlationId: "operation-id",
+        revisionId: candidate.revisionId,
+      }),
+    );
+  });
   it("changes observation consent without remounting the app or rewriting its state", async () => {
     const work = workspace();
     const fixture = await app(work, "Practice");
@@ -134,6 +283,85 @@ describe("workspace asynchronous application ownership", () => {
     expect(mocks.mount).not.toHaveBeenCalled();
     expect(work.frame).toBe(active);
     expect(work.current?.state).toEqual(fixture.app.state);
+  });
+
+  it("cancellation during verification never reaches live apply or persistence", async () => {
+    const work = workspace();
+    const fixture = await app(work, "Practice");
+    const active = frame(vi.fn(async () => fixture.app.state));
+    select(work, fixture, active);
+    const checked = deferred<{
+      text: string;
+      errors: string[];
+      revisionId: string;
+    }>();
+    const verify = vi.spyOn(work, "verify").mockReturnValue(checked.promise);
+    const applying = vi.fn();
+    work.onApplying = applying;
+    const committed = vi.spyOn(work.repo, "commitRevision");
+    const controller = new AbortController();
+    const editing = work.applyProject(
+      project,
+      fixture.revision.id,
+      "Cancelled change",
+      undefined,
+      "cancel-operation",
+      controller.signal,
+    );
+    const rejected = expect(editing).rejects.toMatchObject({
+      name: "AbortError",
+    });
+    await vi.waitFor(() => expect(verify).toHaveBeenCalledOnce());
+    controller.abort();
+    checked.resolve({ text: "Verified", errors: [], revisionId: "candidate" });
+    await rejected;
+    expect(
+      active.request.mock.calls.some(([method]) => method === "apply"),
+    ).toBe(false);
+    expect(applying).not.toHaveBeenCalled();
+    expect(committed).not.toHaveBeenCalled();
+    expect((await work.repo.getApp(fixture.app.id))?.currentRevision).toBe(
+      fixture.revision.id,
+    );
+  });
+
+  it("finishes an already-started atomic application even if cancellation arrives", async () => {
+    const work = workspace();
+    const fixture = await app(work, "Practice");
+    const applied = deferred<unknown>();
+    const active = frame(
+      vi.fn(async (method: string) =>
+        method === "apply" ? applied.promise : fixture.app.state,
+      ),
+    );
+    select(work, fixture, active);
+    vi.spyOn(work, "verify").mockResolvedValue({
+      text: "Verified",
+      errors: [],
+      revisionId: "candidate",
+    });
+    const applying = vi.fn();
+    work.onApplying = applying;
+    const controller = new AbortController();
+    const editing = work.applyProject(
+      project,
+      fixture.revision.id,
+      "Atomic change",
+      undefined,
+      "atomic-operation",
+      controller.signal,
+    );
+    await vi.waitFor(() =>
+      expect(active.request).toHaveBeenCalledWith("apply", expect.any(Object)),
+    );
+    expect(applying).toHaveBeenLastCalledWith(fixture.app.id, true);
+    controller.abort();
+    applied.resolve({});
+    const revisionId = await editing;
+    expect((await work.repo.getApp(fixture.app.id))?.currentRevision).toBe(
+      revisionId,
+    );
+    expect(applying).toHaveBeenLastCalledWith(fixture.app.id, false);
   });
 
   it("persists a delayed snapshot to its originating app after the selection changes", async () => {
@@ -258,4 +486,43 @@ describe("workspace asynchronous application ownership", () => {
     expect(mocks.mount).toHaveBeenCalledTimes(1);
     expect(localStorage.getItem("itsalive.lastApp")).toBe(c.app.id);
   });
+});
+
+it("does not misreport a committed revision when saving later app activity fails", async () => {
+  const work = workspace();
+  const fixture = await app(work, "Practice");
+  const active = frame(vi.fn(async () => fixture.app.state));
+  select(work, fixture, active);
+  vi.spyOn(work, "verify").mockResolvedValue({
+    text: "Verified",
+    errors: [],
+    revisionId: "candidate",
+  });
+  const original = work.repo.updateState.bind(work.repo);
+  let writes = 0;
+  vi.spyOn(work.repo, "updateState").mockImplementation(async (id, state) => {
+    if (++writes === 2) throw new Error("Storage write failed");
+    return original(id, state);
+  });
+  const warning = vi.fn();
+  work.onWarning = warning;
+  const accepted = await work.applyProject(
+    project,
+    fixture.revision.id,
+    "Change practice",
+    artifact("committed-candidate"),
+  );
+  expect(accepted).toBe("committed-candidate");
+  expect((await work.repo.getApp(fixture.app.id))?.currentRevision).toBe(
+    accepted,
+  );
+  expect(warning).toHaveBeenCalledWith(
+    expect.stringContaining("activity could not be saved"),
+  );
+  expect(await work.repo.listDiagnostics()).toContainEqual(
+    expect.objectContaining({
+      event: "revision.state-save.failed",
+      revisionId: accepted,
+    }),
+  );
 });

@@ -7,6 +7,8 @@ import type {
 } from "./types";
 import { companionFetch } from "./connection";
 import { OpenAIDecisionsProvider } from "./decisions";
+import { redactCredentials } from "../shared/redaction";
+import { AccountConnectionError } from "./browser-account";
 
 export type AIErrorKind =
   | "connection"
@@ -80,7 +82,7 @@ export function responseRequest(
     stream: true,
     include: ["reasoning.encrypted_content"],
     // The provider owns model capacity. Never turn a spending policy into a token cap.
-    truncation: "disabled",
+    ...(route.provider === "chatgpt" ? {} : { truncation: "disabled" }),
     reasoning: { effort: route.reasoningEffort ?? "medium" },
     service_tier: route.serviceTier ?? "default",
     ...(functions?.length
@@ -401,6 +403,7 @@ export class HTTPProvider implements Provider {
         signal,
         headers: {
           "Content-Type": "application/json",
+          ...(input.captureContent ? { "X-ItsAlive-Debug": "1" } : {}),
           ...(this.provider === "openai"
             ? { Authorization: `Bearer ${credential}` }
             : {}),
@@ -425,6 +428,8 @@ export class HTTPProvider implements Provider {
           signal.reason?.name === "TimeoutError" ? "timeout" : "cancelled",
         );
       if (error instanceof AIError) throw error;
+      if (error instanceof AccountConnectionError)
+        throw new AIError(error.message, error.kind, { reason: error.code });
       throw new AIError(
         "Couldn't reach OpenAI. Check your connection, then try again. You can download diagnostic logs in Settings.",
         "connection",
@@ -447,10 +452,21 @@ export class HTTPProvider implements Provider {
           "context",
           { status: response.status, requestId, reason: code },
         );
-      throw httpFailure(response.status, requestId);
+      const failure = httpFailure(response.status, requestId);
+      if (input.captureContent) {
+        const detail =
+          object(object(body).diagnostics).providerError ?? object(body).error;
+        Object.assign(failure.detail, {
+          providerError: redactCredentials(detail, { secrets: [credential] }),
+        });
+      }
+      throw failure;
     }
     try {
-      return await readResponseStream(response);
+      return {
+        ...(await readResponseStream(response)),
+        providerRequestId: response.headers.get("x-request-id") ?? undefined,
+      };
     } catch (error) {
       if (error instanceof AIError) throw error;
       if (signal?.aborted)

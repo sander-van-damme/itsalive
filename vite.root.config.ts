@@ -1,7 +1,9 @@
 import { defineConfig } from "vite";
 import { apiPlugin } from "./src/server/vite-api";
 import { resolve } from "node:path";
+import { buildInfo } from "./build-info";
 export default defineConfig({
+  define: { __ITSALIVE_BUILD__: JSON.stringify(buildInfo()) },
   plugins: [apiPlugin()],
   cacheDir: resolve(import.meta.dirname, "node_modules/.vite-root"),
   root: resolve(import.meta.dirname, "sites/root"),

@@ -3,7 +3,11 @@ import type {
   BuildResult,
   Project,
   RuntimeInspection,
+  WorkActivity,
+  WorkActivityResult,
 } from "../shared/types";
+import { failureEvidence } from "../shared/errors";
+import { GENERATED_APP_DESIGN_POLICY } from "./generation-policy";
 import type { AIContext, AIMessage, AIRole, ToolDefinition } from "./types";
 import { AIService } from "./service";
 import { AIError } from "./providers";
@@ -19,6 +23,9 @@ export interface CodingCallbacks {
     baseRevisionId: string,
   ): Promise<string>;
   inspect?(): Promise<RuntimeInspection>;
+  onActivity?(
+    activity: WorkActivity,
+  ): Promise<WorkActivityResult | void> | WorkActivityResult | void;
   loadCheckpoint?(appId: string): Promise<CodingCheckpoint | undefined>;
   saveCheckpoint?(checkpoint: CodingCheckpoint): Promise<void>;
   clearCheckpoint?(appId: string, checkpointId: string): Promise<void>;
@@ -31,6 +38,8 @@ export interface CodingCallbacks {
       | "finishing"
       | "recovering";
     correlationId: string;
+    /** A real, task-specific update from the worker, never a simulated percentage. */
+    message?: string;
   }): void;
   onEvent?(event: {
     event: string;
@@ -137,13 +146,25 @@ export const CODING_TOOLS: ToolDefinition[] = [
     parameters: objectSchema({}, []),
   },
   {
+    name: "report_progress",
+    description:
+      "Give the user a concise update about a real finding or the work now underway. To mark the precise parts being changed, include only region IDs from a recent inspect result. An empty targets list clears prior markers. Never guess IDs or claim completion before finish succeeds.",
+    parameters: objectSchema(
+      {
+        message: string,
+        targets: { type: "array", items: string },
+      },
+      ["message", "targets"],
+    ),
+  },
+  {
     name: "finish",
     description:
       "Finish the requested work. The shell verifies the candidate before applying it.",
     parameters: objectSchema({ summary: string }, ["summary"]),
   },
 ];
-export const CODING_SYSTEM = `You edit an ordinary browser React/TypeScript project through file tools. Generated source is a candidate until the shell compiles and verifies it. The initial request includes the complete current source. Reuse that context; read files only when needed. Batch independent file operations into the same response; use exact scoped patches for small edits. Never modify source outside the stated user request. React and ReactDOM are stable runtime modules. Entry exports a React component as default. Import {useStore,setState} from '@itsalive/store'; useStore(selector) reads durable JSON state and setState({...}) merges it. Ordinary useState is transient. Import {text,decide,choose,score} from '@itsalive/ai'; these proxy bounded AI calls and never expose provider keys. Use ordinary CSS imports. Add exact-version npm packages only when needed. No Node builtins. Never claim compilation succeeded unless check says it did. Repair deterministic failures. Create useful goal-specific application behavior, not a generic counter or scaffold. Replace pending starter content with meaningful tasks, practice material and working controls for the stated goal. Preserve existing durable store keys and relevant user activity during updates. Do not claim capabilities such as pitch recognition unless actually implemented. When repairing, inspect the active application and read relevant files before changing them. Once the requested behavior is implemented, call finish with a concise statement of what the app now does. finish performs verification itself; a separate check is optional. If check already passed and the goal is satisfied, call finish immediately instead of generating more changes. A successful check alone does not prove that the user goal is satisfied. Never finish a pending scaffold. Completed tool results are authoritative: do not repeat a successful patch or deletion after recovery. No arbitrary JavaScript execution tools exist.`;
+export const CODING_SYSTEM = `You edit an ordinary browser React/TypeScript project through file tools. Generated source is a candidate until the shell compiles and verifies it. The initial request includes the complete current source. Reuse that context; read files only when needed. Batch independent file operations into the same response; use exact scoped patches for small edits. Never modify source outside the stated user request. React and ReactDOM are stable runtime modules. Entry exports a React component as default. Import {useStore,setState} from '@itsalive/store'; useStore(selector) reads durable JSON state and setState({...}) merges it. Ordinary useState is transient. Import {text,decide,choose,score} from '@itsalive/ai'; these proxy bounded AI calls and never expose provider keys. Use ordinary CSS imports. Add exact-version npm packages only when needed. No Node builtins. Never claim compilation succeeded unless check says it did. Repair deterministic failures. Create useful goal-specific application behavior, not a generic counter or scaffold. Replace pending starter content with meaningful tasks, practice material and working controls for the stated goal. Preserve existing durable store keys and relevant user activity during updates. Do not claim capabilities such as pitch recognition unless actually implemented. When repairing, inspect the active application and read relevant files before changing them. Use report_progress for real findings and the current task in ordinary language; identify exact current region IDs only after inspect, and use an empty targets list when no precise affected region is known. Once the requested behavior is implemented, call finish with a concise statement of what the app now does. finish performs verification itself; a separate check is optional. If check already passed and the goal is satisfied, call finish immediately instead of generating more changes. A successful check alone does not prove that the user goal is satisfied. Never finish a pending scaffold. Completed tool results are authoritative: do not repeat a successful patch or deletion after recovery. No arbitrary JavaScript execution tools exist.\n\n${GENERATED_APP_DESIGN_POLICY}`;
 
 function path(value: unknown): string {
   if (
@@ -278,11 +299,15 @@ export class CodingHarness {
       });
     const progress = (
       stage: Parameters<NonNullable<CodingCallbacks["onProgress"]>>[0]["stage"],
-    ) =>
+      message?: string,
+    ) => {
+      emit("coding.progress", { stage, ...(message ? { message } : {}) });
       this.callbacks.onProgress?.({
         stage,
         correlationId: context.correlationId,
+        ...(message ? { message } : {}),
       });
+    };
     const save = async () => {
       draft.changedFiles = [...changed];
       draft.updatedAt = Date.now();
@@ -327,6 +352,11 @@ export class CodingHarness {
             compileMs,
             durationMs: performance.now() - checkStarted,
           });
+          emit(
+            "coding.check.evidence",
+            { stage: "compile", diagnostics: result.diagnostics },
+            "DEBUG",
+          );
           rememberFailure(result.diagnostics);
           progress("repairing");
           return {
@@ -340,22 +370,30 @@ export class CodingHarness {
         const verifyAt = performance.now();
         const inspection = await this.callbacks.verify(result.artifact);
         const verifyMs = performance.now() - verifyAt;
-        if (inspection.errors.length) {
+        const qualityErrors =
+          inspection.quality?.issues.filter(
+            (issue) => issue.severity === "error",
+          ) ?? [];
+        const diagnostics = [...inspection.errors, ...qualityErrors];
+        if (diagnostics.length) {
+          const stage = inspection.errors.length ? "runtime" : "quality";
           artifact = undefined;
           verified = false;
-          lastCheck.diagnosticCount = inspection.errors.length;
+          lastCheck.diagnosticCount = diagnostics.length;
           emit("coding.check", {
             ...lastCheck,
             compileMs,
             verifyMs,
             durationMs: performance.now() - checkStarted,
           });
-          rememberFailure(inspection.errors);
+          emit("coding.check.evidence", { stage, inspection }, "DEBUG");
+          rememberFailure(diagnostics);
           progress("repairing");
           return {
             ok: false,
-            stage: "runtime",
-            diagnostics: inspection.errors,
+            stage,
+            diagnostics,
+            quality: inspection.quality,
           };
         }
         artifact = result.artifact;
@@ -367,9 +405,15 @@ export class CodingHarness {
           verifyMs,
           durationMs: performance.now() - checkStarted,
         });
+        emit(
+          "coding.check.evidence",
+          { stage: "verified", inspection },
+          "DEBUG",
+        );
         return {
           ok: true,
           visibleText: inspection.text,
+          quality: inspection.quality,
           metrics: result.artifact.metrics,
           next: "If this implements the user's goal, call finish now. Do not repeat this check unless the source changes.",
         };
@@ -390,6 +434,11 @@ export class CodingHarness {
           ...lastCheck,
           durationMs: performance.now() - checkStarted,
         });
+        emit(
+          "coding.check.evidence",
+          { error: failureEvidence(error) },
+          "DEBUG",
+        );
         progress("repairing");
         return {
           ok: false,
@@ -409,6 +458,15 @@ export class CodingHarness {
           : 0,
       });
       progress("recovering");
+      // An old checkpoint could have reached finish before a live-apply failure.
+      // Its cold check passing again is not evidence that repeating the apply is safe.
+      if (draft.finishRequested && draft.lastFailure?.kind === "workflow") {
+        draft.finishRequested = false;
+        messages.push({
+          role: "user",
+          content: `The previous candidate reached finish but failed during the application workflow. Do not simply finish again. Inspect the saved failure and the active app, then repair the cause while keeping the last working app safe. Failure evidence: ${JSON.stringify(draft.lastFailure)}`,
+        });
+      }
       if (!draft.pending && draft.lastFailure)
         messages.push({
           role: "user",
@@ -438,11 +496,52 @@ export class CodingHarness {
           context.signal?.throwIfAborted();
           progress("finishing");
           const commitAt = performance.now();
-          const revisionId = await this.callbacks.commit(
-            structuredClone(candidate),
-            artifact,
-            request.baseRevisionId,
-          );
+          let revisionId: string;
+          try {
+            revisionId = await this.callbacks.commit(
+              structuredClone(candidate),
+              artifact,
+              request.baseRevisionId,
+            );
+          } catch (error) {
+            const evidence = failureEvidence(error);
+            draft.finishRequested = false;
+            draft.lastFailure = {
+              kind: "workflow",
+              stage: "commit",
+              error: evidence,
+            };
+            await save();
+            // Only a confirmed safe rollback permits automatic repair. Revision
+            // conflicts, persistence failures and unconfirmed rollback must stop.
+            if (
+              evidence.detail?.stage !== "live-apply" ||
+              evidence.detail.rollbackSucceeded !== true
+            )
+              throw error;
+            rememberFailure({
+              stage: "live-apply",
+              name: evidence.name,
+              message: evidence.message,
+            });
+            artifact = undefined;
+            verified = false;
+            emit("coding.live_apply.repair", {
+              error: evidence,
+              strategy: "repair-saved-candidate",
+              baseRevisionId: request.baseRevisionId,
+            });
+            progress(
+              "repairing",
+              "I found a problem when updating the app. Your previous version is safe while I fix it.",
+            );
+            messages.push({
+              role: "user",
+              content: `The candidate passed isolated verification but failed when applied to the actual running app. The previous app and durable state were restored successfully. Inspect the active app and repair this live-update problem before calling finish again. Do not repeat successful edits or replace the user's durable data. Exact failure: ${JSON.stringify(evidence)}`,
+            });
+            await save();
+            continue;
+          }
           // Repository commits atomically invalidate drafts. Optional callbacks also
           // support isolated harness hosts; cleanup failure cannot undo a commit.
           try {
@@ -757,6 +856,27 @@ Verification and recovery instructions: ${JSON.stringify(
                     ? await this.callbacks.inspect()
                     : { text: "", errors: [], note: "No active preview" };
                   break;
+                case "report_progress": {
+                  const message = text(args.message, "message").trim();
+                  if (
+                    !message ||
+                    !Array.isArray(args.targets) ||
+                    args.targets.some((target) => typeof target !== "string")
+                  )
+                    throw new Error(
+                      "Progress needs a concise message and a list of inspected region IDs.",
+                    );
+                  const activity = {
+                    message,
+                    targets: args.targets as string[],
+                  };
+                  result = (await this.callbacks.onActivity?.(activity)) ?? {
+                    resolved: [],
+                    rejected: activity.targets,
+                  };
+                  progress("building", message);
+                  break;
+                }
                 case "finish":
                   draft.summary = text(args.summary, "summary");
                   if (!draft.summary.trim())
@@ -792,6 +912,17 @@ Verification and recovery instructions: ${JSON.stringify(
             ...(call.name === "check" && lastCheck ? { check: lastCheck } : {}),
           });
           const output = JSON.stringify(result);
+          emit(
+            "coding.tool.content",
+            {
+              name: call.name,
+              toolCallId: call.id,
+              arguments: call.arguments,
+              output,
+              ok,
+            },
+            "DEBUG",
+          );
           if (!Object.hasOwn(receipts, call.id))
             Object.defineProperty(receipts, call.id, {
               value: {
@@ -840,6 +971,10 @@ Verification and recovery instructions: ${JSON.stringify(
           : error instanceof AIError
             ? error.kind
             : "workflow",
+        error: failureEvidence(error),
+        ...(failureEvidence(error).detail?.stage
+          ? { stage: String(failureEvidence(error).detail?.stage) }
+          : {}),
         ...(error instanceof AIError && typeof error.detail.reason === "string"
           ? { reason: error.detail.reason }
           : {}),

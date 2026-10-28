@@ -1,4 +1,5 @@
 import type { RuntimeInit } from "./types";
+import { failureEvidence, remoteError, type FailureEvidence } from "./errors";
 
 export const PROTOCOL_VERSION = 2;
 export const UUID_PATTERN =
@@ -43,6 +44,9 @@ export function isRuntimeInit(
     value.appId === appId &&
     ["app", "verify", "backup"].includes(String(value.mode)) &&
     typeof value.observe === "boolean" &&
+    (value.appearance === undefined ||
+      value.appearance === "light" ||
+      value.appearance === "dark") &&
     isRecord(value.state)
   );
 }
@@ -79,7 +83,14 @@ export type EventHandler = (event: string, payload: unknown) => void;
 
 type WireMessage =
   | { v: 2; kind: "request"; id: string; method: string; payload: unknown }
-  | { v: 2; kind: "response"; id: string; payload?: unknown; error?: string }
+  | {
+      v: 2;
+      kind: "response";
+      id: string;
+      payload?: unknown;
+      error?: string;
+      failure?: FailureEvidence;
+    }
   | { v: 2; kind: "event"; event: string; payload: unknown };
 
 export function isWireMessage(value: unknown): value is WireMessage {
@@ -91,7 +102,23 @@ export function isWireMessage(value: unknown): value is WireMessage {
     return typeof value.method === "string" && value.method.length <= 100;
   return (
     value.kind === "response" &&
-    (value.error === undefined || typeof value.error === "string")
+    (value.error === undefined || typeof value.error === "string") &&
+    (value.failure === undefined || validFailure(value.failure))
+  );
+}
+
+function validFailure(value: unknown, depth = 0): value is FailureEvidence {
+  return (
+    depth < 32 &&
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.message === "string" &&
+    (value.stack === undefined || typeof value.stack === "string") &&
+    (value.code === undefined ||
+      typeof value.code === "string" ||
+      typeof value.code === "number") &&
+    (value.detail === undefined || isRecord(value.detail)) &&
+    (value.cause === undefined || validFailure(value.cause, depth + 1))
   );
 }
 
@@ -189,7 +216,12 @@ export class PortRPC {
       if (!entry) return;
       this.pending.delete(message.id);
       clearTimeout(entry.timer);
-      if (message.error !== undefined) entry.reject(new Error(message.error));
+      if (message.error !== undefined)
+        entry.reject(
+          message.failure
+            ? remoteError(message.failure)
+            : new Error(message.error),
+        );
       else entry.resolve(message.payload);
       return;
     }
@@ -215,6 +247,7 @@ export class PortRPC {
           kind: "response",
           id: message.id,
           error: error instanceof Error ? error.message : String(error),
+          failure: failureEvidence(error),
         });
     } finally {
       this.active.delete(message.id);

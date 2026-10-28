@@ -1,6 +1,8 @@
 import { defineConfig } from "vite";
 import { resolve } from "node:path";
+import { buildInfo } from "./build-info";
 export default defineConfig({
+  define: { __ITSALIVE_BUILD__: JSON.stringify(buildInfo()) },
   cacheDir: resolve(import.meta.dirname, "node_modules/.vite-app"),
   root: resolve(import.meta.dirname, "sites/app"),
   build: {

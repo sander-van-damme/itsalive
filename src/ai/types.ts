@@ -67,6 +67,7 @@ export interface ToolDefinition {
   parameters: Record<string, unknown>;
 }
 export interface GenerateInput {
+  captureContent?: boolean;
   decisions?: import("./decisions").DecisionInput;
   messages: AIMessage[];
   tools?: ToolDefinition[];
@@ -93,6 +94,7 @@ export interface AIResponse {
   toolCalls: ToolCall[];
   usage?: AIUsage;
   requestId?: string;
+  providerRequestId?: string;
   serviceTier?: ServiceTier;
 }
 export interface Provider {

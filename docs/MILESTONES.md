@@ -56,3 +56,19 @@ See [REVIEW_IMPLEMENTATION.md](REVIEW_IMPLEMENTATION.md) for the requirement map
 The matched deterministic violin workflow used Node 24.19.0 and Chromium 141 on Linux at 1440×900. Baseline/after request counts were 18/13 (the latter includes a new Decisions capability probe); unchanged Save repeated 6/0 probes. Connection plus creation took 1176/1155 ms, which establishes no meaningful latency improvement. These fixtures measure local integration overhead, not OpenAI latency or actual billed cost. [providers.md](providers.md) defines the new contracts and [acceptance.md](acceptance.md) describes executable coverage.
 
 Validation completed: `npm ci`, `npm run typecheck`, `npm test` (157 tests across 18 files), `npm run build`, `npm run test:e2e` (39 passed, opt-in live-provider/live-CDN cases skipped), `npm run test:production`, `npm run benchmark` (3 passed), and `git diff --check`. `npx playwright install --with-deps chromium` could not elevate to install OS packages; `npx playwright install chromium` succeeded and Chromium ran with the existing libraries. The root bundle-size advisory remains. Real-provider commands were attempted and explicitly reported the missing key. Before/after screenshots were captured and inspected in ignored `work/screenshots/before/` and `work/screenshots/after/`; paired workflow measurements are in `work/workflow-latency-before.json` and `work/workflow-latency-after.json`.
+
+## Detailed usability review — 26 October, validated 28 October 2026
+
+- [x] Preserve all 161 feedback records and 35 technical findings in a 196-ID coverage matrix and 12 implementation tickets.
+- [x] Implement the confirmed left sidebar, collapsed daily controls, focused welcome/onboarding, grouped settings and system/light/dark appearance.
+- [x] Add actual app inspection, discovery questions, structured choices, scoped memory/general instructions, named-app references and live voice context.
+- [x] Add generated design policy and measured rendered contrast/name checks that require repair before publication.
+- [x] Preserve successful work through live-apply recovery, durable retry, truthful progress/precise overlays, coherent cancellation/feedback and version restoration.
+- [x] Preserve complete backup ledgers/settings/drafts; add full opt-in debug evidence, credential redaction, snapshot/retention metadata and build/operation identity.
+- [x] Implement browser OAuth credentials, PKCE/OIDC, refresh and sign-out; reject missing/narrowed allowance grants and preserve local installation support.
+- [x] Pass TypeScript, 241 unit tests, both production builds, 68 browser scenarios (2 opt-in skips), production asset smoke and patch checks.
+- [ ] Obtain the provider-issued hosted client/plan grant and verify real allowance login/inference/revocation.
+- [ ] Complete real-provider quality/cost/audio and Windows incognito acceptance with supplied credentials/hardware.
+- [ ] Review, merge and deploy through the release process.
+
+The [review implementation report](review-2026-10-26/README.md) contains per-ticket criteria, screenshots, verification limits and the complete ID-to-evidence matrix. Deterministic success is not a claim that production access, model empathy or all generated accessibility behavior is already verified.

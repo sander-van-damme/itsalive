@@ -152,7 +152,13 @@ describe("same-origin AI boundary", () => {
     );
     expect(
       JSON.parse(String(fetcher.mock.calls[0]![1]!.body)).session.input,
-    ).toEqual(history);
+    ).toEqual(
+      history.map(({ role, content }) => ({
+        type: "message",
+        role,
+        content: [{ type: "input_text", text: content }],
+      })),
+    );
   });
   it("preserves allowlisted failure reasons and numeric usage without private provider content", async () => {
     const fetcher = vi.fn(async () =>
@@ -214,5 +220,130 @@ describe("same-origin AI boundary", () => {
     expect(body.error.code).toBeUndefined();
     expect(body.usage).toBeUndefined();
     expect(JSON.stringify(body)).not.toContain("private");
+  });
+  it("uses typed Live history messages for user and assistant with the configured voice model", async () => {
+    const fetcher = vi.fn(
+      async (_url: RequestInfo | URL, init?: RequestInit) => {
+        const upstream = JSON.parse(String(init?.body));
+        // This deliberately rejects the old {role, content:string} startup shape.
+        if (
+          !upstream.session.input.every(
+            (item: any) =>
+              item.type === "message" && Array.isArray(item.content),
+          )
+        )
+          return Response.json(
+            { error: { code: "invalid_value" } },
+            { status: 400 },
+          );
+        return Response.json(
+          {
+            session: { id: "live-123" },
+            transport: { type: "webrtc", sdp: "answer" },
+          },
+          { status: 201 },
+        );
+      },
+    );
+    const response = await handleAPI(
+      request("/api/voice/sessions", {
+        sdp: "offer",
+        model: "gpt-live-1",
+        history: [
+          { role: "user", content: "My left hand is tight" },
+          { role: "assistant", content: "When does it happen?" },
+        ],
+      }),
+      fetcher,
+    );
+    expect(response.status).toBe(201);
+    expect(fetcher.mock.calls[0]![0]).toBe(
+      "https://api.openai.com/v1/live/sessions",
+    );
+    const body = JSON.parse(String(fetcher.mock.calls[0]![1]!.body));
+    expect(body.session.input).toEqual([
+      {
+        type: "message",
+        role: "user",
+        content: [{ type: "input_text", text: "My left hand is tight" }],
+      },
+      {
+        type: "message",
+        role: "assistant",
+        content: [{ type: "output_text", text: "When does it happen?" }],
+      },
+    ]);
+    expect(body.transport).toEqual({ type: "webrtc", sdp: "offer" });
+    expect(body.session.store).toBe(false);
+    expect(body.session.delegation).toEqual({ type: "client" });
+  });
+  it("retains exact debug request and provider schema errors while removing authorization and SDP", async () => {
+    const input = request("/api/voice/sessions", {
+      sdp: "private-network-address",
+      history: [{ role: "user", content: "Help me practice" }],
+    });
+    input.headers.set("X-ItsAlive-Debug", "1");
+    const fetcher = vi.fn(async () =>
+      Response.json(
+        {
+          error: {
+            type: "invalid_request_error",
+            code: "invalid_value",
+            param: "session.input.0.content",
+            message: "Expected array; credential test-owned-key",
+          },
+        },
+        { status: 400, headers: { "x-request-id": "req-123" } },
+      ),
+    );
+    const response = await handleAPI(input, fetcher);
+    const body = await response.json();
+    expect(response.headers.get("x-request-id")).toBe("req-123");
+    expect(body.diagnostics.providerError).toEqual({
+      type: "invalid_request_error",
+      code: "invalid_value",
+      param: "session.input.0.content",
+      message: "Expected array; credential [redacted]",
+    });
+    expect(body.diagnostics.request.session.instructions).toContain(
+      "Understand the user's actual problem",
+    );
+    expect(body.diagnostics.request.session.input[0].content[0].text).toBe(
+      "Help me practice",
+    );
+    expect(JSON.stringify(body)).not.toContain("test-owned-key");
+    expect(JSON.stringify(body)).not.toContain("private-network-address");
+    expect(body.error.message).not.toContain("Expected array");
+  });
+  it("includes provider-side assembled voice instructions on successful debug connections", async () => {
+    const input = request("/api/voice/sessions", { sdp: "offer" });
+    input.headers.set("X-ItsAlive-Debug", "1");
+    const response = await handleAPI(
+      input,
+      vi.fn(async () =>
+        Response.json(
+          { session: { id: "live-123" }, transport: { sdp: "answer" } },
+          { status: 201 },
+        ),
+      ),
+    );
+    const body = await response.json();
+    expect(body.transport.sdp).toBe("answer");
+    expect(body.diagnostics.request.session.model).toBe("gpt-live-1");
+    expect(body.diagnostics.request.transport).toEqual({
+      type: "webrtc",
+      sdpBytes: 5,
+    });
+  });
+  it("dispatches same-origin account configuration before the API-key POST gate", async () => {
+    const response = await handleAPI(
+      new Request("https://itsalive.org/api/chatgpt/config"),
+      vi.fn(),
+      { chatgptClientId: "test-public-client" },
+    );
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({
+      clientId: "test-public-client",
+    });
   });
 });

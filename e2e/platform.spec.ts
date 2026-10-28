@@ -6,6 +6,7 @@ import {
   type BrowserContext,
 } from "@playwright/test";
 import { readFile } from "node:fs/promises";
+import { openSettings, openSettingsSection } from "./fixtures/shell-controls";
 import type {
   AppRecord,
   BuildResult,
@@ -82,14 +83,12 @@ async function create(page: Page, name = "Browser acceptance"): Promise<Frame> {
   await expect(frame.getByRole("heading", { name, exact: true })).toBeVisible();
   return frame;
 }
-async function openSettings(page: Page) {
-  if (await page.locator("#settings-dialog").isVisible()) return;
-  await page.locator("#more-options > summary").click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-}
 async function openDiagnostics(page: Page) {
   await openSettings(page);
-  await page.getByText("Help and diagnostics", { exact: true }).click();
+  await openSettingsSection(
+    page.locator("#settings-dialog"),
+    "Help and diagnostics",
+  );
 }
 async function edit(
   page: Page,
@@ -713,7 +712,7 @@ test("a deliberately broken build produces exportable correlated diagnostics", a
     version: number;
     diagnostics: Diagnostic[];
   };
-  expect(exported.version).toBe(3);
+  expect(exported.version).toBe(4);
   expect(exported.diagnostics.some((event) => event.id === failure?.id)).toBe(
     true,
   );
@@ -750,15 +749,16 @@ test("mobile users can reach model choices, optional budget, backup and diagnost
   ).toBeLessThanOrEqual(390);
   await openSettings(page);
   const settings = page.locator("#settings-dialog");
-  await settings.getByText("AI choices", { exact: true }).click();
+  await openSettingsSection(settings, "AI connection");
+  await openSettingsSection(settings, "Advanced AI choices");
   await expect(settings.getByLabel("Low model", { exact: true })).toBeVisible();
   await expect(
     settings.getByLabel("Live voice model", { exact: true }),
   ).toBeVisible();
-  await settings.getByText("Usage", { exact: true }).click();
+  await openSettingsSection(settings, "Usage");
   await expect(
-    settings.getByLabel("Enable spending limit", { exact: true }),
-  ).not.toBeChecked();
+    settings.getByRole("slider", { name: /Monthly API spending/ }),
+  ).toHaveAttribute("aria-valuetext", "No limit");
   await settings.getByText("Backup and restore", { exact: true }).click();
   await settings
     .getByRole("button", { name: "Back up or restore all apps", exact: true })

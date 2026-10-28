@@ -270,12 +270,13 @@ export async function createCompanion(options: Options = {}) {
       return;
     }
     response.setHeader("Access-Control-Allow-Origin", origin);
+    response.setHeader("Access-Control-Expose-Headers", "X-Request-Id");
     response.setHeader("Vary", "Origin");
     if (request.method === "OPTIONS") {
       response.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS");
       response.setHeader(
         "Access-Control-Allow-Headers",
-        "Content-Type, X-Itsalive-Session",
+        "Content-Type, X-Itsalive-Session, X-ItsAlive-Debug",
       );
       response.setHeader("Access-Control-Allow-Private-Network", "true");
       response.statusCode = 204;
@@ -453,7 +454,16 @@ export async function createCompanion(options: Options = {}) {
         if (!result.ok) {
           const safe = safeProviderFailure(
             await result.json().catch(() => null),
+            {
+              includeContent: request.headers["x-itsalive-debug"] === "1",
+              secrets: [token],
+            },
           );
+          if (result.headers.get("x-request-id"))
+            response.setHeader(
+              "X-Request-Id",
+              result.headers.get("x-request-id")!,
+            );
           send(result.status, {
             ...safe,
             error: {
@@ -465,6 +475,11 @@ export async function createCompanion(options: Options = {}) {
           return;
         }
         response.statusCode = result.status;
+        if (result.headers.get("x-request-id"))
+          response.setHeader(
+            "X-Request-Id",
+            result.headers.get("x-request-id")!,
+          );
         response.setHeader(
           "Content-Type",
           result.headers.get("content-type") ?? "application/json",

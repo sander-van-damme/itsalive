@@ -65,6 +65,7 @@ export type BuildResult =
   | { ok: false; diagnostics: BuildDiagnostic[] };
 export type RuntimeMode = "app" | "verify" | "backup";
 export interface RuntimeInit {
+  appearance?: "light" | "dark";
   appId: string;
   mode: RuntimeMode;
   state: Record<string, Json>;
@@ -74,6 +75,38 @@ export interface RuntimeInspection {
   text: string;
   errors: string[];
   revisionId: string | null;
+  /** Shell-assigned IDs backed by currently rendered elements, never guessed selectors. */
+  regions?: RuntimeRegion[];
+  /** Targeted rendered-view evidence; not a full accessibility conformance audit. */
+  quality?: RuntimeQualityInspection;
+}
+export interface RuntimeQualityIssue {
+  code: "text-contrast" | "small-text" | "control-name" | "dialog-name";
+  severity: "error" | "warning";
+  element: string;
+  message: string;
+  actual?: string | number;
+  expected?: string | number;
+}
+export interface RuntimeQualityInspection {
+  issues: RuntimeQualityIssue[];
+  inconclusive: Array<{ element: string; reason: string }>;
+  checkedTextElements: number;
+  checkedControls: number;
+  scope: "visible-current-view";
+}
+export interface RuntimeRegion {
+  id: string;
+  label: string;
+  role: string;
+}
+export interface WorkActivity {
+  message: string;
+  targets: string[];
+}
+export interface WorkActivityResult {
+  resolved: string[];
+  rejected: string[];
 }
 export interface BehaviorObservation {
   target: string;

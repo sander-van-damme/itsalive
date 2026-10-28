@@ -22,6 +22,8 @@ import { AIError, HTTPProvider } from "./providers";
 import { MODEL_CHOICES, normalizeAIConfig, tierMultiplier } from "./types";
 import { RequestQueue } from "./queue";
 import { DemoProvider } from "./demo";
+import { redactCredentials } from "../shared/redaction";
+import type { VoiceUsageDetails } from "./speech";
 
 export interface AIServiceOptions {
   beforeRequest?: () => void;
@@ -29,6 +31,8 @@ export interface AIServiceOptions {
   onHealth?: (health: ConnectionHealth) => void;
   providers?: Partial<Record<ProviderId, Provider>>;
   log?: (event: AIEvent) => void;
+  /** Removes account credentials held outside the service's routing markers. */
+  sanitizeDiagnostic?: (value: unknown) => unknown;
   onUsage?: (record: UsageRecord) => void | Promise<void>;
   now?: () => number;
 }
@@ -39,31 +43,19 @@ export interface ConnectionHealth {
 }
 
 export function redact(value: unknown, secrets: string[] = []): unknown {
-  if (typeof value === "string") {
-    let output = value.replace(
-      /\b(?:sk-[\w-]{8,}|Bearer\s+[^\s"']+)/gi,
-      "[REDACTED]",
-    );
-    for (const secret of secrets)
-      if (secret.length > 3) output = output.split(secret).join("[REDACTED]");
-    return output.slice(0, 32_000);
-  }
-  if (Array.isArray(value))
-    return value.slice(0, 100).map((item) => redact(item, secrets));
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value)
-        .slice(0, 100)
-        .map(([key, item]) => [
-          key,
-          /^(?:api[_-]?key|access[_-]?token|refresh[_-]?token|token|credential(?:s)?|authorization|password|secret(?:s)?)$/i.test(
-            key,
-          )
-            ? "[REDACTED]"
-            : redact(item, secrets),
-        ]),
-    );
-  return value;
+  const normalize = (item: unknown): unknown => {
+    if (typeof item === "string")
+      return item
+        .replaceAll("Bearer [redacted]", "[REDACTED]")
+        .replaceAll("[redacted]", "[REDACTED]");
+    if (Array.isArray(item)) return item.map(normalize);
+    if (item && typeof item === "object")
+      return Object.fromEntries(
+        Object.entries(item).map(([key, entry]) => [key, normalize(entry)]),
+      );
+    return item;
+  };
+  return normalize(redactCredentials(value, { secrets }));
 }
 function checkConfig(config: AIConfig): void {
   const { limits } = config;
@@ -107,6 +99,8 @@ export class AIService {
   private testingConfiguration = false;
   private records: UsageRecord[] = [];
   private readonly unpersistedUsage = new Set<string>();
+  private readonly usageWrites = new Set<Promise<void>>();
+  private readonly usageWriteTails = new Map<string, Promise<void>>();
   private readonly providers: Record<ProviderId, Provider>;
   private readonly now: () => number;
   private readonly queue: RequestQueue;
@@ -210,62 +204,160 @@ export class AIService {
           : { state: "unchecked" },
       );
   }
+  private persistUsage(record: UsageRecord): Promise<void> {
+    const snapshot = structuredClone(record);
+    // Voice can publish a final update while its initial marker is still being
+    // written. Preserve order for that request, without serializing other work.
+    const previous = this.usageWriteTails.get(record.id) ?? Promise.resolve();
+    const write = previous
+      .catch(() => {})
+      .then(() => this.options.onUsage?.(snapshot));
+    this.usageWriteTails.set(record.id, write);
+    this.usageWrites.add(write);
+    const settled = () => {
+      this.usageWrites.delete(write);
+      if (this.usageWriteTails.get(record.id) === write)
+        this.usageWriteTails.delete(record.id);
+    };
+    void write.then(settled, settled);
+    return write;
+  }
+  /** Flush the ledger before a diagnostic or backup snapshot; expose unsaved data explicitly. */
+  async flushUsage(): Promise<{
+    pendingWrites: number;
+    unpersistedRecords: UsageRecord[];
+  }> {
+    await Promise.allSettled([...this.usageWrites]);
+    for (const id of [...this.unpersistedUsage]) {
+      const record = this.records.find((entry) => entry.id === id);
+      if (!record) {
+        this.unpersistedUsage.delete(id);
+        continue;
+      }
+      try {
+        await this.persistUsage(record);
+        this.unpersistedUsage.delete(id);
+      } catch {
+        /* Declared below; evidence export remains available. */
+      }
+    }
+    return {
+      pendingWrites: this.usageWrites.size,
+      unpersistedRecords: this.usage.filter((record) =>
+        this.unpersistedUsage.has(record.id),
+      ),
+    };
+  }
   startVoice(context: AIContext): {
-    update(seconds: number, final?: boolean, confirmed?: boolean): void;
+    update(
+      seconds: number,
+      final?: boolean,
+      confirmed?: boolean,
+      details?: VoiceUsageDetails,
+    ): void;
   } {
-    // Voice uses observed duration until provider usage is available; never reserve invented future usage.
     const rate = 0.05 / 60;
     this.checkBudget();
-    const record: UsageRecord = {
-      id: crypto.randomUUID(),
-      timestamp: this.now(),
-      role: "speech",
-      provider: "openai",
-      model: "gpt-live-1",
-      appId: context.appId,
-      correlationId: context.correlationId,
-      inputTokens: 0,
-      outputTokens: 0,
-      cachedTokens: 0,
-      costUSD: 0,
-      costStatus: "unknown",
-      usageStatus: "unknown",
-      estimated: true,
-      latencyMs: 0,
-      status: "pending",
-      seconds: 0,
-    };
-    this.records.push(record);
-    const persist = () => {
-      const failed = () => {
-        this.unpersistedUsage.add(record.id);
-        this.event(context, "ai.accounting.persist.failure", {
-          requestId: record.id,
-          role: "speech",
-        });
+    const record: UsageRecord & { voiceAccounting?: Record<string, unknown> } =
+      {
+        id: crypto.randomUUID(),
+        timestamp: this.now(),
+        role: "speech",
+        provider: "openai",
+        model: this.configuration.routes.speech.model,
+        appId: context.appId,
+        correlationId: context.correlationId,
+        inputTokens: 0,
+        outputTokens: 0,
+        cachedTokens: 0,
+        costUSD: 0,
+        costStatus: "unknown",
+        usageStatus: "unknown",
+        estimated: true,
+        latencyMs: 0,
+        status: "pending",
+        seconds: 0,
       };
-      try {
-        const write = this.options.onUsage?.(structuredClone(record));
-        if (write)
-          void write
-            .then(() => this.unpersistedUsage.delete(record.id))
-            .catch(failed);
-        else this.unpersistedUsage.delete(record.id);
-      } catch {
-        failed();
-      }
+    this.records.push(record);
+    let settled = false;
+    const persist = () => {
+      void this.persistUsage(record)
+        .then(() => this.unpersistedUsage.delete(record.id))
+        .catch((error: unknown) => {
+          this.unpersistedUsage.add(record.id);
+          this.event(context, "ai.accounting.persist.failure", {
+            requestId: record.id,
+            role: "speech",
+            error,
+          });
+        });
     };
+    this.event(context, "voice.accounting.started", {
+      requestId: record.id,
+      model: record.model,
+    });
     persist();
     return {
-      update: (seconds, final = false, confirmed = false) => {
-        const cost = Math.max(0, seconds) * rate;
-        record.seconds = seconds;
-        record.costUSD = cost;
-        record.costStatus = seconds > 0 ? "estimated" : "unknown";
-        record.latencyMs = seconds * 1000;
-        record.status = final ? (confirmed ? "success" : "failed") : "pending";
-        record.estimated = true;
+      update: (seconds, final = false, confirmed = false, details) => {
+        if (settled) return;
+        const observedSeconds = Number.isFinite(seconds)
+          ? Math.max(0, seconds)
+          : 0;
+        const providerSeconds =
+          details?.providerSeconds ?? (confirmed ? observedSeconds : undefined);
+        const created = details?.sessionCreated ?? confirmed;
+        const initializationSeconds = created
+          ? (details?.initializationSeconds ?? 0)
+          : 0;
+        const billedSeconds = created
+          ? Math.max(providerSeconds ?? observedSeconds, initializationSeconds)
+          : 0;
+        const neverBilled =
+          details?.sessionCreateOutcome === "not-attempted" ||
+          details?.sessionCreateOutcome === "rejected";
+        record.seconds = providerSeconds ?? observedSeconds;
+        record.costUSD = billedSeconds * rate;
+        record.costStatus = created
+          ? "estimated"
+          : neverBilled
+            ? "not-billed"
+            : "unknown";
+        record.usageStatus =
+          providerSeconds === undefined ? "unknown" : "reported";
+        record.latencyMs =
+          details?.elapsedMs ?? Math.max(0, this.now() - record.timestamp);
+        record.status = final
+          ? details?.outcome === "completed" || (!details && confirmed)
+            ? "success"
+            : "failed"
+          : "pending";
+        record.estimated = record.costStatus === "estimated";
+        record.voiceAccounting = {
+          measuredSeconds: record.latencyMs / 1000,
+          observedSeconds,
+          providerSeconds: providerSeconds ?? null,
+          sessionCreateOutcome:
+            details?.sessionCreateOutcome ?? (created ? "created" : "unknown"),
+          initializationSeconds,
+          estimatedBillableSeconds: created ? billedSeconds : null,
+          estimatedRatePerMinuteUSD: 0.05,
+          outcome:
+            details?.outcome ??
+            (final ? (confirmed ? "completed" : "failed") : "active"),
+          failureStage: details?.failureStage ?? null,
+        };
+        settled = final;
         persist();
+        if (final)
+          this.event(context, "voice.accounting.finished", {
+            requestId: record.id,
+            seconds: record.seconds,
+            latencyMs: record.latencyMs,
+            costUSD: record.costStatus === "unknown" ? null : record.costUSD,
+            costStatus: record.costStatus,
+            usageStatus: record.usageStatus,
+            ...record.voiceAccounting,
+          });
       },
     };
   }
@@ -318,16 +410,23 @@ export class AIService {
     data: Record<string, unknown>,
     level: "INFO" | "DEBUG" = "INFO",
   ): void {
-    const secrets = Object.values(this.options.credentials?.() ?? {}).filter(
-      (value): value is string => !!value,
-    );
+    const secrets = Object.entries(this.options.credentials?.() ?? {})
+      .filter(
+        ([provider, value]) =>
+          !(provider === "chatgpt" && value === "connected"),
+      )
+      .map(([, value]) => value)
+      .filter((value): value is string => !!value);
     try {
+      const sanitized = this.options.sanitizeDiagnostic
+        ? this.options.sanitizeDiagnostic(data)
+        : data;
       this.options.log?.({
         event,
         level,
         appId: context.appId,
         correlationId: context.correlationId,
-        data: redact(data, secrets) as Record<string, unknown>,
+        data: redact(sanitized, secrets) as Record<string, unknown>,
       });
     } catch {
       /* Diagnostics cannot veto provider work. */
@@ -362,7 +461,7 @@ export class AIService {
         continue;
       }
       try {
-        await this.options.onUsage?.(structuredClone(record));
+        await this.persistUsage(record);
         this.unpersistedUsage.delete(id);
       } catch {
         throw new AIError(
@@ -416,6 +515,7 @@ export class AIService {
     if (route.provider !== "demo" && !credential)
       throw new Error(`Add a ${route.provider} key in Settings.`);
     const now = this.now();
+    const captureContent = this.configuration.captureContent;
     if (route.provider === "openai") this.checkBudget();
     const record: UsageRecord = {
       id: crypto.randomUUID(),
@@ -439,7 +539,7 @@ export class AIService {
     this.records.push(record);
     this.active++;
     try {
-      await this.options.onUsage?.(structuredClone(record));
+      await this.persistUsage(record);
     } catch {
       this.active--;
       this.records = this.records.filter((item) => item.id !== record.id);
@@ -461,6 +561,7 @@ export class AIService {
       requestId: record.id,
       costStatus: record.costStatus,
       inputCharacters: encoded.length,
+      captureContent,
     });
     this.event(
       context,
@@ -475,11 +576,11 @@ export class AIService {
       },
       "DEBUG",
     );
-    if (this.configuration.captureContent)
+    if (captureContent)
       this.event(
         context,
         "ai.request.content",
-        { messages: input.messages },
+        { requestId: record.id, role, route, ...input },
         "DEBUG",
       );
     let providerStarted = false;
@@ -489,9 +590,10 @@ export class AIService {
       context.signal?.throwIfAborted();
       if (route.provider === "openai") this.checkBudget();
       providerStarted = true;
+      const providerInput = { ...input, captureContent };
       const result = await this.providers[route.provider].generate(
         route,
-        input,
+        providerInput,
         credential,
         context.signal,
       );
@@ -503,7 +605,11 @@ export class AIService {
         this.updateHealth({ state: "ready", checkedAt: this.now() });
       this.event(context, "ai.response", {
         role,
-        requestId: result.requestId ?? record.id,
+        requestId: record.id,
+        providerResponseId: result.requestId,
+        providerRequestId: (
+          result as AIResponse & { providerRequestId?: string }
+        ).providerRequestId,
         inputTokens: record.inputTokens,
         outputTokens: record.outputTokens,
         costUSD: record.costStatus === "unknown" ? null : record.costUSD,
@@ -514,11 +620,11 @@ export class AIService {
         latencyMs: this.now() - now,
         toolCalls: result.toolCalls.map((call) => call.name),
       });
-      if (this.configuration.captureContent)
+      if (captureContent)
         this.event(
           context,
           "ai.response.content",
-          { text: result.text, calls: result.toolCalls },
+          { requestId: record.id, role, response: result },
           "DEBUG",
         );
       return result;
@@ -545,8 +651,7 @@ export class AIService {
       this.event(context, "ai.failure", {
         role,
         requestId: record.id,
-        error:
-          error instanceof Error ? error.message : "Unknown provider failure",
+        error: error,
         costStatus: record.costStatus,
         usageStatus: record.usageStatus,
         costUSD: record.costStatus === "unknown" ? null : record.costUSD,
@@ -556,14 +661,25 @@ export class AIService {
           record.usageStatus === "unknown" ? null : record.outputTokens,
         latencyMs: this.now() - now,
         ...(error instanceof AIError
-          ? { kind: error.kind, ...error.detail }
+          ? {
+              kind: error.kind,
+              providerDetail: error.detail,
+              providerRequestId: error.detail.requestId,
+            }
           : {}),
       });
+      if (captureContent && outcome)
+        this.event(
+          context,
+          "ai.response.content",
+          { requestId: record.id, role, response: outcome, failed: true },
+          "DEBUG",
+        );
       throw error;
     } finally {
       record.latencyMs = this.now() - now;
       try {
-        await this.options.onUsage?.(structuredClone(record));
+        await this.persistUsage(record);
         this.unpersistedUsage.delete(record.id);
       } catch {
         this.unpersistedUsage.add(record.id);
@@ -701,7 +817,7 @@ export class AIService {
         if (index === -1) this.records.push(record);
         else this.records[index] = record;
         try {
-          await this.options.onUsage?.(record);
+          await this.persistUsage(record);
           this.unpersistedUsage.delete(record.id);
         } catch (error) {
           // A probe that never started must not leave a phantom pending charge in the parent ledger.
