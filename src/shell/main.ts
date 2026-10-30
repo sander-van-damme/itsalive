@@ -14,7 +14,28 @@ import {
   demoAIConfig,
 } from "../ai";
 import { AIError } from "../ai/providers";
-import { accountSession } from "../ai/connection";
+import {
+  accountSession,
+  completeAccountCallback,
+  redactAccountDiagnostic,
+} from "../ai/connection";
+import {
+  findReferencedApps,
+  type ClarificationChoice,
+  type ConversationEnvironment,
+} from "../ai/conversation";
+import {
+  emptyPreferenceMemory,
+  normalizePreferenceMemory,
+  applyMemoryChanges,
+  mergePreferenceEdits,
+  getMemoryContext,
+  PREFERENCE_MEMORY_SETTING,
+  type PreferenceMemory,
+} from "../ai/memory";
+import { serviceTierFor, type ResponseSpeed } from "../ai/types";
+import { BUILD_INFO, buildLabel } from "../shared/build";
+import { failureEvidence } from "../shared/errors";
 import type {
   ProviderCredentials,
   AIConfig,
@@ -29,6 +50,7 @@ root.innerHTML = SHELL_VIEW;
 const $ = <T extends HTMLElement = HTMLElement>(id: string) =>
   document.getElementById(id) as T;
 const workspace = new Workspace($("app-container"));
+workspace.diagnostics.sanitizeDiagnostic = redactAccountDiagnostic;
 let config: AIConfig = defaultAIConfig();
 let credentials: ProviderCredentials = {};
 try {
@@ -52,27 +74,120 @@ let codingController: AbortController | undefined;
 let codingStage = "Building your application…";
 let workTimer: ReturnType<typeof setInterval> | undefined;
 let voice: LiveVoice | undefined;
+let voiceStarting = false;
 let microphoneEnabled = true;
 let usageWrites: Promise<void> = Promise.resolve();
 let backupController: AbortController | null = null;
 let activeTab = "preview";
+let personalization: PreferenceMemory = emptyPreferenceMemory();
+function voiceContextText() {
+  return JSON.stringify({
+    currentApp: workspace.current
+      ? {
+          id: workspace.current.id,
+          name: workspace.current.name,
+          revisionId: workspace.revision?.id,
+        }
+      : null,
+    preferences: getMemoryContext(
+      personalization,
+      workspace.current?.id ?? "workspace",
+    ),
+    availableApps:
+      "Ask the companion for actual saved app context when inspecting or comparing apps.",
+  });
+}
+let workContext: { appId: string; correlationId: string } | undefined;
+const presentedErrors = new WeakSet<object>();
+const errorContexts = new WeakMap<
+  object,
+  { appId: string; correlationId: string }
+>();
+let pendingWorkAction: (() => Promise<void>) | undefined;
+let conflictAction: (() => Promise<void>) | undefined;
+let latestConversation = 0;
+const conversationPlans = new Map<string, Promise<void>>();
+const planningControllers = new Set<AbortController>();
+const hasPendingWork = () => coding || conversationPlans.size > 0;
+interface FailedConversation {
+  text: string;
+  liveHistory: Array<{ role: "user" | "assistant"; content: string }>;
+  revisionId: string;
+  failedAt: number;
+}
+async function refreshRetry() {
+  const appId = workspace.current?.id;
+  if (!appId) {
+    $("retry-work").hidden = true;
+    return;
+  }
+  const [draft, failed] = await Promise.all([
+    workspace.repo.getCodingCheckpoint(appId),
+    workspace.repo.getSetting<FailedConversation | null>(
+      `conversation.retry.${appId}`,
+    ),
+  ]);
+  if (workspace.current?.id !== appId) return;
+  $("retry-work").hidden =
+    hasPendingWork() ||
+    !(
+      draft?.baseRevisionId === workspace.revision?.id ||
+      failed?.revisionId === workspace.revision?.id
+    );
+}
+function continuePendingAction() {
+  if (!hasPendingWork() && !queuedEdits.length && pendingWorkAction) {
+    const next = pendingWorkAction;
+    pendingWorkAction = undefined;
+    action(next);
+  }
+}
 const setStatus = (message: string) => {
   if (coding && message === "Ready") message = codingStage;
   if ($("status").textContent === message) return;
   $("status").textContent = message;
   $("status").title = message;
+  if (workContext)
+    void workspace.diagnostics.record(
+      "ui.progress.presented",
+      { message },
+      workContext,
+    );
 };
 workspace.onStatus = setStatus;
+workspace.onApplying = (_appId, active) => {
+  $<HTMLButtonElement>("cancel-work").disabled = active;
+  $<HTMLButtonElement>("build-conflict-cancel").disabled = active;
+  if (active) setStatus("Saving your verified change…");
+};
+workspace.onWarning = (message) => {
+  const warning =
+    document.getElementById("workspace-warning") ??
+    element("div", undefined, "assistance-prompt");
+  warning.id = "workspace-warning";
+  warning.setAttribute("role", "status");
+  warning.replaceChildren(element("p", message));
+  const dismiss = element("button", "Dismiss", "quiet");
+  dismiss.onclick = () => warning.remove();
+  warning.append(dismiss);
+  $("chat").after(warning);
+};
 const context = () => ({
   appId: workspace.current?.id ?? "workspace",
   correlationId: crypto.randomUUID(),
 });
 function report(error: unknown) {
+  if (error && typeof error === "object" && presentedErrors.has(error)) return;
   const detail = error instanceof Error ? error.message : String(error);
   void workspace.diagnostics.record(
     "operation.failed",
-    { message: detail, ...(error instanceof AIError ? error.detail : {}) },
-    context(),
+    {
+      error: failureEvidence(error),
+      ...(error instanceof AIError ? error.detail : {}),
+    },
+    error && typeof error === "object"
+      ? (errorContexts.get(error) ?? context())
+      : context(),
   );
   const message =
     error instanceof AIError
@@ -124,19 +239,34 @@ async function renderHistory() {
   const revisions = await workspace.repo.listRevisions(appId);
   if (workspace.current?.id !== appId) return;
   for (const revision of revisions.reverse()) {
+    const initialSetup =
+      revision.parent === null && revision.message === "Created application";
     const row = element("div", undefined, "revision-row");
     const info = element("div");
     info.append(
-      element("strong", revision.message),
+      element("strong", initialSetup ? "Initial setup" : revision.message),
       element("small", new Date(revision.createdAt).toLocaleString()),
     );
     const button = element(
       "button",
-      revision.id === workspace.revision?.id ? "Current" : "Restore",
+      revision.id === workspace.revision?.id
+        ? "Current"
+        : initialSetup
+          ? "Setup"
+          : "Restore",
       "quiet",
     );
-    button.disabled = revision.id === workspace.revision?.id;
-    button.onclick = () => action(() => workspace.rollback(revision.id));
+    button.disabled = initialSetup || revision.id === workspace.revision?.id;
+    if (initialSetup)
+      button.title = "Your app had not been created at this point.";
+    button.onclick = () =>
+      action(async () => {
+        if (hasPendingWork())
+          showWorkConflict(async () => {
+            await workspace.rollback(revision.id);
+          }, "restore this version");
+        else await workspace.rollback(revision.id);
+      });
     row.append(info, button);
     list.append(row);
   }
@@ -185,7 +315,7 @@ async function renderChat() {
     const bubble = element("div", undefined, `chat-message ${message.role}`);
     bubble.dataset.messageId = message.id;
     bubble.append(
-      element("span", message.role === "user" ? "You" : "It's Alive"),
+      element("span", message.role === "user" ? "You" : "Assistant"),
       element("p", message.content),
     );
     chat.append(bubble);
@@ -211,6 +341,14 @@ async function render() {
         action(async () => {
           $("proposal").hidden = true;
           $("suggestion").hidden = true;
+          $("clarification").hidden = true;
+          if (hasPendingWork() && app.id !== workspace.current?.id) {
+            showWorkConflict(
+              () => workspace.openApp(app.id),
+              `open ${app.name}`,
+            );
+            return;
+          }
           await workspace.openApp(app.id);
         });
       return button;
@@ -224,15 +362,90 @@ async function render() {
     : "Describe the app you want to create…";
   $<HTMLButtonElement>("rename-app").disabled = !workspace.current;
   $<HTMLButtonElement>("restore-version").disabled = !workspace.current;
-  const draft = workspace.current
-    ? await workspace.repo.getCodingCheckpoint(workspace.current.id)
-    : undefined;
-  $("retry-work").hidden =
-    coding || !draft || draft.baseRevisionId !== workspace.revision?.id;
+  $<HTMLButtonElement>("rail-history").disabled = !workspace.current;
+  $<HTMLButtonElement>("app-title").disabled = !workspace.current;
+  await refreshRetry();
   if (activeTab === "history") await renderHistory();
   await renderChat();
+  if (voice?.active) voice.updateContext(voiceContextText());
 }
-const shellView = initializeShellView({ showTab });
+const shellView = initializeShellView({
+  showTab,
+  onSpeedChange: (speed) => action(() => changeSpeed(speed)),
+  onUsageClick: () => {
+    settings.open();
+    const usage = $("usage-summary").closest("details");
+    if (usage) usage.open = true;
+    $("usage-summary").scrollIntoView({ block: "nearest" });
+  },
+});
+function refreshUsage() {
+  if (!ai) return;
+  const now = new Date();
+  const start = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1);
+  const records = ai.usage.filter((row) => row.timestamp >= start);
+  const known = records.filter(
+    (row) => row.status !== "pending" && row.costStatus !== "unknown",
+  );
+  shellView.setUsage(
+    known.reduce((sum, row) => sum + row.costUSD, 0),
+    records.filter((row) => row.costStatus === "unknown").length,
+  );
+}
+async function changeSpeed(speed: ResponseSpeed) {
+  const next = structuredClone(config);
+  next.speed = speed;
+  for (const [role, route] of Object.entries(next.routes))
+    if (role !== "speech")
+      route.serviceTier = serviceTierFor(route.model, speed);
+  ai.configure(next);
+  config = next;
+  await workspace.repo.setSetting("ai.config", config);
+  shellView.setSpeed(speed);
+  await workspace.diagnostics.record(
+    "preferences.speed.changed",
+    { speed, appliesTo: "subsequent_requests" },
+    context(),
+  );
+  refreshProviderBadge();
+}
+function showWorkConflict(
+  next: () => Promise<void>,
+  actionLabel = "start your new app",
+) {
+  conflictAction = next;
+  const dialog = $<HTMLDialogElement>("build-conflict-dialog");
+  dialog.querySelector("p")!.textContent = `When should I ${actionLabel}?`;
+  $("build-conflict-wait").textContent = "After this change finishes";
+  $("build-conflict-cancel").textContent = "Stop this change and continue";
+  if (!dialog.open) dialog.showModal();
+  void workspace.diagnostics.record(
+    "ui.operation.blocked",
+    { operation: actionLabel, reason: "work_in_progress" },
+    workContext ?? context(),
+  );
+}
+for (const [id, cancel] of [
+  ["build-conflict-wait", false],
+  ["build-conflict-cancel", true],
+] as const)
+  $(id).onclick = () => {
+    pendingWorkAction = conflictAction;
+    conflictAction = undefined;
+    $<HTMLDialogElement>("build-conflict-dialog").close();
+    $<HTMLDialogElement>("create-dialog").close();
+    if (!hasPendingWork()) {
+      const next = pendingWorkAction;
+      pendingWorkAction = undefined;
+      if (next) action(next);
+    } else if (cancel) {
+      codingController?.abort();
+      for (const controller of planningControllers) controller.abort();
+    } else setStatus("Your next action will start when this change finishes.");
+  };
+$<HTMLDialogElement>("build-conflict-dialog").addEventListener("close", () => {
+  conflictAction = undefined;
+});
 workspace.onChange = () => action(render);
 async function appendMessage(
   role: ChatMessage["role"],
@@ -255,7 +468,7 @@ interface FeedbackAttempt {
   revisionId: string;
   originalRequest: string;
   intent: string;
-  status: "offered" | "unresolved" | "resolved" | "dismissed";
+  status: "offered" | "unresolved" | "resolved" | "dismissed" | "superseded";
   createdAt: number;
 }
 async function feedbackAttempts(appId: string): Promise<FeedbackAttempt[]> {
@@ -350,6 +563,7 @@ interface QueuedEdit {
   appId: string;
   intent: string;
   originalRequest: string;
+  operation?: { correlationId: string; startedAt: number };
   resolve(): void;
   reject(error: unknown): void;
 }
@@ -359,6 +573,7 @@ async function runCoding(
   originalRequest = intent,
   level: WorkLevel = "medium",
   resume = false,
+  operation?: { correlationId: string; startedAt: number },
 ) {
   const role = (
     {
@@ -372,7 +587,7 @@ async function runCoding(
     !requireAIReady(async () => {
       if (requestedAppId && workspace.current?.id !== requestedAppId)
         await workspace.openApp(requestedAppId);
-      await runCoding(intent, originalRequest, level, resume);
+      await runCoding(intent, originalRequest, level, resume, operation);
     }, [role])
   )
     return;
@@ -388,6 +603,7 @@ async function runCoding(
         appId: requestedAppId,
         intent,
         originalRequest,
+        operation,
         resolve,
         reject,
       }),
@@ -417,7 +633,27 @@ async function runCoding(
     .querySelectorAll(".feedback")
     .forEach((node) => node.remove());
   const base = workspace.revision;
-  const codingContext = context();
+  let committedRevisionId: string | undefined;
+  const codingContext = {
+    ...context(),
+    ...(operation ? { correlationId: operation.correlationId } : {}),
+  };
+  workContext = codingContext;
+  shellView.setCreating(base.parent === null, workspace.current?.name);
+  $("clarification").hidden = true;
+  const updates = new Set<string>();
+  const showWorkUpdate = async (message: string) => {
+    setStatus(message);
+    if (updates.has(message)) return;
+    updates.add(message);
+    await appendMessage("assistant", message, base.appId);
+    if (voice?.active) voice.reportProgress(message);
+    await workspace.diagnostics.record(
+      "coding.progress.delivered",
+      { message },
+      codingContext,
+    );
+  };
   codingStage =
     base.parent === null ? "Creating your app…" : "Working on your changes…";
   setStatus(codingStage);
@@ -432,22 +668,36 @@ async function runCoding(
       );
   };
   try {
+    const previousAttempts = await feedbackAttempts(base.appId);
+    for (const attempt of previousAttempts.filter(
+      (item) => item.status === "offered",
+    )) {
+      attempt.status = "superseded";
+      await saveFeedback(attempt);
+    }
     const harness = new CodingHarness(ai, {
       loadCheckpoint: (appId) => workspace.repo.getCodingCheckpoint(appId),
       saveCheckpoint: (checkpoint) =>
         workspace.repo.saveCodingCheckpoint(checkpoint),
       clearCheckpoint: (appId, checkpointId) =>
         workspace.repo.clearCodingCheckpoint(appId, checkpointId),
-      onProgress: ({ stage }) => {
-        codingStage = {
-          understanding: "Understanding your request…",
-          building: "Building your application…",
-          checking: "Checking the application…",
-          repairing: "Fixing a problem found during checking…",
-          finishing: "Finishing your application…",
-          recovering: "Resuming your saved progress…",
-        }[stage];
+      onProgress: ({ stage, message }) => {
+        codingStage =
+          message ??
+          {
+            understanding: "Planning the changes…",
+            building: "Building your application…",
+            checking: "Checking the application…",
+            repairing: "Fixing a problem found during checking…",
+            finishing: "Finishing your application…",
+            recovering: "Resuming your saved progress…",
+          }[stage];
         setStatus(codingStage);
+      },
+      onActivity: async (activity) => {
+        const result = await workspace.setActivity(activity, base.appId);
+        await showWorkUpdate(activity.message);
+        return result;
       },
       onEvent: ({ event, data, level }) => {
         void workspace.diagnostics.record(event, data, codingContext, level);
@@ -462,15 +712,18 @@ async function runCoding(
         setStatus("Checking the changes…");
         return workspace.verify(artifact, codingContext);
       },
-      commit: (project, artifact, baseRevisionId) => {
+      commit: async (project, artifact, baseRevisionId) => {
         requireSameApp();
-        return workspace.applyProject(
+        const revisionId = await workspace.applyProject(
           project,
           baseRevisionId,
           originalRequest,
           artifact,
           codingContext.correlationId,
+          controller.signal,
         );
+        committedRevisionId = revisionId;
+        return revisionId;
       },
       inspect: () => {
         requireSameApp();
@@ -505,21 +758,53 @@ async function runCoding(
       status: "offered",
       createdAt: Date.now(),
     });
-    // Worker summaries are diagnostics, never an unfiltered technical chat response.
-    await appendMessage(
-      "assistant",
-      "Ready to try. Let me know what you'd like to adjust.",
-      base.appId,
+    const completion = await describeCompletion(
+      result.summary,
+      originalRequest,
+      { ...codingContext, signal: controller.signal },
+    );
+    await appendMessage("assistant", completion, base.appId);
+    await workspace.diagnostics.record(
+      "adaptation.feedback.offered",
+      { originalRequest, feedbackRevision: result.revisionId },
+      codingContext,
     );
     if (workspace.current?.id === base.appId) {
       $("proposal").hidden = true;
       setStatus("Ready to try");
       shellView.setMobileView("app");
+      await workspace.diagnostics.record(
+        "ui.result.presented",
+        {
+          outcome: "applied",
+          revisionId: result.revisionId,
+          promptToReadyMs:
+            performance.now() - (operation?.startedAt ?? started),
+        },
+        codingContext,
+      );
     }
   } catch (error) {
+    if (committedRevisionId) {
+      await workspace.diagnostics
+        .record(
+          "coding.completion-report.failed",
+          {
+            error: failureEvidence(error),
+            committedRevisionId,
+          },
+          codingContext,
+        )
+        .catch(() => undefined);
+      workspace.onWarning(
+        "Your change is ready, but its conversation update could not be saved. The app and version history contain the change.",
+      );
+      setStatus("Ready to try");
+      return;
+    }
     await workspace.diagnostics.record(
-      "coding.failed",
-      { message: String(error) },
+      controller.signal.aborted ? "coding.cancelled" : "coding.failed",
+      { error: failureEvidence(error), cancelled: controller.signal.aborted },
       codingContext,
     );
     const cancelled = controller.signal.aborted;
@@ -537,32 +822,48 @@ async function runCoding(
           ? error.message
           : base.parent === null
             ? "I couldn't finish creating your app. Your request is saved. You can ask me to retry or download diagnostic logs in Settings."
-            : "I couldn't complete that change. Your previous app is still available. Ask me to retry, or download diagnostic logs in Settings.",
+            : "I couldn't apply this change. Your working app is safe. Choose Try again to repair the saved work.",
       base.appId,
     );
     setStatus(
       `${cancelled ? "Stopped" : "Couldn’t finish"}${progressSaved ? " — progress saved" : ""}`,
     );
-    if (!cancelled) throw error;
+    if (!cancelled) {
+      if (error && typeof error === "object") presentedErrors.add(error);
+      throw error;
+    }
   } finally {
+    await workspace.clearActivity(base.appId).catch(() => undefined);
     coding = false;
     codingController = undefined;
     clearInterval(workTimer);
     $("status").classList.remove("is-active");
     $("cancel-work").hidden = true;
     $("work-elapsed").hidden = true;
-    if (workspace.current?.id === base.appId) {
-      const draft = await workspace.repo
-        .getCodingCheckpoint(base.appId)
-        .catch(() => undefined);
-      $("retry-work").hidden =
-        !draft || draft.baseRevisionId !== workspace.revision?.id;
-    }
+    shellView.setCreating(false);
+    workContext = undefined;
+    await refreshRetry().catch(() => undefined);
     if (controller.signal.aborted) {
-      for (const queued of queuedEdits.splice(0))
-        queued.reject(new Error("Queued change cancelled."));
+      for (const queued of queuedEdits.splice(0)) {
+        const cancelled = new DOMException(
+          "Queued change cancelled.",
+          "AbortError",
+        );
+        presentedErrors.add(cancelled);
+        void workspace.diagnostics.record(
+          "coding.cancelled",
+          { queued: true },
+          {
+            appId: queued.appId,
+            correlationId:
+              queued.operation?.correlationId ?? codingContext.correlationId,
+          },
+        );
+        queued.reject(cancelled);
+      }
     }
-    if (workspace.current?.id === base.appId) await renderChat();
+    if (workspace.current?.id === base.appId)
+      await renderChat().catch(() => undefined);
     while (queuedEdits.length) {
       const next = queuedEdits.shift()!;
       if (workspace.current?.id !== next.appId) {
@@ -573,12 +874,57 @@ async function runCoding(
         );
         continue;
       }
-      void runCoding(next.intent, next.originalRequest, next.level).then(
-        next.resolve,
-        next.reject,
-      );
+      void runCoding(
+        next.intent,
+        next.originalRequest,
+        next.level,
+        false,
+        next.operation,
+      ).then(next.resolve, next.reject);
       break;
     }
+    continuePendingAction();
+  }
+}
+async function describeCompletion(
+  summary: string,
+  request: string,
+  requestContext: {
+    appId: string;
+    correlationId: string;
+    signal?: AbortSignal;
+  },
+): Promise<string> {
+  const clean = summary.trim();
+  // A goal-oriented worker summary can be used directly. Rephrase technical summaries through the companion.
+  if (
+    clean &&
+    !/(?:\b(?:tsx?|jsx?|webpack|vite|typescript|compile[dr]?|implementation|tool call|source code)\b|(?:src|node_modules)\/|```)/i.test(
+      clean,
+    )
+  )
+    return clean;
+  try {
+    const response = await ai.generate(
+      "conversation",
+      {
+        messages: [
+          {
+            role: "system",
+            content:
+              "Explain a successfully applied application change to its user in one or two concise sentences. Say what they can now try, using only the supplied verified completion summary and request. Do not expose file names, tools, compilation, dependencies or internal machinery. Do not claim tests or capabilities beyond the evidence. Return plain text.",
+          },
+          {
+            role: "user",
+            content: JSON.stringify({ request, verifiedSummary: clean }),
+          },
+        ],
+      },
+      requestContext,
+    );
+    return response.text.trim() || "Your changes are ready to try.";
+  } catch {
+    return "Your changes are ready to try.";
   }
 }
 function showConfirmation(
@@ -586,6 +932,7 @@ function showConfirmation(
   reason: string,
   originalRequest: string,
   level: WorkLevel = "medium",
+  operation?: { correlationId: string; startedAt: number },
 ) {
   const appId = workspace.current?.id;
   const revisionId = workspace.revision?.id;
@@ -604,7 +951,7 @@ function showConfirmation(
         );
       box.hidden = true;
       await appendMessage("user", "Confirm this change.", appId);
-      await runCoding(intent, originalRequest, level);
+      await runCoding(intent, originalRequest, level, false, operation);
     });
   const dismiss = element("button", "Cancel", "quiet");
   dismiss.onclick = () => {
@@ -660,9 +1007,7 @@ function requireAIReady(
   if (!missingProviderRoles(config, credentials, roles).length) return true;
   pendingRequest = resume;
   pendingText = draftText;
-  onboarding.open(
-    "Connect your AI to create your app. Your request will continue automatically.",
-  );
+  onboarding.open();
   return false;
 }
 async function createFromGoal(name: string, idea: string) {
@@ -676,11 +1021,12 @@ async function createFromGoal(name: string, idea: string) {
     )
   )
     return;
-  if (coding)
-    throw new Error(
-      "Wait for the current change to finish before creating an app.",
-    );
+  if (hasPendingWork()) {
+    showWorkConflict(() => createFromGoal(name, idea));
+    return;
+  }
   await workspace.createApp(name.trim() || "New app", idea);
+  $<HTMLFormElement>("create-form").reset();
   await workspace.repo.setSetting(
     `app.explicitName.${workspace.current!.id}`,
     !!name.trim(),
@@ -689,10 +1035,45 @@ async function createFromGoal(name: string, idea: string) {
   showTab("preview");
   await sendMessage(idea);
 }
+function renderClarification(choices: ClarificationChoice[], appId: string) {
+  const box = $("clarification");
+  box.replaceChildren();
+  box.hidden = !choices.length;
+  for (const choice of choices) {
+    const button = element(
+      "button",
+      choice.label,
+      "quiet clarification-choice",
+    );
+    button.type = "button";
+    button.onclick = () =>
+      action(async () => {
+        if (workspace.current?.id !== appId) return;
+        box.hidden = true;
+        await workspace.diagnostics.record(
+          "conversation.choice.selected",
+          { value: choice.value },
+          context(),
+        );
+        await sendMessage(choice.value, appId);
+      });
+    box.append(button);
+  }
+  if (choices.length) {
+    const other = element("button", "Something else…", "quiet");
+    other.type = "button";
+    other.onclick = () => {
+      box.hidden = true;
+      $<HTMLTextAreaElement>("message").focus();
+    };
+    box.append(other);
+  }
+}
 async function sendMessage(
   text: string,
   expectedAppId: string | null = workspace.current?.id ?? null,
   liveHistory: Array<{ role: "user" | "assistant"; content: string }> = [],
+  retrying = false,
 ) {
   if (workspace.isBackingUp)
     throw new Error("Finish the backup or restore first.");
@@ -716,6 +1097,18 @@ async function sendMessage(
   }
   const appId = workspace.current!.id;
   if (/^(?:try again|retry|continue|resume)[.!?\s]*$/i.test(text.trim())) {
+    if (hasPendingWork()) {
+      setStatus("Your request is already in progress.");
+      return;
+    }
+    const failed = await workspace.repo.getSetting<FailedConversation | null>(
+      `conversation.retry.${appId}`,
+    );
+    if (failed && failed.revisionId === workspace.revision?.id) {
+      await appendMessage("user", text, appId);
+      await sendMessage(failed.text, appId, failed.liveHistory, true);
+      return;
+    }
     const draft = await workspace.repo.getCodingCheckpoint(appId);
     if (draft && draft.baseRevisionId === workspace.revision?.id) {
       await appendMessage("user", text, appId);
@@ -732,53 +1125,247 @@ async function sendMessage(
       return;
     }
   }
-  const requestContext = context();
-  const history = await workspace.repo.listChat(appId);
-  const attempts = await feedbackAttempts(appId);
-  const unresolved =
-    attempts.at(-1)?.status === "unresolved" ? attempts.at(-1) : undefined;
-  await appendMessage("user", text, appId);
-  setStatus("Understanding your request…");
-  const reply = await converse(
-    ai,
-    text,
-    [
-      ...history.map((m) => ({ role: m.role, content: m.content })),
-      ...liveHistory,
-    ],
-    requestContext,
-    unresolved
-      ? { originalRequest: unresolved.originalRequest, unresolved: true }
-      : undefined,
-  );
-  if (
-    reply.appName &&
-    workspace.current?.id === appId &&
-    workspace.revision?.parent === null &&
-    !(await workspace.repo.getSetting<boolean>(`app.explicitName.${appId}`))
-  ) {
-    await workspace.renameApp(reply.appName);
-  }
-  await appendMessage("assistant", reply.reply, appId);
-  if (workspace.current?.id !== appId) return;
-  if (reply.intent === "change" && reply.changeRequest)
-    await runCoding(
-      reply.changeRequest,
-      unresolved?.originalRequest ?? text,
-      unresolved ? "high" : reply.workLevel,
+  const conversationTurn = ++latestConversation;
+  const operation = {
+    correlationId: crypto.randomUUID(),
+    startedAt: performance.now(),
+  };
+  const planController = new AbortController();
+  planningControllers.add(planController);
+  let delegated = false;
+  const startingRevision = workspace.revision!.id;
+  const previousPlan = conversationPlans.get(appId) ?? Promise.resolve();
+  let unlock!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    unlock = resolve;
+  });
+  const tail = previousPlan.catch(() => {}).then(() => gate);
+  conversationPlans.set(appId, tail);
+  let unlocked = false;
+  const releasePlan = () => {
+    if (unlocked) return;
+    unlocked = true;
+    unlock();
+    if (conversationPlans.get(appId) === tail) conversationPlans.delete(appId);
+  };
+  await previousPlan.catch(() => {});
+  try {
+    planController.signal.throwIfAborted();
+    const requestContext = {
+      appId,
+      correlationId: operation.correlationId,
+      signal: planController.signal,
+    };
+    await workspace.diagnostics.record(
+      "conversation.started",
+      { retrying, revisionId: startingRevision },
+      requestContext,
     );
-  else if (
-    reply.intent === "confirm" &&
-    reply.changeRequest &&
-    reply.confirmationReason
-  )
-    showConfirmation(
-      reply.changeRequest,
-      reply.confirmationReason,
+    const history = await workspace.repo.listChat(appId);
+    const attempts = await feedbackAttempts(appId);
+    const unresolved =
+      attempts.at(-1)?.status === "unresolved" ? attempts.at(-1) : undefined;
+    if (!retrying) await appendMessage("user", text, appId);
+    for (const attempt of attempts.filter(
+      (item) => item.status === "offered",
+    )) {
+      attempt.status = "superseded";
+      await saveFeedback(attempt);
+    }
+    $("chat")
+      .querySelectorAll(".feedback")
+      .forEach((node) => node.remove());
+    $("retry-work").hidden = true;
+    $("clarification").hidden = true;
+    setStatus("Looking into that…");
+    const apps = await workspace.repo.listApps();
+    const activeApp = apps.find((app) => app.id === appId)!;
+    const currentRevision = await workspace.repo.getRevision(
+      activeApp.currentRevision,
+    );
+    const referencedApps = await Promise.all(
+      findReferencedApps(text, apps)
+        .filter((app) => app.id !== appId)
+        .map(async (app) => ({
+          id: app.id,
+          name: app.name,
+          revisionId: app.currentRevision,
+          project: (await workspace.repo.getRevision(app.currentRevision))
+            ?.project,
+        })),
+    );
+    const inspection =
+      workspace.current?.id === appId
+        ? await workspace.inspect().catch(async (error) => {
+            await workspace.diagnostics.record(
+              "conversation.inspection.failed",
+              { error: failureEvidence(error) },
+              requestContext,
+            );
+            return null;
+          })
+        : null;
+    const environment: ConversationEnvironment = {
+      activeApp: {
+        id: appId,
+        name: activeApp.name,
+        revisionId: currentRevision?.id,
+        project: currentRevision?.project,
+        state: activeApp.state,
+        inspection,
+      },
+      availableApps: apps.map(({ id, name }) => ({ id, name })),
+      referencedApps,
+      memory: personalization,
+    };
+    const reply = await converse(
+      ai,
       text,
-      reply.workLevel,
+      [
+        ...history.map((m) => ({ role: m.role, content: m.content })),
+        ...liveHistory,
+      ],
+      requestContext,
+      unresolved
+        ? { originalRequest: unresolved.originalRequest, unresolved: true }
+        : undefined,
+      environment,
     );
-  else setStatus("Ready");
+    planController.signal.throwIfAborted();
+    await workspace.repo.setSetting(`conversation.retry.${appId}`, null);
+    await workspace.diagnostics.record(
+      "conversation.intent",
+      {
+        intent: reply.intent,
+        decisionSummary: reply.decisionSummary,
+        originalRequest: text,
+        changeRequest: reply.changeRequest,
+        activeRevisionId: currentRevision?.id,
+        inspectionAvailable: !!inspection,
+        referencedAppIds: reply.referencedAppIds,
+        choices: reply.choices,
+        workLevel: reply.workLevel,
+      },
+      requestContext,
+    );
+    const memoryResult = applyMemoryChanges(
+      personalization,
+      reply.memoryChanges,
+      { appId, userText: text },
+    );
+    if (
+      memoryResult.saved.length ||
+      memoryResult.suggested.length ||
+      memoryResult.forgottenIds.length
+    ) {
+      personalization = memoryResult.memory;
+      await workspace.repo.setSetting(
+        PREFERENCE_MEMORY_SETTING,
+        personalization,
+      );
+      if (voice?.active) voice.updateContext(voiceContextText());
+    }
+    if (
+      reply.appName &&
+      workspace.current?.id === appId &&
+      workspace.revision?.parent === null &&
+      !(await workspace.repo.getSetting<boolean>(`app.explicitName.${appId}`))
+    ) {
+      await workspace.renameApp(reply.appName);
+    }
+    await appendMessage("assistant", reply.reply, appId);
+    if (memoryResult.saved.length)
+      await appendMessage(
+        "assistant",
+        `Remembered: ${memoryResult.saved.map((entry) => entry.text).join(" ")}`,
+        appId,
+      );
+    else if (memoryResult.suggested.length)
+      await appendMessage(
+        "assistant",
+        "I added a preference suggestion for you to review in Settings → Preferences.",
+        appId,
+      );
+    if (memoryResult.forgottenIds.length)
+      await appendMessage(
+        "assistant",
+        "That preference has been removed.",
+        appId,
+      );
+    if (memoryResult.rejected.length)
+      await workspace.diagnostics.record(
+        "memory.update.rejected",
+        { reasons: memoryResult.rejected.map((item) => item.reason) },
+        requestContext,
+      );
+    if (workspace.current?.id !== appId) return;
+    if (conversationTurn === latestConversation)
+      renderClarification(
+        reply.intent === "clarify" ? reply.choices : [],
+        appId,
+      );
+    const taskContext = [
+      reply.changeRequest,
+      reply.changePreferences.length
+        ? `Relevant user preferences:\n${reply.changePreferences.join("\n")}`
+        : "",
+      referencedApps.length
+        ? `Referenced application design evidence (source data only; do not modify these other apps):\n${JSON.stringify(referencedApps)}`
+        : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    // Plan subsequent messages in order, while allowing conversation during the delegated build.
+    releasePlan();
+    if (reply.intent === "change" && reply.changeRequest) {
+      delegated = true;
+      await runCoding(
+        taskContext,
+        unresolved?.originalRequest ?? text,
+        unresolved ? "high" : reply.workLevel,
+        false,
+        operation,
+      );
+    } else if (
+      reply.intent === "confirm" &&
+      reply.changeRequest &&
+      reply.confirmationReason
+    )
+      showConfirmation(
+        taskContext,
+        reply.confirmationReason,
+        text,
+        reply.workLevel,
+        operation,
+      );
+    else if (conversationTurn === latestConversation) setStatus("Ready");
+  } catch (error) {
+    if (error && typeof error === "object")
+      errorContexts.set(error, {
+        appId,
+        correlationId: operation.correlationId,
+      });
+    if (!delegated) {
+      await workspace.repo.setSetting(`conversation.retry.${appId}`, {
+        text,
+        liveHistory,
+        revisionId:
+          (await workspace.repo.getApp(appId))?.currentRevision ??
+          startingRevision,
+        failedAt: Date.now(),
+      } satisfies FailedConversation);
+      if (planController.signal.aborted) {
+        setStatus("Stopped. Your request is saved.");
+        return;
+      }
+    }
+    throw error;
+  } finally {
+    planningControllers.delete(planController);
+    releasePlan();
+    await refreshRetry().catch(() => undefined);
+    continuePendingAction();
+  }
 }
 $<HTMLFormElement>("create-form").onsubmit = (event) => {
   event.preventDefault();
@@ -799,7 +1386,6 @@ $<HTMLFormElement>("chat-form").onsubmit = (event) => {
   input.value = "";
   void sendMessage(text)
     .catch((error) => {
-      if (!input.value) input.value = text;
       report(error);
     })
     .finally(() => submitted.delete(submission));
@@ -860,10 +1446,29 @@ const settingsOptions: SettingsOptions = {
     debug: workspace.diagnostics.debug,
   }),
   getService: () => ai,
+  getPersonalization: () => structuredClone(personalization),
+  onSavePersonalization: async (value, base) => {
+    personalization = mergePreferenceEdits(personalization, base, value);
+    await workspace.repo.setSetting(PREFERENCE_MEMORY_SETTING, personalization);
+    if (voice?.active) voice.updateContext(voiceContextText());
+    await workspace.diagnostics.record(
+      "preferences.memory.updated",
+      {
+        enabled: personalization.enabled,
+        entries: personalization.entries.length,
+      },
+      context(),
+    );
+  },
   canSave: () => {
     if (workspace.isBackingUp)
       throw new Error("Finish the backup or restore before saving settings.");
-    if (coding || ai.activeRequestCount > 0 || voice?.active)
+    if (
+      hasPendingWork() ||
+      ai.activeRequestCount > 0 ||
+      voice?.active ||
+      voiceStarting
+    )
       throw new Error(
         "Finish or cancel the current work before changing the AI connection. Other preferences can be saved now.",
       );
@@ -879,11 +1484,15 @@ const settingsOptions: SettingsOptions = {
     await workspace.repo.setSetting("ai.config", config);
     await workspace.setObservation(value.observe);
     workspace.diagnostics.debug = value.debug;
+    config.captureContent = value.debug;
+    ai.configure(config);
     await workspace.repo.setSetting("privacy", {
       observe: value.observe,
       debug: value.debug,
     });
     refreshProviderBadge();
+    shellView.setSpeed(config.speed ?? "standard");
+    refreshUsage();
     if (!coding) setStatus("Settings saved");
   },
   onSaved: async () => {
@@ -914,9 +1523,11 @@ for (const dialogId of ["settings-dialog", "onboarding-dialog"])
     if ($<HTMLDialogElement>(dialogId).returnValue === "saved") return;
     pendingRequest = undefined;
     if (pendingText) {
-      $<HTMLTextAreaElement>("message").value = pendingText;
+      if (workspace.current) {
+        $<HTMLTextAreaElement>("message").value = pendingText;
+        shellView.showAssistant();
+      } else showCreate();
       pendingText = "";
-      shellView.showAssistant();
     }
   });
 $("cancel-work").onclick = () => {
@@ -947,18 +1558,47 @@ $<HTMLFormElement>("rename-form").onsubmit = (event) => {
 };
 $("export-log").onclick = () =>
   action(async () => {
+    const accounting = await ai.flushUsage();
+    const snapshot = await workspace.diagnostics.snapshot();
+    const serverBuild = await fetch("/api/build", {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5000),
+    })
+      .then((response) =>
+        response.ok
+          ? response.json()
+          : { unavailable: true, status: response.status },
+      )
+      .catch(() => ({ unavailable: true }));
     download(
       new Blob(
         [
           JSON.stringify(
             {
-              version: 3,
-              appVersion: "2.0.0-beta.2",
+              version: 4,
+              appVersion: BUILD_INFO.version,
+              build: { client: BUILD_INFO, server: serverBuild },
               browser: navigator.userAgent,
               connection: ai.health,
               exportedAt: new Date().toISOString(),
-              diagnostics: await workspace.repo.listDiagnostics(),
-              usage: ai.usage,
+              ...snapshot,
+              accounting,
+              inFlight: {
+                coding,
+                textRequests: ai.activeRequestCount,
+                voice: voice?.active ?? false,
+              },
+              configuration: {
+                ...config,
+                browserTheme:
+                  localStorage.getItem("itsalive.theme") ?? "system",
+              },
+              activeApp: workspace.current
+                ? {
+                    id: workspace.current.id,
+                    revisionId: workspace.revision?.id,
+                  }
+                : null,
             },
             null,
             2,
@@ -986,6 +1626,11 @@ async function backupOperation(
   try {
     await operation(backupController.signal);
     $("backup-status").textContent = workspace.backupSummary;
+    const details = workspace.backupDetails;
+    $("backup-result-report").replaceChildren(
+      ...details.map((detail) => element("p", detail)),
+    );
+    $("backup-result-details").hidden = !details.length;
   } catch (error) {
     $("backup-status").textContent =
       error instanceof Error ? error.message : String(error);
@@ -1051,6 +1696,16 @@ async function configureAI() {
     Object.values(config.routes).some((route) => route.provider === "demo")
   )
     config = defaultAIConfig();
+  const privacy = await workspace.repo.getSetting<{
+    observe: boolean;
+    debug: boolean;
+  }>("privacy");
+  workspace.observe = false;
+  workspace.diagnostics.debug = privacy?.debug ?? false;
+  config.captureContent = workspace.diagnostics.debug;
+  personalization = normalizePreferenceMemory(
+    await workspace.repo.getSetting(PREFERENCE_MEMORY_SETTING),
+  );
   if (config.routes.conversation.provider === "chatgpt") {
     const account = await accountSession().catch(() => undefined);
     if (account?.sharing && account.connected)
@@ -1058,6 +1713,7 @@ async function configureAI() {
     else delete credentials.chatgpt;
   }
   const service = new AIService(config, {
+    sanitizeDiagnostic: redactAccountDiagnostic,
     beforeRequest: () => {
       if (workspace.isBackingUp)
         throw new Error("AI requests are paused during backup and restoration");
@@ -1083,6 +1739,7 @@ async function configureAI() {
           })
           .catch(() => undefined);
       });
+      queueMicrotask(refreshUsage);
       return usageWrites;
     },
   });
@@ -1097,16 +1754,18 @@ async function configureAI() {
       correlationId: crypto.randomUUID(),
       signal,
     });
-  const privacy = await workspace.repo.getSetting<{
-    observe: boolean;
-    debug: boolean;
-  }>("privacy");
-  workspace.observe = false; // Suggestions do not enable passive interaction tracking.
-  workspace.diagnostics.debug = privacy?.debug ?? false;
+  shellView.setSpeed(config.speed ?? "standard");
+  refreshUsage();
+  const build = document.getElementById("build-info");
+  if (build) {
+    build.textContent = buildLabel();
+    build.title = `${BUILD_INFO.subject}\nBuilt ${BUILD_INFO.builtAt}`;
+  }
   refreshProviderBadge();
 }
 $("speak").onclick = () =>
   action(async () => {
+    if (voiceStarting) return;
     if (voice?.active) {
       voice.stop();
       return;
@@ -1119,76 +1778,131 @@ $("speak").onclick = () =>
     }
     if (workspace.isBackingUp)
       throw new Error("Finish the backup or restore first.");
-    const history = workspace.current
-      ? await workspace.repo.listChat(workspace.current.id)
-      : [];
-    const usage = ai.startVoice(context());
-    const transcripts: { user: string; assistant: string } = {
-      user: "",
-      assistant: "",
-    };
-    const captions = $("voice-captions");
-    captions.replaceChildren();
-    const userCaption = element("p");
-    const assistantCaption = element("p");
-    captions.append(userCaption, assistantCaption);
-    microphoneEnabled = true;
-    $("voice-mute").textContent = "Mute microphone";
-    $<HTMLInputElement>("voice-audio").checked = config.voiceReplies !== false;
-    voice = new LiveVoice({
-      key: credentials.openai,
-      spokenReplies: config.voiceReplies !== false,
-      history: history.map((message) => ({
-        role: message.role,
-        content: message.content,
-      })),
-      onState: (state) => {
-        $("voice-panel").hidden = state === "closed";
-        $("speak").setAttribute("aria-pressed", String(state !== "closed"));
-        $("voice-status").textContent = {
-          connecting: "Connecting voice…",
-          listening: "Listening — you can keep talking while I work.",
-          closing: "Ending conversation…",
-          closed: "Voice conversation ended.",
-        }[state];
-        $<HTMLButtonElement>("voice-stop").disabled = state === "closing";
-      },
-      onTranscript: (role, text) => {
-        transcripts[role] += text;
-        (role === "user" ? userCaption : assistantCaption).textContent =
-          `${role === "user" ? "You" : "It's Alive"}: ${transcripts[role]}`;
-        captions.scrollTop = captions.scrollHeight;
-      },
-      onDelegate: async (text, liveHistory) => {
-        const appId = workspace.current?.id;
-        const previousMessages = new Set(
-          appId
-            ? (await workspace.repo.listChat(appId)).map(
-                (message) => message.id,
-              )
-            : [],
-        );
-        await sendMessage(text, appId ?? null, liveHistory);
-        if (!workspace.current)
-          return "Ask the user to connect AI in Settings before continuing.";
-        if (appId && workspace.current.id !== appId)
-          return "The user switched apps before the action finished. Do not claim the new app changed.";
-        const messages = await workspace.repo.listChat(
-          appId ?? workspace.current.id,
-        );
-        return messages
-          .filter(
-            (message) =>
-              message.role === "assistant" && !previousMessages.has(message.id),
-          )
-          .map((message) => message.content)
-          .join("\n");
-      },
-      onUsage: (seconds, final, confirmed) =>
-        usage.update(seconds, final, confirmed),
-      onError: report,
-    });
-    await voice.start();
+    voiceStarting = true;
+    shellView.showAssistant();
+    try {
+      const history = workspace.current
+        ? await workspace.repo.listChat(workspace.current.id)
+        : [];
+      const voiceContext = context();
+      const usage = ai.startVoice(voiceContext);
+      const transcripts: { user: string; assistant: string } = {
+        user: "",
+        assistant: "",
+      };
+      const captions = $("voice-captions");
+      captions.replaceChildren();
+      const userCaption = element("p");
+      const assistantCaption = element("p");
+      captions.append(userCaption, assistantCaption);
+      microphoneEnabled = true;
+      $("voice-mute").textContent = "Mute microphone";
+      $<HTMLInputElement>("voice-audio").checked =
+        config.voiceReplies !== false;
+      voice = new LiveVoice({
+        key: credentials.openai,
+        model: config.routes.speech.model,
+        debug: workspace.diagnostics.debug,
+        initialContext: voiceContextText(),
+        spokenReplies: config.voiceReplies !== false,
+        history: history.map((message) => ({
+          role: message.role,
+          content: message.content,
+        })),
+        onState: (state) => {
+          $("voice-panel").hidden = state === "closed";
+          $("speak").setAttribute("aria-pressed", String(state !== "closed"));
+          $("speak").setAttribute(
+            "aria-label",
+            state === "closed"
+              ? "Start voice conversation"
+              : "End voice conversation",
+          );
+          $("speak").title =
+            state === "closed"
+              ? "Start a live conversation"
+              : "End this conversation";
+          $("speak").querySelector(".rail-label")!.textContent =
+            state === "closed" ? "Talk live" : "End conversation";
+          $("voice-status").textContent = {
+            connecting: "Connecting voice…",
+            listening: "Listening — you can keep talking while I work.",
+            closing: "Ending conversation…",
+            closed: "Voice conversation ended.",
+          }[state];
+          $<HTMLButtonElement>("voice-stop").disabled = state === "closing";
+          if (state === "closed") {
+            microphoneEnabled = false;
+            $("voice-mute").textContent = "Microphone off";
+          }
+        },
+        onPhase: (phase) => {
+          const label: Record<string, string> = {
+            permission: "Allow your microphone to start talking.",
+            media: "Microphone ready…",
+            offer: "Preparing your conversation…",
+            ice: "Connecting your microphone…",
+            "session-create": "Connecting to live conversation…",
+            context: "Restoring your conversation…",
+            answer: "Starting your conversation…",
+          };
+          if (label[phase]) $("voice-status").textContent = label[phase]!;
+        },
+        onDiagnostic: (event, data, level) => {
+          void workspace.diagnostics.record(event, data, voiceContext, level);
+        },
+        onTranscript: (role, text) => {
+          transcripts[role] += text;
+          (role === "user" ? userCaption : assistantCaption).textContent =
+            `${role === "user" ? "You" : "Assistant"}: ${transcripts[role]}`;
+          captions.scrollTop = captions.scrollHeight;
+        },
+        onDelegate: async (text, liveHistory) => {
+          const appId = workspace.current?.id;
+          const previousMessages = new Set(
+            appId
+              ? (await workspace.repo.listChat(appId)).map(
+                  (message) => message.id,
+                )
+              : [],
+          );
+          await sendMessage(text, appId ?? null, liveHistory);
+          if (!workspace.current)
+            return "Ask the user to connect AI in Settings before continuing.";
+          if (appId && workspace.current.id !== appId)
+            return "The user switched apps before the action finished. Do not claim the new app changed.";
+          const messages = await workspace.repo.listChat(
+            appId ?? workspace.current.id,
+          );
+          return messages
+            .filter(
+              (message) =>
+                message.role === "assistant" &&
+                !previousMessages.has(message.id),
+            )
+            .map((message) => message.content)
+            .join("\n");
+        },
+        onUsage: (seconds, final, confirmed, details) => {
+          usage.update(seconds, final, confirmed, details);
+          refreshUsage();
+        },
+        onError: (error) => {
+          const message =
+            error.message || "Live conversation couldn't connect. Try again.";
+          setStatus(message);
+          $("voice-status").textContent = message;
+          void workspace.diagnostics.record(
+            "voice.error.presented",
+            { error: failureEvidence(error), message },
+            voiceContext,
+          );
+        },
+      });
+      await voice.start();
+    } finally {
+      voiceStarting = false;
+    }
   });
 $("voice-stop").onclick = () => voice?.stop();
 $("voice-mute").onclick = () => {
@@ -1205,14 +1919,36 @@ $<HTMLInputElement>("voice-audio").onchange = () => {
 };
 window.addEventListener("pagehide", () => voice?.stop());
 async function initialize() {
+  if (await completeAccountCallback()) return;
   await configureAI();
+  console.info(
+    "It's Alive",
+    buildLabel(),
+    BUILD_INFO.subject,
+    BUILD_INFO.builtAt,
+  );
+  await workspace.diagnostics.record("session.build", {
+    build: BUILD_INFO,
+    browser: navigator.userAgent,
+  });
   workspace.onRestored = configureAI;
   workspace.beforeBackup = async () => {
-    if (coding || ai.activeRequestCount > 0 || voice?.active)
+    if (
+      hasPendingWork() ||
+      ai.activeRequestCount > 0 ||
+      voice?.active ||
+      voiceStarting
+    )
       throw new Error(
         "Finish active requests and the voice conversation before starting a backup or restore",
       );
+    const settlement = await ai.flushUsage();
+    if (settlement.pendingWrites || settlement.unpersistedRecords.length)
+      throw new Error(
+        "Recent usage could not be saved yet. Keep this tab open and try the backup again.",
+      );
     await usageWrites;
+    await workspace.diagnostics.flush();
   };
   if (import.meta.env.DEV) {
     Object.assign(window, {
@@ -1228,6 +1964,9 @@ async function initialize() {
           dependencies?: Record<string, string>,
         ) => workspace.edit(files, dependencies),
         inspect: () => workspace.inspect(),
+        setActivity: (activity: { message: string; targets: string[] }) =>
+          workspace.setActivity(activity),
+        clearActivity: () => workspace.clearActivity(),
         exportBackup: () => workspace.exportBackup(),
         importBackup: (blob: Blob) => workspace.importBackup(blob),
         diagnostics: () => workspace.repo.listDiagnostics(),

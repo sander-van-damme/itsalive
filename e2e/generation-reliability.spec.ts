@@ -1,6 +1,11 @@
 import { test, expect, type Page } from "@playwright/test";
 import { mkdir, writeFile } from "node:fs/promises";
 import {
+  createAppFromGoal,
+  openSettings,
+  openSettingsSection,
+} from "./fixtures/shell-controls";
+import {
   goalResponse,
   installGoalProvider,
   toolsFor,
@@ -18,13 +23,9 @@ async function ready(page: Page) {
   await page.goto("/");
   await page.waitForFunction(() => Boolean(window.__itsalive));
 }
-async function settings(page: Page) {
-  await page.locator("#more-options > summary").click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-  return page.locator("#settings-dialog");
-}
 async function connect(page: Page) {
-  const dialog = await settings(page);
+  const dialog = await openSettings(page);
+  await openSettingsSection(dialog, "AI connection");
   await dialog
     .getByLabel("OpenAI API key", { exact: true })
     .fill("recovery-fixture-credential");
@@ -88,11 +89,11 @@ test("dedicated first-run setup reuses validation, names the app and keeps safe 
     onboarding.getByRole("heading", { name: "Connect your AI" }),
   ).toBeVisible();
   await expect(
-    onboarding.getByLabel("Enable spending limit", { exact: true }),
-  ).toBeVisible();
+    onboarding.getByRole("slider", { name: /Monthly API spending/ }),
+  ).not.toBeVisible();
   await expect(
-    onboarding.getByLabel("Enable spending limit", { exact: true }),
-  ).not.toBeChecked();
+    onboarding.getByLabel("Low model", { exact: true }),
+  ).not.toBeVisible();
   await expect(
     onboarding.getByText("Backup and restore", { exact: true }),
   ).toHaveCount(0);
@@ -126,7 +127,7 @@ test("dedicated first-run setup reuses validation, names the app and keeps safe 
     .getByRole("button", { name: "Check connection", exact: true })
     .click();
   await expect(onboarding.locator("#onboarding-settings-status")).toContainText(
-    /checked/i,
+    /connected/i,
   );
   const checked = provider.requests.length + provider.decisionRequests.length;
   expect(checked).toBeGreaterThan(0);
@@ -136,6 +137,18 @@ test("dedicated first-run setup reuses validation, names the app and keeps safe 
   });
   await onboarding
     .getByRole("button", { name: "Continue", exact: true })
+    .click();
+  await expect(
+    onboarding.getByRole("heading", { name: "Set your spending", exact: true }),
+  ).toBeVisible();
+  await expect(
+    onboarding.getByRole("slider", { name: /Monthly API spending/ }),
+  ).toHaveAttribute("aria-valuetext", "No limit");
+  await expect(
+    onboarding.getByLabel("OpenAI API key", { exact: true }),
+  ).not.toBeVisible();
+  await onboarding
+    .getByRole("button", { name: "Start creating", exact: true })
     .click();
   await expect(onboarding).not.toBeVisible();
   await expect(page.locator("#cancel-work")).toBeVisible();
@@ -157,7 +170,7 @@ test("dedicated first-run setup reuses validation, names the app and keeps safe 
       .evaluate((node) => getComputedStyle(node).animationName),
   ).toBe("none");
   const beforeSettings = provider.requests.length;
-  const general = await settings(page);
+  const general = await openSettings(page);
   await general.getByText("Help and diagnostics", { exact: true }).click();
   await general.getByLabel("Debug logging", { exact: true }).check();
   const saveStarted = Date.now();
@@ -180,6 +193,7 @@ test("dedicated first-run setup reuses validation, names the app and keeps safe 
   await page.locator("#more-options > summary").click();
   await screenshot(page, "menu-desktop");
   await page
+    .locator("#more-options")
     .getByRole("button", { name: "Version history", exact: true })
     .click();
   await expect(page.locator("#revision-list .revision-row")).toHaveCount(2);
@@ -234,7 +248,7 @@ test("an incomplete response preserves completed writes and resumes through veri
     await route.fulfill({ status: 200, json: response });
     return true;
   };
-  await send(page, "Create a violin practice app.");
+  await createAppFromGoal(page, "Create a violin practice app.");
   await created(page);
   expect(injected).toBe(true);
   expect(await writeEvents(page)).toBe(2);
@@ -264,7 +278,7 @@ test("transport failure preserves the working revision and a reload retry resume
   const provider = await installGoalProvider(context);
   await ready(page);
   await connect(page);
-  await send(page, "Create a violin practice app.");
+  await createAppFromGoal(page, "Create a violin practice app.");
   await created(page);
   await app(page)
     .getByRole("button", { name: "Mark practice complete", exact: true })
@@ -338,7 +352,7 @@ test("cancelling a request leaves a reusable checkpoint and preserves an explici
     }
     return false;
   };
-  await page.getByRole("button", { name: "New app", exact: true }).click();
+  await page.locator("#welcome-create").click();
   const dialog = page.locator("#create-dialog");
   await dialog
     .getByLabel("What would you like to do?", { exact: true })
@@ -407,7 +421,7 @@ test("check execution success is distinct from failed compilation and a repaired
     await route.fulfill({ status: 200, json: response });
     return true;
   };
-  await send(page, "Create a violin practice app.");
+  await createAppFromGoal(page, "Create a violin practice app.");
   await created(page);
   const events = await page.evaluate(() => window.__itsalive.diagnostics());
   const checks = events

@@ -11,40 +11,59 @@ import {
 } from "../ai/types";
 import type { AIService } from "../ai/service";
 import { accountSession, companionFetch } from "../ai/connection";
+import {
+  acceptPreferenceMemory,
+  emptyPreferenceMemory,
+  forgetPreferenceMemory,
+  normalizePreferenceMemory,
+  updatePreferenceMemoryEntry,
+  type PreferenceMemory,
+} from "../ai/memory";
+import "./settings.css";
 
 function settingsDialog(onboarding = false) {
   const markup = `
 <dialog id="settings-dialog" aria-labelledby="settings-title">
  <button type="button" class="dialog-close quiet" data-close aria-label="${onboarding ? "Close AI setup" : "Close settings"}">×</button>
  <form id="settings-form">
-  <h2 id="settings-title">${onboarding ? "Connect your AI" : "Settings"}</h2><p id="settings-intro" class="hint">${onboarding ? "Connect once, then we’ll create your app." : "Good defaults are already selected."}</p>
-  <section class="settings-section" aria-labelledby="connection-title">
-   <h3 id="connection-title">AI connection</h3>
-   <label>Connect with<select id="ai-provider"><option value="openai">OpenAI API key</option><option value="chatgpt">ChatGPT plan</option></select></label><p id="account-unavailable" class="hint" hidden>ChatGPT plan access is unavailable on this website. It requires a supported local installation. Use an OpenAI API key here.</p>
+  <h2 id="settings-title">${onboarding ? "Connect your AI" : "Settings"}</h2><p id="settings-intro" class="hint" hidden></p>
+  ${onboarding ? '<ol class="setup-steps" aria-label="Setup progress"><li id="connection-step" aria-current="step">1 · Connect</li><li id="spending-step">2 · Spending</li></ol>' : ""}
+  <${onboarding ? "section" : "details"} id="connection-section" class="settings-section" aria-labelledby="connection-title">
+   <${onboarding ? "h3" : "summary"} id="connection-title">AI connection</${onboarding ? "h3" : "summary"}>
+   <label>Connect with<select id="ai-provider"><option value="openai">OpenAI API key</option><option value="chatgpt">ChatGPT plan</option></select></label>
    <div id="api-key-settings"><label>OpenAI API key<input id="ai-key" type="password" autocomplete="off" spellcheck="false"></label>
-   <p class="hint">Stored on this browser, excluded from backups. <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an API key</a>.</p></div>
-   <div id="chatgpt-settings" hidden><p class="hint">Use your eligible ChatGPT plan for application work, including the allowance shared with Codex.</p>
+   <p class="hint">Stored locally in this browser. Excluded from backups. <a href="https://platform.openai.com/api-keys" target="_blank" rel="noopener noreferrer">Get an API key</a>.</p></div>
+   <div id="chatgpt-settings" hidden><p class="hint">Use the allowance shared with Codex on an eligible ChatGPT plan.</p>
     <button type="button" id="chatgpt-connect" class="primary">Continue with ChatGPT</button><button type="button" id="chatgpt-disconnect" class="quiet" hidden>Sign out</button>
-    <p id="chatgpt-status" role="status"></p><p class="hint">Account sign-in uses the connection helper on your device. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage ChatGPT usage</a></p>
-    <details id="connection-help"><summary>Set up the connection helper</summary><p class="hint">For a local installation, run <code>npm run connection</code> in the application folder, then return here. ChatGPT plan access is available for eligible local installations. Your ChatGPT tokens stay on your device.</p></details>
+    <p id="chatgpt-status" role="status"></p><p class="hint">Stored on this device. Excluded from backups. <a href="https://chatgpt.com/settings/usage" target="_blank" rel="noopener noreferrer">Manage plan usage</a></p>
+    <details id="connection-help"><summary>Connection help</summary><p class="hint">Website sign-in needs a registered ChatGPT connection with plan usage enabled. Local installations can also run <code>npm run connection</code> in the application folder.</p></details>
     <label>OpenAI API key for voice (optional)<input id="voice-api-key" type="password" autocomplete="off" spellcheck="false"></label><p class="hint">Live voice uses separate OpenAI API usage.</p>
    </div>
-   ${onboarding ? '<h3 class="preferences-heading">AI preferences</h3>' : ""}<details class="advanced-settings"><summary>AI choices</summary><p class="hint">We choose the right level for each task. You can change these defaults.</p><div id="model-routes"></div></details>
-   <label for="response-speed">Response speed</label><input id="response-speed" type="range" min="0" max="2" step="1" value="0" aria-describedby="speed-description"><div class="speed-labels"><span>Standard</span><span>Faster</span><span>Fastest</span></div><p id="speed-description" class="hint"></p>
    <button type="button" id="check-connection" class="quiet">Check connection</button>
-  </section>
-  <${onboarding ? 'section class="settings-section" aria-labelledby="usage-title"><h3 id="usage-title">Usage</h3>' : 'details class="settings-section"><summary>Usage</summary>'}
-   <p id="usage-summary" class="hint"></p><p class="hint">Usage is recorded after each request. A spending limit is optional.</p><label class="checkbox"><input id="budget-enabled" type="checkbox">Enable spending limit</label>
-   <div id="budget-options" hidden><label>Monthly limit (USD)<input id="budget-limit" type="number" min="0.01" max="100000" step="0.01"></label><p class="hint">Spending is calculated from reported usage after requests. The limit prevents starting further requests once reached; requests already running may exceed it. Resets monthly (UTC). ChatGPT plan limits are managed in ChatGPT.</p></div>
+   <details class="advanced-settings" ${onboarding ? "hidden" : ""}><summary>Advanced AI choices</summary><div id="model-routes"></div></details>
+   <input id="response-speed" type="hidden" value="0"><span id="speed-description" hidden></span>
+  </${onboarding ? "section" : "details"}>
+  <${onboarding ? "section" : "details"} id="spending-section" class="settings-section" ${onboarding ? "hidden" : ""}>
+   <${onboarding ? "h3" : "summary"} id="usage-title">${onboarding ? "Set a spending limit" : "Usage"}</${onboarding ? "h3" : "summary"}>
+   <p id="usage-summary" class="hint" ${onboarding ? "hidden" : ""}></p>
+   <label for="budget-slider">Monthly API spending <output id="budget-value"></output></label>
+   <input id="budget-slider" type="range" min="0" max="101" step="1" value="101" aria-describedby="budget-description">
+   <div class="budget-scale"><span>$0</span><span>No limit</span></div>
+   <input id="budget-enabled" type="checkbox" hidden>
+   <div id="budget-options" hidden><label>Exact monthly limit (USD)<input id="budget-limit" type="number" min="0" step="0.01"></label></div>
+   <p id="budget-description" class="hint">Optional. Pauses new requests at the limit; work already running may exceed it. Resets monthly (UTC). ChatGPT plan limits are managed in ChatGPT.</p>
   </${onboarding ? "section" : "details"}>
   ${
     onboarding
       ? ""
-      : `<details class="settings-section"><summary>Backup and restore</summary><p>Save or restore all your apps, conversations, settings and supported app data.</p><button id="backup" type="button" class="quiet">Back up or restore all apps</button></details>
-  <details class="settings-section"><summary>Help and diagnostics</summary><label class="checkbox"><input id="debug" type="checkbox">Debug logging</label><p class="hint">Record extra detail to help investigate problems. Basic errors are always saved. Keys and AI prompts are excluded; logs can include app details.</p><button id="export-log" type="button" class="quiet">Download diagnostic logs</button><p id="diagnostic-status" class="hint" role="status"></p></details>`
+      : `<details class="settings-section"><summary>Your preferences</summary>
+  <label for="general-instructions">General instructions</label><textarea id="general-instructions" rows="4" placeholder="How would you like the assistant to work with you?"></textarea>
+  <label class="checkbox"><input id="memory-enabled" type="checkbox">Remember my preferences</label><p class="hint">Preferences can apply across your apps. You can edit or forget them here.</p><div id="memory-entries" class="memory-entries"></div></details>
+  <details class="settings-section"><summary>Backup and restore</summary><button id="backup" type="button" class="quiet">Back up or restore all apps</button></details>
+  <details class="settings-section"><summary>Help and diagnostics</summary><label class="checkbox"><input id="debug" type="checkbox">Debug logging</label><p class="hint">Includes prompts, replies and app details. Keys and sign-in credentials are excluded.</p><button id="export-log" type="button" class="quiet">Download diagnostic logs</button><p id="diagnostic-status" class="hint" role="status"></p><p id="build-info" class="hint"></p></details>`
   }
   <p id="settings-status" class="dialog-status" role="status" aria-live="polite"></p>
-  <div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button><button id="save-settings" type="submit" class="primary">${onboarding ? "Continue" : "Save settings"}</button></div>
+  <div class="dialog-actions"><button type="button" data-close class="quiet">Cancel</button>${onboarding ? '<button type="button" id="setup-back" class="quiet" hidden>Back</button>' : ""}<button id="save-settings" type="submit" class="primary">${onboarding ? "Continue" : "Save settings"}</button></div>
  </form>
 </dialog>`;
   if (!onboarding) return markup;
@@ -77,6 +96,11 @@ export interface SettingsOptions {
   onSaved?(): Promise<void>;
   onError?(error: unknown): void;
   onAccountDisconnected?(): void;
+  getPersonalization?(): PreferenceMemory;
+  onSavePersonalization?(
+    value: PreferenceMemory,
+    base: PreferenceMemory,
+  ): Promise<void>;
 }
 const SPEEDS: ResponseSpeed[] = ["standard", "faster", "fastest"];
 export class SettingsController {
@@ -87,21 +111,13 @@ export class SettingsController {
   private checking: AbortController | null = null;
   private signingIn: AbortController | null = null;
   private dialog: HTMLDialogElement;
+  private setupStep = 1;
+  private preferences = emptyPreferenceMemory();
+  private preferenceBase = emptyPreferenceMemory();
   constructor(private readonly options: SettingsOptions) {
     this.dialog = document.getElementById(
       options.onboarding ? "onboarding-dialog" : "settings-dialog",
     ) as HTMLDialogElement;
-    const planEnabled =
-      location.hostname.endsWith(".localhost") ||
-      import.meta.env.VITE_CHATGPT_PLAN_ENABLED === "1";
-    const planChoice = this.get<HTMLSelectElement>(
-      "ai-provider",
-    ).querySelector<HTMLOptionElement>('option[value="chatgpt"]')!;
-    planChoice.disabled = !planEnabled;
-    if (!planEnabled) {
-      planChoice.textContent = "ChatGPT plan (unavailable here)";
-      this.get("account-unavailable").hidden = false;
-    }
     this.get<HTMLFormElement>("settings-form").addEventListener("input", () => {
       if (!this.checking) this.setStatus("");
     });
@@ -117,8 +133,17 @@ export class SettingsController {
     };
     this.get<HTMLInputElement>("budget-enabled").onchange = () =>
       this.disclose();
-    this.get<HTMLInputElement>("response-speed").oninput = () =>
-      this.speedDescription();
+    this.get<HTMLInputElement>("budget-slider").oninput = () => {
+      const amount = Number(this.get<HTMLInputElement>("budget-slider").value);
+      this.get<HTMLInputElement>("budget-enabled").checked = amount !== 101;
+      if (amount !== 101)
+        this.get<HTMLInputElement>("budget-limit").value = String(amount);
+      this.disclose();
+    };
+    this.get<HTMLInputElement>("budget-limit").oninput = () =>
+      this.renderBudget();
+    if (options.onboarding)
+      this.get("setup-back").onclick = () => this.showStep(1);
     this.get("check-connection").onclick = () => void this.check();
     this.get("chatgpt-connect").onclick = () => void this.connectAccount();
     this.get("chatgpt-disconnect").onclick = () =>
@@ -158,25 +183,143 @@ export class SettingsController {
     this.get<HTMLInputElement>("budget-limit").value = String(
       config.limits.budgetUSD,
     );
-    if (!this.options.onboarding)
+    if (!this.options.onboarding) {
       this.get<HTMLInputElement>("debug").checked = debug;
+      this.preferences = normalizePreferenceMemory(
+        this.options.getPersonalization?.(),
+      );
+      this.preferenceBase = structuredClone(this.preferences);
+      this.get<HTMLTextAreaElement>("general-instructions").value =
+        this.preferences.instructions;
+      this.get<HTMLInputElement>("memory-enabled").checked =
+        this.preferences.enabled;
+      this.renderMemory();
+      this.get<HTMLDetailsElement>("connection-section").open = !!message;
+    } else this.showStep(1);
     this.get<HTMLInputElement>("response-speed").value = String(
       SPEEDS.indexOf(config.speed ?? "standard"),
     );
     this.get("usage-summary").textContent =
       `Recorded spending estimate this month: $${this.options.getService().periodSpentUSD.toFixed(2)}.${this.options.getService().unknownCostCount ? ` ${this.options.getService().unknownCostCount} ${this.options.getService().unknownCostCount === 1 ? "request has" : "requests have"} an unknown cost.` : ""}`;
-    this.get("settings-intro").textContent =
-      message ??
-      (this.options.onboarding
-        ? "Connect once, then we’ll create your app."
-        : "Good defaults are already selected. Adjust only what you need.");
+    this.get("settings-intro").textContent = message ?? "";
+    this.get("settings-intro").hidden = !message;
     this.renderModels();
     this.setStatus("");
     this.disclose();
     this.dialog.returnValue = "";
     if (!this.dialog.open) this.dialog.showModal();
-    this.get("ai-provider").focus();
+    if (this.options.onboarding || message) this.get("ai-provider").focus();
     if (provider === "chatgpt") void this.refreshAccount();
+  }
+  private showStep(step: number) {
+    this.setupStep = step;
+    this.get("connection-section").hidden = step !== 1;
+    this.get("spending-section").hidden = step !== 2;
+    this.get("setup-back").hidden = step !== 2;
+    this.get("connection-step").setAttribute(
+      "aria-current",
+      step === 1 ? "step" : "false",
+    );
+    this.get("spending-step").setAttribute(
+      "aria-current",
+      step === 2 ? "step" : "false",
+    );
+    this.get("settings-title").textContent =
+      step === 1 ? "Connect your AI" : "Set your spending";
+    this.get("save-settings").textContent =
+      step === 1 ? "Continue" : "Start creating";
+    this.setStatus("");
+    if (this.dialog.open)
+      this.get(step === 1 ? "ai-provider" : "budget-slider").focus();
+  }
+  private renderBudget() {
+    const enabled = this.get<HTMLInputElement>("budget-enabled").checked;
+    const amount = Number(this.get<HTMLInputElement>("budget-limit").value);
+    const label = enabled ? `$${amount.toFixed(2)}` : "No limit";
+    this.get("budget-value").textContent = label;
+    this.get<HTMLInputElement>("budget-slider").value = enabled
+      ? String(Math.min(100, amount))
+      : "101";
+    this.get("budget-slider").setAttribute("aria-valuetext", label);
+  }
+  private renderMemory() {
+    const list = this.get("memory-entries");
+    list.replaceChildren();
+    if (!this.preferences.entries.length) {
+      const empty = document.createElement("p");
+      empty.className = "hint";
+      empty.textContent = "No remembered preferences yet.";
+      list.append(empty);
+    }
+    for (const entry of this.preferences.entries) {
+      const item = document.createElement("article");
+      item.className = "memory-entry";
+      const text = document.createElement("p");
+      text.textContent = entry.text;
+      const meta = document.createElement("p");
+      meta.className = "hint";
+      meta.textContent = `${entry.scope === "all-apps" ? "All apps" : "One app"} · ${entry.status === "suggested" ? "Suggested · awaiting your approval" : entry.source === "explicit" ? "You asked to remember this" : "Accepted preference"}`;
+      const controls = document.createElement("div");
+      controls.className = "memory-actions";
+      const action = (label: string, run: () => void) => {
+        const button = document.createElement("button");
+        button.type = "button";
+        button.className = "quiet";
+        button.textContent = label;
+        button.onclick = () => {
+          try {
+            run();
+            this.setStatus("");
+          } catch (error) {
+            this.setStatus(
+              error instanceof Error
+                ? error.message
+                : "Could not update this preference.",
+              true,
+            );
+          }
+        };
+        controls.append(button);
+      };
+      action("Edit", () => {
+        const input = document.createElement("textarea");
+        input.value = entry.text;
+        input.rows = 3;
+        input.setAttribute("aria-label", "Edit preference");
+        text.replaceWith(input);
+        controls.replaceChildren();
+        action("Keep change", () => {
+          this.preferences = updatePreferenceMemoryEntry(
+            this.preferences,
+            entry.id,
+            input.value,
+          );
+          this.renderMemory();
+        });
+        action("Cancel", () => this.renderMemory());
+        input.focus();
+      });
+      if (entry.status === "suggested")
+        action("Accept", () => {
+          this.preferences = acceptPreferenceMemory(this.preferences, entry.id);
+          this.renderMemory();
+        });
+      action("Forget", () => {
+        this.preferences = forgetPreferenceMemory(this.preferences, entry.id);
+        this.renderMemory();
+      });
+      item.append(text, meta, controls);
+      if (entry.sourceQuote) {
+        const source = document.createElement("details");
+        const title = document.createElement("summary");
+        title.textContent = "From your message";
+        const quote = document.createElement("blockquote");
+        quote.textContent = entry.sourceQuote;
+        source.append(title, quote);
+        item.append(source);
+      }
+      list.append(item);
+    }
   }
   private renderModels() {
     const account =
@@ -221,6 +364,10 @@ export class SettingsController {
           ? defaultModelRoute("openai", category as ModelCategory).model
           : (choices[0]?.id ?? "");
       select.required = true;
+      select.disabled =
+        account &&
+        category !== "voice" &&
+        (!this.connected || !this.accountModels);
       label.append(select);
       this.get("model-routes").append(label);
     }
@@ -234,6 +381,7 @@ export class SettingsController {
     this.get("budget-options").hidden = !enabled;
     this.get<HTMLInputElement>("budget-limit").disabled = !enabled;
     this.get<HTMLInputElement>("budget-limit").required = enabled;
+    this.renderBudget();
     this.speedDescription();
   }
   private speedDescription() {
@@ -271,7 +419,13 @@ export class SettingsController {
     next.config.speed = speed;
     next.config.version = 3;
     for (const [category, roles] of Object.entries(CATEGORY_ROLES)) {
-      const model = this.get<HTMLSelectElement>(`model-${category}`).value;
+      const savedRoute = this.snapshot.config.routes[roles[0]!];
+      const model =
+        provider === "chatgpt" &&
+        !this.accountModels &&
+        savedRoute.provider === "chatgpt"
+          ? savedRoute.model
+          : this.get<HTMLSelectElement>(`model-${category}`).value;
       const choice = MODEL_CHOICES.find((choice) => choice.id === model);
       const route = {
         ...defaultModelRoute(
@@ -309,9 +463,9 @@ export class SettingsController {
       budgetUSD: Number(this.get<HTMLInputElement>("budget-limit").value),
       budgetPeriod: "month",
     };
-    next.config.captureContent = false;
     if (!this.options.onboarding)
       next.debug = this.get<HTMLInputElement>("debug").checked;
+    next.config.captureContent = next.debug;
     return next;
   }
   private connectionChanged(next: SettingsState) {
@@ -353,9 +507,11 @@ export class SettingsController {
     this.checking = controller;
     this.get<HTMLButtonElement>("check-connection").disabled = true;
     try {
-      this.setStatus("Checking the connection and application actions…");
+      this.setStatus(
+        `Checking your connection to ${this.get<HTMLSelectElement>("ai-provider").value === "chatgpt" ? "ChatGPT" : "OpenAI"}…`,
+      );
       await this.validate(this.draft(), controller.signal, true);
-      this.setStatus("Connection checked. Save to use these settings.");
+      this.setStatus("Connected. Your AI is ready.");
     } catch (error) {
       if (!controller.signal.aborted)
         this.setStatus(
@@ -378,13 +534,34 @@ export class SettingsController {
     this.get<HTMLButtonElement>("save-settings").disabled = true;
     try {
       const next = this.draft();
-      if (this.connectionChanged(next) || this.options.onboarding) {
+      if (
+        this.options.onboarding
+          ? this.setupStep === 1
+          : this.connectionChanged(next)
+      ) {
         this.options.canSave?.();
         this.setStatus("Checking your AI connection…");
         await this.validate(next, controller.signal);
       }
       controller.signal.throwIfAborted();
+      if (this.options.onboarding && this.setupStep === 1) {
+        this.showStep(2);
+        return;
+      }
       await this.options.onSave(next);
+      if (!this.options.onboarding && this.options.onSavePersonalization) {
+        const preferences = {
+          ...this.preferences,
+          instructions: this.get<HTMLTextAreaElement>("general-instructions")
+            .value,
+          enabled: this.get<HTMLInputElement>("memory-enabled").checked,
+        };
+        if (JSON.stringify(preferences) !== JSON.stringify(this.preferenceBase))
+          await this.options.onSavePersonalization(
+            preferences,
+            this.preferenceBase,
+          );
+      }
       this.dialog.close("saved");
       try {
         await this.options.onSaved?.();
@@ -406,17 +583,19 @@ export class SettingsController {
   }
   private async refreshAccount() {
     const check = ++this.accountCheck;
+    this.accountModels = undefined;
+    this.renderModels();
     try {
       const session = await accountSession();
       if (check !== this.accountCheck || !this.dialog.open) return session;
-      this.connected = session.connected && session.sharing;
+      const granted = session.connected && session.sharing;
       this.get("chatgpt-status").textContent =
         session.error ??
         (session.connected
           ? `${session.email ?? "ChatGPT account"}${session.sharing ? " — plan usage enabled" : " — enable plan usage in ChatGPT"}`
           : "Ready to connect.");
       this.get("chatgpt-disconnect").hidden = !session.connected;
-      if (this.connected) {
+      if (granted) {
         const result = await companionFetch("/models", {
           signal: AbortSignal.timeout(10_000),
         });
@@ -425,6 +604,7 @@ export class SettingsController {
             "Your ChatGPT model choices could not be loaded. Please reconnect.",
           );
         const catalog = (await result.json()) as {
+          data?: Array<{ id: string }>;
           models?: Array<{
             slug: string;
             display_name: string;
@@ -432,30 +612,64 @@ export class SettingsController {
           }>;
         };
         if (check !== this.accountCheck || !this.dialog.open) return session;
-        this.accountModels = (catalog.models ?? [])
-          .filter(
-            (model) =>
-              model.visibility === "list" &&
-              typeof model.slug === "string" &&
-              typeof model.display_name === "string",
-          )
-          .map((model) => ({ id: model.slug, name: model.display_name }));
+        this.accountModels = catalog.models
+          ? catalog.models
+              .filter(
+                (model) =>
+                  model.visibility === "list" &&
+                  typeof model.slug === "string" &&
+                  typeof model.display_name === "string",
+              )
+              .map((model) => ({ id: model.slug, name: model.display_name }))
+          : (catalog.data ?? [])
+              .filter((model) =>
+                MODEL_CHOICES.some((choice) => choice.id === model.id),
+              )
+              .map((model) => ({
+                id: model.id,
+                name:
+                  MODEL_CHOICES.find((choice) => choice.id === model.id)
+                    ?.name ?? model.id,
+              }));
         if (!this.accountModels.length)
           throw new Error(
             "No models are available for plan usage on this account. Check your ChatGPT plan settings.",
           );
+        this.connected = true;
         this.renderModels();
       } else {
+        this.connected = false;
         this.accountModels = undefined;
+        delete this.snapshot.credentials.chatgpt;
+        this.options.onAccountDisconnected?.();
         this.renderModels();
       }
       return session;
     } catch (error) {
-      if (check === this.accountCheck)
+      if (check === this.accountCheck && this.dialog.open) {
+        this.connected = false;
+        this.accountModels = undefined;
+        this.renderModels();
         this.get("chatgpt-status").textContent =
-          error instanceof Error && this.connected
+          error instanceof Error
             ? error.message
-            : "Start the connection helper on this device, then select Continue with ChatGPT.";
+            : "ChatGPT could not connect. Please try again.";
+        // Loading models can refresh credentials and discover a revoked or
+        // narrowed grant. Re-read that state instead of retaining the session
+        // observed before the request. A transient network failure alone does
+        // not revoke the user's saved identity.
+        const session = await accountSession().catch(() => undefined);
+        if (check !== this.accountCheck || !this.dialog.open) return undefined;
+        this.get("chatgpt-disconnect").hidden = !session?.connected;
+        if (session && (!session.connected || !session.sharing)) {
+          delete this.snapshot.credentials.chatgpt;
+          this.options.onAccountDisconnected?.();
+        } else if (session?.connected && session.sharing) {
+          // A catalog outage alone does not change the saved connection. Keep
+          // existing routes so independent preferences can still be saved.
+          this.connected = true;
+        }
+      }
       return undefined;
     }
   }
@@ -498,7 +712,7 @@ export class SettingsController {
         this.get("chatgpt-status").textContent =
           error instanceof Error
             ? error.message
-            : "Start the connection helper and try again.";
+            : "ChatGPT could not connect. Please try again.";
     } finally {
       this.signingIn = null;
       this.get<HTMLButtonElement>("chatgpt-connect").disabled = false;
@@ -509,10 +723,16 @@ export class SettingsController {
       this.options.canSave?.();
       const response = await companionFetch("/signout", { method: "POST" });
       if (!response.ok) throw new Error("Sign-out could not finish.");
+      const result = (await response.json().catch(() => ({}))) as {
+        revoked?: boolean;
+      };
       this.connected = false;
       this.accountModels = undefined;
       this.options.onAccountDisconnected?.();
       await this.refreshAccount();
+      if (result.revoked === false)
+        this.get("chatgpt-status").textContent =
+          "Signed out on this device. You can also disconnect the app in ChatGPT Settings.";
     } catch (error) {
       this.get("chatgpt-status").textContent =
         error instanceof Error ? error.message : "Could not sign out.";

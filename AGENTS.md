@@ -5,7 +5,7 @@
 Read [docs/PRODUCT_VISION.md](docs/PRODUCT_VISION.md) before architectural or interface decisions. User experience is a correctness requirement: a technically functioning change that violates this contract is not complete.
 
 - **Product identity:** It's Alive is a continuously adaptive AI interface for ordinary users, not an AI code editor or development environment.
-- **Application-first:** The generated application occupies the main workspace; one compact, collapsible right rail contains assistance and navigation.
+- **Application-first:** The generated application occupies the main workspace; one compact, collapsible left rail contains assistance and navigation.
 - **Natural interaction:** Users express goals, questions and feedback through conversation, voice and interaction. Implementation details remain internal.
 - **Explicit requests are authorization:** Create, change or repair when clearly requested, without a generic second confirmation. Clarify ambiguity and confirm destructive, expensive or high-risk actions.
 - **Feedback leads to assistance:** Negative feedback continues the unresolved conversation and can lead to repair; recording telemetry alone is insufficient.

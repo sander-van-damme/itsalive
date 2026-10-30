@@ -2,7 +2,9 @@ import type { Plugin } from "vite";
 import { once } from "node:events";
 import { Readable } from "node:stream";
 import { handleAPI } from "./api";
+import { buildInfo } from "../../build-info";
 export function apiPlugin(): Plugin {
+  const serverBuild = buildInfo();
   return {
     name: "itsalive-api",
     configureServer(server) {
@@ -31,7 +33,16 @@ export function apiPlugin(): Plugin {
             `http://${incoming.headers.host}${incoming.url}`,
             init,
           );
-          const result = await handleAPI(request);
+          const result =
+            new URL(request.url).pathname === "/api/build" &&
+            request.method === "GET"
+              ? Response.json(
+                  { ...serverBuild, deployment: null },
+                  { headers: { "Cache-Control": "no-store" } },
+                )
+              : await handleAPI(request, fetch, {
+                  chatgptClientId: process.env.CHATGPT_CLIENT_ID,
+                });
           outgoing.statusCode = result.status;
           result.headers.forEach((value, key) =>
             outgoing.setHeader(key, value),

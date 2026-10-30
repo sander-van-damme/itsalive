@@ -42,6 +42,16 @@ export interface BackupManifest {
     error?: string;
   }[];
   disclosure: string[];
+  coverage?: {
+    apps: number;
+    revisions: number;
+    conversations: number;
+    diagnostics: number;
+    codingDrafts: number;
+    usageRecords: number;
+    knownUsageCostUSD: number;
+    unknownUsageRecords: number;
+  };
 }
 interface Envelope {
   format: "itsalive-backup";
@@ -51,12 +61,105 @@ interface Envelope {
 }
 const DEFAULT_LIMIT = 128 * 1024 * 1024;
 export const BACKUP_DISCLOSURES = [
-  "This archive includes application source, conversations, diagnostic history and accessible app-origin data. Generated-app data can contain secrets that the platform cannot reliably identify. Store the archive privately.",
+  "This archive includes application source, conversations, resumable drafts, diagnostic history and accessible app-origin data. Generated-app data can contain secrets that the platform cannot reliably identify. Store the archive privately.",
   "Shell-managed provider credentials are excluded. Backups are integrity checked but are not encrypted or cryptographically authenticated.",
   "Close all other app tabs first. Browser APIs cannot guarantee a single atomic snapshot across every origin or storage type.",
   "Cookies, session-only storage, protected credentials, permissions, service workers, opaque cached responses and other inaccessible browser state are not restored. Read each origin report for failures and skipped data.",
   "This implementation constructs the archive in memory and limits it to 128 MiB by default. Large data may require more browser memory; streaming archives are not yet supported.",
 ];
+function coverage(
+  shell: ShellSnapshot,
+): NonNullable<BackupManifest["coverage"]> {
+  const usage = shell.settings.find(
+    (setting) => setting.key === "ai.usage",
+  )?.value;
+  const records: Array<{
+    costUSD?: number;
+    costStatus?: string;
+    status?: string;
+  }> = Array.isArray(usage) ? usage : [];
+  return {
+    apps: shell.apps.length,
+    revisions: shell.revisions.length,
+    conversations: shell.conversations.length,
+    diagnostics: shell.diagnostics.length,
+    codingDrafts: shell.codingDrafts?.length ?? 0,
+    usageRecords: records.length,
+    knownUsageCostUSD: records.reduce(
+      (sum, record) =>
+        sum +
+        (record.costStatus !== "unknown" &&
+        record.status !== "pending" &&
+        Number.isFinite(record.costUSD)
+          ? record.costUSD!
+          : 0),
+      0,
+    ),
+    unknownUsageRecords: records.filter(
+      (record) =>
+        record.costStatus === "unknown" || record.status === "pending",
+    ).length,
+  };
+}
+export function summarizeBackup(manifest: BackupManifest): {
+  summary: string;
+  details: string[];
+  complete: boolean;
+} {
+  const failures =
+    manifest.origins.filter((origin) => !origin.snapshot).length +
+    manifest.origins.reduce(
+      (sum, origin) =>
+        sum +
+        (origin.snapshot?.reports.filter((report) => report.status === "failed")
+          .length ?? 0),
+      0,
+    );
+  const missingDependencies = manifest.dependencies.filter(
+    (dependency) => !dependency.bytes,
+  ).length;
+  const skipped = manifest.origins.reduce(
+    (sum, origin) =>
+      sum +
+      (origin.snapshot?.reports.filter((report) => report.status === "skipped")
+        .length ?? 0),
+    0,
+  );
+  const count = (value: number, noun: string) =>
+    `${value} ${noun}${value === 1 ? "" : "s"}`;
+  const details = [
+    `${count(manifest.shell.apps.length, "app")}, ${count(manifest.shell.revisions.length, "saved version")} and ${count(manifest.shell.conversations.length, "message")} included.`,
+    `API keys and ChatGPT credentials are excluded.`,
+  ];
+  if (manifest.coverage)
+    details.push(
+      `${count(manifest.coverage.usageRecords, "usage record")} and ${count(manifest.coverage.codingDrafts, "resumable draft")} included.`,
+    );
+  else
+    details.push(
+      "This older backup does not declare accounting or draft completeness.",
+    );
+  if (skipped)
+    details.push(
+      "Browser-managed data such as cookies and permissions cannot be copied; the archive retains each storage report.",
+    );
+  if (missingDependencies)
+    details.push(
+      "Some application dependencies will need an internet connection after restore.",
+    );
+  if (failures)
+    details.push(
+      "Some app data could not be copied. Review the storage reports before relying on this backup.",
+    );
+  return {
+    summary: failures
+      ? "Backup saved, but some app data is missing."
+      : "Backup saved. Your apps and their history are included.",
+    details,
+    complete:
+      failures === 0 && missingDependencies === 0 && !!manifest.coverage,
+  };
+}
 async function digest(payload: string): Promise<string> {
   return [
     ...new Uint8Array(
@@ -99,8 +202,11 @@ async function captureDependencies(
   options: BackupOptions,
 ): Promise<BackupManifest["dependencies"]> {
   const locks = new Map<string, string>();
-  for (const revision of shell.revisions)
-    for (const lock of Object.values(revision.project.lock)) {
+  for (const project of [
+    ...shell.revisions.map((revision) => revision.project),
+    ...(shell.codingDrafts ?? []).map((draft) => draft.project),
+  ])
+    for (const lock of Object.values(project.lock)) {
       const old = locks.get(lock.url);
       if (old && old !== lock.integrity)
         throw new Error(`Conflicting dependency locks for ${lock.url}`);
@@ -192,6 +298,7 @@ export async function exportBackup(
     format: "itsalive-backup",
     version: 2,
     shell,
+    coverage: coverage(shell),
     origins,
     dependencies: await captureDependencies(shell, options),
     disclosure: BACKUP_DISCLOSURES,
@@ -217,8 +324,7 @@ export async function exportBackup(
     phase: "archive",
     completed: 1,
     total: 1,
-    detail:
-      "Archive ready; inspect its manifest for skipped storage or failures",
+    detail: summarizeBackup(manifest).summary,
   });
   return blob;
 }
@@ -256,6 +362,18 @@ export async function inspectBackup(
   )
     throw new Error("Invalid backup manifest");
   validateShellSnapshot(manifest.shell);
+  if (
+    manifest.coverage &&
+    Object.entries(coverage(manifest.shell)).some(
+      ([key, value]) =>
+        manifest.coverage![
+          key as keyof NonNullable<BackupManifest["coverage"]>
+        ] !== value,
+    )
+  )
+    throw new Error(
+      "Backup record counts or accounting totals do not match its completeness report",
+    );
   const appIds = new Set(manifest.shell.apps.map((app) => app.id));
   const seen = new Set<string>();
   for (const origin of manifest.origins) {
@@ -269,8 +387,11 @@ export async function inspectBackup(
   if (seen.size !== appIds.size)
     throw new Error("Backup omits an application origin");
   const locked = new Map<string, string>();
-  for (const revision of manifest.shell.revisions)
-    for (const lock of Object.values(revision.project.lock)) {
+  for (const project of [
+    ...manifest.shell.revisions.map((revision) => revision.project),
+    ...(manifest.shell.codingDrafts ?? []).map((draft) => draft.project),
+  ])
+    for (const lock of Object.values(project.lock)) {
       const prior = locked.get(lock.url);
       if (prior && prior !== lock.integrity)
         throw new Error("Conflicting dependency integrity locks");

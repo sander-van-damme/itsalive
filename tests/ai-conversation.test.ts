@@ -7,8 +7,219 @@ import {
   converse,
   demoAIConfig,
 } from "../src/ai";
+import { findReferencedApps } from "../src/ai/conversation";
+import { applyMemoryChanges, emptyPreferenceMemory } from "../src/ai/memory";
 const context = { appId: "app", correlationId: "trace" };
 describe("conversation and optional behavioral adaptations", () => {
+  it("supplies real app evidence and relevant preferences without cutting source or history", async () => {
+    const source =
+      "export default function App() { /* " +
+      "Complete lesson source. ".repeat(2500) +
+      " */ }";
+    const provider = new ScriptedProvider([
+      {
+        text: JSON.stringify({
+          reply:
+            "Learn and Practice currently share the same content. I'll separate the explanation from the exercises.",
+          appName: null,
+          workLevel: "medium",
+          intent: "change",
+          changeRequest: "Give Learn and Practice distinct useful flows.",
+          confirmationReason: null,
+          choices: [],
+          memoryChanges: [],
+          referencedAppIds: [],
+          changePreferences: ["Use concise functional labels."],
+          decisionSummary:
+            "The current source confirms the duplicated views and the user asked for a repair.",
+        }),
+        toolCalls: [],
+      },
+    ]);
+    const generate = vi.spyOn(provider, "generate");
+    const memory = applyMemoryChanges(
+      emptyPreferenceMemory(),
+      [
+        {
+          action: "remember",
+          key: "interface.copy",
+          text: "Use concise functional labels.",
+          scope: "all-apps",
+          source: "explicit",
+          evidence: "Use concise functional labels.",
+        },
+      ],
+      { appId: "other", userText: "Use concise functional labels." },
+    ).memory;
+    memory.instructions = "Explain what changed in plain language.";
+    const service = new AIService(demoAIConfig(), {
+      providers: { demo: provider },
+    });
+    const reply = await converse(
+      service,
+      "Learn and Practice are the same. Fix that.",
+      [],
+      context,
+      undefined,
+      {
+        activeApp: {
+          id: "app",
+          name: "Violin Trainer",
+          project: {
+            entry: "App.tsx",
+            files: { "App.tsx": source },
+            dependencies: {},
+            lock: {},
+          },
+          inspection: {
+            text: "Learn Practice G major",
+            errors: [],
+            revisionId: "revision",
+          },
+        },
+        memory,
+      },
+    );
+    const evidence = generate.mock.calls[0]![1].messages[1]!.content;
+    expect(evidence).toContain(source);
+    expect(evidence).toContain("Learn Practice G major");
+    expect(evidence).toContain(memory.instructions);
+    expect(evidence).toContain("Use concise functional labels.");
+    expect(reply.intent).toBe("change");
+    expect(reply.changePreferences).toEqual(["Use concise functional labels."]);
+  });
+
+  it("returns useful clarification choices without authorizing a premature build", async () => {
+    const provider = new ScriptedProvider([
+      {
+        text: JSON.stringify({
+          reply: "Which hand feels tight when you play?",
+          appName: null,
+          workLevel: "medium",
+          intent: "clarify",
+          changeRequest: null,
+          confirmationReason: null,
+          choices: [
+            {
+              label: "Left hand",
+              value: "My left hand feels tight when pressing the strings.",
+            },
+            { label: "Bow hand", value: "My bow hand feels tight." },
+          ],
+          memoryChanges: [],
+          referencedAppIds: [],
+          changePreferences: [],
+          decisionSummary: "The affected hand changes the exercise advice.",
+        }),
+        toolCalls: [],
+      },
+    ]);
+    const service = new AIService(demoAIConfig(), {
+      providers: { demo: provider },
+    });
+    const reply = await converse(
+      service,
+      "My hands are too tight when I play violin.",
+      [],
+      context,
+    );
+    expect(reply.intent).toBe("clarify");
+    expect(reply.changeRequest).toBeNull();
+    expect(reply.choices.map((choice) => choice.label)).toEqual([
+      "Left hand",
+      "Bow hand",
+    ]);
+    expect(service.usage).toHaveLength(1);
+    expect(service.usage[0]?.role).toBe("conversation");
+  });
+
+  it("resolves named references and refuses to claim an app was inspected from its name alone", async () => {
+    const apps = [
+      { id: "watch", name: "Stopwatch" },
+      { id: "new", name: "New app" },
+      { id: "trainer", name: "Violin Chord Trainer" },
+    ];
+    expect(
+      findReferencedApps("Make this look like the stopwatch app.", apps),
+    ).toEqual([apps[0]]);
+    expect(
+      findReferencedApps("Make a new app with a stopwatchish style.", apps),
+    ).toEqual([]);
+    const provider = new ScriptedProvider(
+      Array.from({ length: 2 }, () => ({
+        text: JSON.stringify({
+          reply: "I'll use the stopwatch's layout.",
+          appName: null,
+          workLevel: "medium",
+          intent: "change",
+          changeRequest: "Use the referenced stopwatch's actual layout.",
+          confirmationReason: null,
+          referencedAppIds: ["watch"],
+        }),
+        toolCalls: [],
+      })),
+    );
+    const service = new AIService(demoAIConfig(), {
+      providers: { demo: provider },
+    });
+    await expect(
+      converse(
+        service,
+        "Make it look like my stopwatch",
+        [],
+        context,
+        undefined,
+        { availableApps: apps },
+      ),
+    ).rejects.toThrow("couldn't inspect");
+    const reply = await converse(
+      service,
+      "Make it look like my stopwatch",
+      [],
+      context,
+      undefined,
+      {
+        availableApps: apps,
+        referencedApps: [
+          {
+            ...apps[0]!,
+            project: {
+              entry: "App.tsx",
+              files: { "App.tsx": "Stopwatch source" },
+              dependencies: {},
+              lock: {},
+            },
+          },
+        ],
+      },
+    );
+    expect(reply.referencedAppIds).toEqual(["watch"]);
+  });
+
+  it("rejects a reply that asks for clarification and starts a change at the same time", async () => {
+    const provider = new ScriptedProvider([
+      {
+        text: JSON.stringify({
+          reply: "Which hand?",
+          workLevel: "medium",
+          intent: "change",
+          changeRequest: "Build a generic trainer",
+          confirmationReason: null,
+          choices: [
+            { label: "Left", value: "Left hand" },
+            { label: "Right", value: "Right hand" },
+          ],
+        }),
+        toolCalls: [],
+      },
+    ]);
+    const service = new AIService(demoAIConfig(), {
+      providers: { demo: provider },
+    });
+    await expect(
+      converse(service, "My hand is tight", [], context),
+    ).rejects.toThrow("incomplete response");
+  });
   it("separates questions from proposed structural changes without coding", async () => {
     const service = new AIService(demoAIConfig());
     expect(

@@ -1,5 +1,11 @@
-/** Preserve diagnosis/accounting, never upstream messages, prompts or arbitrary fields. */
-export function safeProviderFailure(value: unknown): Record<string, unknown> {
+import { redactCredentials } from "../shared/redaction";
+
+/** Ordinary failures expose only accounting and known codes. Debug requests may
+ * retain diagnostic provider fields, with credentials removed in both modes. */
+export function safeProviderFailure(
+  value: unknown,
+  options: { includeContent?: boolean; secrets?: readonly string[] } = {},
+): Record<string, unknown> {
   const object = (candidate: unknown): Record<string, any> =>
     candidate !== null &&
     typeof candidate === "object" &&
@@ -29,6 +35,22 @@ export function safeProviderFailure(value: unknown): Record<string, unknown> {
   const metadata: Record<string, unknown> = {
     error: { ...(allowed.includes(error.code) ? { code: error.code } : {}) },
   };
+  if (options.includeContent)
+    metadata.diagnostics = {
+      providerError: redactCredentials(
+        {
+          ...(typeof body.error === "string" ? { message: body.error } : {}),
+          ...Object.fromEntries(
+            ["code", "type", "message", "param"]
+              .filter(
+                (key) => typeof error[key] === "string" || error[key] === null,
+              )
+              .map((key) => [key, error[key]]),
+          ),
+        },
+        { secrets: options.secrets },
+      ),
+    };
   const usage = object(body.usage);
   const details = object(usage.input_tokens_details);
   const count = (candidate: unknown) =>

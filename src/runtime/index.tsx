@@ -17,6 +17,9 @@ import type {
   RuntimeInspection,
 } from "../shared/types";
 import { ModuleGraph } from "./modules";
+import { ActivityRegions } from "./activity";
+import { inspectQuality } from "./quality";
+import { failureEvidence } from "../shared/errors";
 import {
   clearOriginStorage,
   exportOriginStorage,
@@ -95,6 +98,7 @@ export function start(port: MessagePort, init: RuntimeInit): void {
   let revisionId: string | null = null;
   let applying = false;
   let applyingError: Error | null = null;
+  let applyingRevisionId: string | null = null;
   let current: BuildArtifact | null = null;
   let graph: ModuleGraph | null = null;
   let root: ReactDOMClient.Root | null = null;
@@ -110,8 +114,9 @@ export function start(port: MessagePort, init: RuntimeInit): void {
   styles.dataset.itsalive = "generated";
   document.head.append(styles);
   document.body.replaceChildren(mount);
-  document.documentElement.style.colorScheme = "light";
+  document.documentElement.dataset.shellTheme = init.appearance ?? "light";
   document.body.style.margin = "0";
+  const activity = new ActivityRegions(mount);
 
   const report = (error: unknown, kind = "runtime.error") => {
     const message =
@@ -127,12 +132,16 @@ export function start(port: MessagePort, init: RuntimeInit): void {
       event: kind,
       revisionId,
       message,
+      error: failureEvidence(error),
+      ...(applying ? { candidateRevisionId: applyingRevisionId } : {}),
     });
   };
   const inspect = (): RuntimeInspection => ({
     text: mount.innerText,
     errors: [...errors],
     revisionId,
+    regions: activity.inspect(),
+    quality: inspectQuality(mount),
   });
   const requestAI = (
     method: string,
@@ -229,12 +238,15 @@ export function start(port: MessagePort, init: RuntimeInit): void {
     const previous = current;
     const previousState = structuredClone(state.getState());
     const previousStyle = styles.textContent;
+    const previousErrors = [...errors];
+    activity.invalidate();
     let treeTouched = false;
     const changedModules = graph
       ? graph.update(artifact)
       : Object.keys(artifact.modules).length;
     if (!graph) graph = new ModuleGraph(artifact, builtins, refreshHooks);
     applying = true;
+    applyingRevisionId = artifact.revisionId;
     applyingError = null;
     try {
       // Evaluate first. No style or React tree changes occur for top-level failures.
@@ -256,6 +268,7 @@ export function start(port: MessagePort, init: RuntimeInit): void {
       if (applyingError) throw applyingError;
       current = artifact;
       revisionId = artifact.revisionId;
+      errors.length = 0;
       rpc.event("state", state.getState());
       const durationMs = performance.now() - begin;
       rpc.event("applied", { revisionId, durationMs, changedModules });
@@ -277,10 +290,18 @@ export function start(port: MessagePort, init: RuntimeInit): void {
         root = null;
         graph = null;
       }
-      report(error, "runtime.apply-failed");
+      errors.splice(0, errors.length, ...previousErrors);
+      rpc.event("diagnostic", {
+        level: "INFO",
+        event: "runtime.apply-failed",
+        revisionId,
+        candidateRevisionId: artifact.revisionId,
+        error: failureEvidence(error),
+      });
       throw error;
     } finally {
       applying = false;
+      applyingRevisionId = null;
     }
   };
 
@@ -301,6 +322,11 @@ export function start(port: MessagePort, init: RuntimeInit): void {
         queue = next;
         return next;
       }
+      case "set-appearance":
+        if (payload !== "light" && payload !== "dark")
+          throw new Error("Invalid appearance");
+        document.documentElement.dataset.shellTheme = payload;
+        return { ok: true };
       case "set-observation":
         if (init.mode !== "app" || typeof payload !== "boolean")
           throw new Error("Invalid observation setting");
@@ -308,6 +334,32 @@ export function start(port: MessagePort, init: RuntimeInit): void {
         return null;
       case "inspect":
         return inspect();
+      case "set-activity": {
+        if (
+          init.mode !== "app" ||
+          !isRecord(payload) ||
+          typeof payload.message !== "string" ||
+          !Array.isArray(payload.targets) ||
+          payload.targets.some((target) => typeof target !== "string")
+        )
+          throw new Error("Invalid work activity");
+        return activity.show({
+          message: payload.message,
+          targets: payload.targets as string[],
+        });
+      }
+      case "clear-activity":
+        activity.clear();
+        return null;
+      case "set-visibility":
+        if (init.mode !== "app" || typeof payload !== "boolean")
+          throw new Error("Invalid app visibility");
+        window.dispatchEvent(
+          new CustomEvent("itsalive:visibility", {
+            detail: { visible: payload },
+          }),
+        );
+        return null;
       case "snapshot":
         return structuredClone(state.getState());
       case "restore-state": {

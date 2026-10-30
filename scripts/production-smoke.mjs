@@ -72,14 +72,19 @@ try {
   const errors = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await page.goto("http://itsalive.localhost:4173");
+  await page.locator("#welcome-create").click();
   await page
-    .getByRole("textbox", { name: "Message", exact: true })
+    .locator('#create-form textarea[name="idea"]')
     .fill("I want an app that teaches me violin chords and scales.");
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await page.locator('#create-form button[type="submit"]').click();
   await expect(page.locator("#onboarding-dialog")).toBeVisible();
   await page
     .locator("#onboarding-ai-key")
     .fill("production-deterministic-provider-key");
+  await page.locator("#onboarding-save-settings").click();
+  await expect(page.locator("#onboarding-save-settings")).toHaveText(
+    "Start creating",
+  );
   await page.locator("#onboarding-save-settings").click();
   await expect(page.locator("#onboarding-dialog")).not.toBeVisible({
     timeout: 20000,

@@ -1,6 +1,11 @@
 import { test, expect, type Page, type BrowserContext } from "@playwright/test";
 import { mkdir } from "node:fs/promises";
-import { installGoalProvider } from "./fixtures/goal-provider";
+import { goalResponse, installGoalProvider } from "./fixtures/goal-provider";
+import {
+  createAppFromGoal,
+  openSettings,
+  openSettingsSection,
+} from "./fixtures/shell-controls";
 
 async function ready(page: Page) {
   await page.goto("/");
@@ -10,17 +15,14 @@ async function send(page: Page, text: string) {
   await page.getByRole("textbox", { name: "Message", exact: true }).fill(text);
   await page.getByRole("button", { name: "Send", exact: true }).click();
 }
-async function openSettings(page: Page) {
-  if (await page.locator("#settings-dialog").isVisible()) return;
-  await page.locator("#more-options > summary").click();
-  await page.getByRole("button", { name: "Settings", exact: true }).click();
-}
 async function connect(page: Page) {
   const onboarding = page.locator("#onboarding-dialog");
   const dialog = (await onboarding.isVisible())
     ? onboarding
     : page.locator("#settings-dialog");
   if (!(await dialog.isVisible())) await openSettings(page);
+  if (!(await onboarding.isVisible()))
+    await openSettingsSection(dialog, "AI connection");
   await dialog
     .getByRole("combobox", { name: "Connect with", exact: true })
     .selectOption("openai");
@@ -32,10 +34,17 @@ async function connect(page: Page) {
       name: /^(Continue|Connect and save|Save settings)$/,
     })
     .click();
+  if (await onboarding.isVisible())
+    await onboarding
+      .getByRole("button", { name: "Start creating", exact: true })
+      .click();
   await expect(dialog).not.toBeVisible();
 }
 async function createGoal(page: Page) {
-  await send(page, "I want an app that teaches me violin chords and scales.");
+  await createAppFromGoal(
+    page,
+    "I want an app that teaches me violin chords and scales.",
+  );
   await expect(
     page
       .frameLocator('iframe[data-mode="app"]')
@@ -69,7 +78,10 @@ test("first run resumes a goal after provider setup, creates useful practice and
   await page.setViewportSize({ width: 1440, height: 900 });
   await ready(page);
   await expect(page.locator("#provider-badge")).not.toContainText(/demo/i);
-  await send(page, "I want an app that teaches me violin chords and scales.");
+  await createAppFromGoal(
+    page,
+    "I want an app that teaches me violin chords and scales.",
+  );
   await expect(page.locator("#onboarding-dialog")).toBeVisible();
   await expect(page.locator("#onboarding-dialog")).toContainText(
     /connect|provider|AI/i,
@@ -128,10 +140,10 @@ test("first run resumes a goal after provider setup, creates useful practice and
   );
   const frame = await page.locator('iframe[data-mode="app"]').boundingBox();
   const rail = await page.locator(".conversation").boundingBox();
-  expect(frame?.x).toBe(0);
+  expect(rail?.x).toBe(0);
   expect(frame!.width).toBeGreaterThan(1000);
   expect(rail!.width).toBeLessThanOrEqual(400);
-  expect(rail!.x).toBeGreaterThan(frame!.x);
+  expect(rail!.x + rail!.width).toBeLessThanOrEqual(frame!.x);
   await screenshot(page, "after-desktop-practice");
   await page
     .getByRole("button", { name: "Collapse assistant", exact: true })
@@ -296,6 +308,131 @@ test("mobile switches application and companion without losing running activity;
   await expect(app(page).getByText(/Pass the working end/)).toBeVisible();
 });
 
+for (const choice of ["wait", "stop"] as const) {
+  test(`creating another app during a build requires an explicit ${choice} choice and preserves the first app`, async ({
+    page,
+    context,
+  }) => {
+    const provider = await fixture(page, context);
+    await app(page)
+      .getByRole("button", { name: "Mark practice complete", exact: true })
+      .click();
+    await expect
+      .poll(() =>
+        page.evaluate(
+          async () => (await window.__itsalive.getApp()).state.completed,
+        ),
+      )
+      .toBe(1);
+    const original = await page.evaluate(() => window.__itsalive.getApp());
+    let release!: () => void;
+    const held = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let waiting = false;
+    provider.intercept = async (request, route) => {
+      if (
+        waiting ||
+        !request.tools?.some((tool) => tool.function.name === "write_file")
+      )
+        return false;
+      waiting = true;
+      await held;
+      await route
+        .fulfill({ status: 200, json: goalResponse(request) })
+        .catch(() => {});
+      return true;
+    };
+    try {
+      await send(page, "Add a chord progression exercise.");
+      await expect.poll(() => waiting).toBe(true);
+      if (choice === "stop") {
+        await send(page, "Improve feedback.");
+        await expect(page.locator("#status")).toContainText("queued");
+        await page.evaluate(() => {
+          const status = document.getElementById("status")!;
+          const messages: string[] = [];
+          const observer = new MutationObserver(() =>
+            messages.push(status.textContent ?? ""),
+          );
+          observer.observe(status, {
+            childList: true,
+            subtree: true,
+            characterData: true,
+          });
+          (window as any).__cancelStatuses = { messages, observer };
+        });
+      }
+      await createAppFromGoal(
+        page,
+        "Create an interactive climbing-knot tutorial.",
+      );
+      const conflict = page.locator("#build-conflict-dialog");
+      await expect(conflict).toBeVisible();
+      await expect(conflict).toContainText("This app is still being updated");
+      expect(
+        await page.evaluate(() => window.__itsalive.listApps()),
+      ).toHaveLength(1);
+      expect((await page.evaluate(() => window.__itsalive.getApp())).id).toBe(
+        original.id,
+      );
+      await conflict
+        .locator(
+          choice === "wait" ? "#build-conflict-wait" : "#build-conflict-cancel",
+        )
+        .click();
+      await expect(conflict).not.toBeVisible();
+      await expect(page.locator("#create-dialog")).not.toBeVisible();
+      if (choice === "wait") {
+        expect(
+          await page.evaluate(() => window.__itsalive.listApps()),
+        ).toHaveLength(1);
+        release();
+      }
+      await expect(
+        app(page).getByRole("heading", {
+          name: "Climbing knot practice",
+          exact: true,
+        }),
+      ).toBeVisible();
+      await expect(page.locator("#status")).toContainText(/ready/i);
+      if (choice === "stop") {
+        const statuses = await page.evaluate(() => {
+          const capture = (window as any).__cancelStatuses;
+          capture.observer.disconnect();
+          return capture.messages as string[];
+        });
+        expect(statuses.join("\n")).not.toMatch(
+          /That didn.t work|Couldn.t finish|Queued change cancelled/i,
+        );
+      }
+      const apps = await page.evaluate(() => window.__itsalive.listApps());
+      expect(apps).toHaveLength(2);
+      const saved = apps.find((item) => item.id === original.id)!;
+      expect(saved.state.completed).toBe(1);
+      if (choice === "wait")
+        expect(saved.currentRevision).not.toBe(original.currentRevision);
+      else expect(saved.currentRevision).toBe(original.currentRevision);
+      await page.locator("#app-switcher > summary").click();
+      await page
+        .locator("#app-list")
+        .getByRole("button", { name: original.name, exact: false })
+        .click();
+      await expect(
+        app(page).getByText("Practice sessions: 1", { exact: true }),
+      ).toBeVisible();
+      const progression = app(page).getByRole("heading", {
+        name: "Chord progression",
+        exact: true,
+      });
+      if (choice === "wait") await expect(progression).toBeVisible();
+      else await expect(progression).toHaveCount(0);
+    } finally {
+      release();
+    }
+  });
+}
+
 test("settings support keyboard close, cancel, useful defaults and connection error recovery", async ({
   page,
   context,
@@ -304,6 +441,7 @@ test("settings support keyboard close, cancel, useful defaults and connection er
   await ready(page);
   await openSettings(page);
   const dialog = page.locator("#settings-dialog");
+  await openSettingsSection(dialog, "AI connection");
   await expect(
     dialog.getByRole("combobox", { name: "Connect with" }),
   ).toBeVisible();
@@ -322,12 +460,13 @@ test("settings support keyboard close, cancel, useful defaults and connection er
     .fill("unsaved-key");
   await page.keyboard.press("Escape");
   await expect(dialog).not.toBeVisible();
-  await expect(page.locator("#more-options > summary")).toBeFocused();
+  await expect(page.locator("#welcome-settings")).toBeFocused();
   await openSettings(page);
+  await openSettingsSection(dialog, "AI connection");
   await expect(
     dialog.getByLabel("OpenAI API key", { exact: true }),
   ).toHaveValue("");
-  await dialog.getByText("AI choices", { exact: true }).click();
+  await openSettingsSection(dialog, "Advanced AI choices");
   for (const level of ["Low", "Medium", "High", "Live voice"])
     await expect(
       dialog.getByLabel(`${level} model`, { exact: true }),
@@ -336,19 +475,21 @@ test("settings support keyboard close, cancel, useful defaults and connection er
   await expect(
     dialog.getByText("Use scripted test provider", { exact: true }),
   ).toHaveCount(0);
-  await dialog.getByText("Usage", { exact: true }).click();
+  await openSettingsSection(dialog, "Usage");
+  const spending = dialog.getByRole("slider", { name: /Monthly API spending/ });
+  await expect(spending).toHaveAttribute("aria-valuetext", "No limit");
   await expect(
-    dialog.getByLabel("Enable spending limit", { exact: true }),
-  ).not.toBeChecked();
-  await expect(
-    dialog.getByLabel("Monthly limit (USD)", { exact: true }),
+    dialog.getByLabel("Exact monthly limit (USD)", { exact: true }),
   ).not.toBeVisible();
-  await dialog.getByLabel("Enable spending limit", { exact: true }).check();
+  await spending.focus();
+  await spending.press("Home");
+  await expect(spending).toHaveAttribute("aria-valuetext", "$0.00");
   await expect(
-    dialog.getByLabel("Monthly limit (USD)", { exact: true }),
+    dialog.getByLabel("Exact monthly limit (USD)", { exact: true }),
   ).toBeVisible();
   await dialog.getByRole("button", { name: "Cancel", exact: true }).click();
   await openSettings(page);
+  await openSettingsSection(dialog, "AI connection");
   await dialog
     .getByLabel("OpenAI API key", { exact: true })
     .fill("acceptance-test-credential");
@@ -423,6 +564,9 @@ test("voice asks for an AI connection and never invokes browser speech recogniti
   const errors: string[] = [];
   page.on("pageerror", (error) => errors.push(error.message));
   await ready(page);
+  await page.evaluate(() =>
+    window.__itsalive.createApp("Voice connection test"),
+  );
   await page
     .getByRole("button", { name: "Start voice conversation", exact: true })
     .click();
@@ -499,12 +643,18 @@ test("cancelled onboarding never runs a stale request after a later settings sav
   const provider = await installGoalProvider(context);
   await ready(page);
   const goal = "Create a violin practice app.";
-  await send(page, goal);
+  await createAppFromGoal(page, goal);
   await expect(page.locator("#onboarding-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
+  const create = page.locator("#create-dialog");
+  // The native close event restores the draft asynchronously. Its input keeps
+  // its value while hidden, so wait for the restored dialog before dismissing it.
+  await expect(create).toBeVisible();
   await expect(
-    page.getByRole("textbox", { name: "Message", exact: true }),
+    create.getByLabel("What would you like to do?", { exact: true }),
   ).toHaveValue(goal);
+  await page.keyboard.press("Escape");
+  await expect(create).not.toBeVisible();
   expect(await page.evaluate(() => window.__itsalive.listApps())).toEqual([]);
   await connect(page);
   expect(await page.evaluate(() => window.__itsalive.listApps())).toEqual([]);
@@ -513,7 +663,7 @@ test("cancelled onboarding never runs a stale request after a later settings sav
       request.tools?.some((tool) => tool.function.name === "write_file"),
     ),
   ).toHaveLength(0);
-  await page.getByRole("button", { name: "Send", exact: true }).click();
+  await createAppFromGoal(page, goal);
   await expect(
     app(page).getByRole("heading", { name: "Violin practice", exact: true }),
   ).toBeVisible();
@@ -622,9 +772,10 @@ test("creation and backup dialogs close accessibly; restoring waits for an expli
   await expect(backup.locator("#backup-status")).toContainText(/restor/i);
   await expect
     .poll(() =>
-      page.evaluate(
-        async () => (await window.__itsalive.getApp()).state.completed ?? 0,
-      ),
+      page.evaluate(async () => {
+        const restored = await window.__itsalive.getApp();
+        return restored ? (restored.state.completed ?? 0) : null;
+      }),
     )
     .toBe(0);
   await backup
@@ -636,6 +787,104 @@ test("creation and backup dialogs close accessibly; restoring waits for an expli
   ).toBeVisible();
 });
 
+test("version history restores older and newer apps, preserves saved data and keeps later versions after a new branch", async ({
+  page,
+  context,
+}) => {
+  await fixture(page, context);
+  const firstGoal = "I want an app that teaches me violin chords and scales.";
+  const addition = "Add a chord progression exercise.";
+  await send(page, addition);
+  await expect(
+    app(page).getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toBeVisible();
+  await expect(page.locator("#status")).toContainText(/ready/i);
+  await app(page)
+    .getByRole("button", { name: "Mark practice complete", exact: true })
+    .click();
+  await app(page)
+    .getByRole("button", { name: "Mark practice complete", exact: true })
+    .click();
+  await expect
+    .poll(() =>
+      page.evaluate(
+        async () => (await window.__itsalive.getApp()).state.completed,
+      ),
+    )
+    .toBe(2);
+  const newer = await revision(page);
+  const restore = async (label: string) => {
+    const before = await revision(page);
+    await page.locator("#rail-history").click();
+    await expect(page.locator("#history")).toContainText(
+      "Restoring changes the app, not its saved data.",
+    );
+    const row = page.locator("#revision-list .revision-row").filter({
+      has: page.getByText(label, { exact: true }),
+    });
+    await row.getByRole("button", { name: "Restore", exact: true }).click();
+    await expect.poll(() => revision(page)).not.toBe(before);
+    await page
+      .getByRole("button", { name: "Back to application", exact: true })
+      .click();
+    await expect(
+      app(page).getByText("Practice sessions: 2", { exact: true }),
+    ).toBeVisible();
+    return revision(page);
+  };
+  await page.locator("#rail-history").click();
+  const initial = page
+    .locator("#revision-list .revision-row")
+    .filter({ hasText: "Initial setup" });
+  await expect(
+    initial.getByRole("button", { name: "Setup", exact: true }),
+  ).toBeDisabled();
+  await page
+    .getByRole("button", { name: "Back to application", exact: true })
+    .click();
+  const olderRestored = await restore(firstGoal);
+  expect(olderRestored).not.toBe(newer);
+  await expect(
+    app(page).getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toHaveCount(0);
+  const newerRestored = await restore(addition);
+  expect(newerRestored).not.toBe(newer);
+  await expect(
+    app(page).getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toBeVisible();
+  const branchBase = await restore(firstGoal);
+  await send(page, "Improve feedback.");
+  await expect.poll(() => revision(page)).not.toBe(branchBase);
+  const branch = await page.evaluate(() => window.__itsalive.getRevision());
+  expect(branch.parent).toBe(branchBase);
+  await expect(
+    app(page).getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toHaveCount(0);
+  await app(page)
+    .getByRole("button", { name: "Start practice", exact: true })
+    .click();
+  await expect(app(page).getByRole("status")).toContainText(
+    "Practice started.",
+  );
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.__itsalive));
+  await expect(
+    app(page).getByText("Practice sessions: 2", { exact: true }),
+  ).toBeVisible();
+  expect(await revision(page)).toBe(branch.id);
+  await restore(addition);
+  await expect(
+    app(page).getByRole("heading", { name: "Chord progression", exact: true }),
+  ).toBeVisible();
+  await page.locator("#rail-history").click();
+  const branchRow = page
+    .locator("#revision-list .revision-row")
+    .filter({ has: page.getByText("Improve feedback.", { exact: true }) });
+  await expect(
+    branchRow.getByRole("button", { name: "Restore", exact: true }),
+  ).toBeEnabled();
+});
+
 test("invalid saved credentials recover to setup without a scripted fallback", async ({
   page,
   context,
@@ -645,7 +894,7 @@ test("invalid saved credentials recover to setup without a scripted fallback", a
     localStorage.setItem("itsalive.credentials", "null"),
   );
   await ready(page);
-  await send(page, "Create a violin practice app.");
+  await createAppFromGoal(page, "Create a violin practice app.");
   await expect(page.locator("#onboarding-dialog")).toBeVisible();
   expect(provider.requests).toHaveLength(0);
   await expect(page.locator("#provider-badge")).not.toContainText(
@@ -653,7 +902,7 @@ test("invalid saved credentials recover to setup without a scripted fallback", a
   );
 });
 
-test("a failed AI request updates health, preserves the working app and draft, and can be retried", async ({
+test("a failed AI request updates health, preserves the working app and saved request, and retries after reload", async ({
   page,
   context,
 }) => {
@@ -666,12 +915,18 @@ test("a failed AI request updates health, preserves the working app and draft, a
   );
   await expect(page.locator("#status")).toContainText("Reconnect in Settings");
   const input = page.getByRole("textbox", { name: "Message", exact: true });
-  await expect(input).toHaveValue("Add a chord progression exercise.");
+  await expect(input).toHaveValue("");
+  await expect(page.locator("#retry-work")).toBeVisible();
   expect(await revision(page)).toBe(before);
   await expect(
     app(page).getByRole("heading", { name: "Violin practice", exact: true }),
   ).toBeVisible();
-  await input.press("Enter");
+  await page.reload();
+  await page.waitForFunction(() => Boolean(window.__itsalive));
+  await expect(page.locator("#retry-work")).toBeVisible();
+  await expect(input).toHaveValue("");
+  expect(await revision(page)).toBe(before);
+  await page.locator("#retry-work").click();
   await expect(
     app(page).getByRole("heading", { name: "Chord progression", exact: true }),
   ).toBeVisible();

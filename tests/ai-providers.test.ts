@@ -99,6 +99,7 @@ describe("OpenAI Responses integration", () => {
       },
     );
     expect(body.max_output_tokens).toBeUndefined();
+    expect(body.truncation).toBeUndefined();
     expect(body.input).toEqual([
       { role: "developer", content: "Private instructions" },
       {

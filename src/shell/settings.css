@@ -1,0 +1,88 @@
+.setup-steps {
+  display: flex;
+  gap: 1rem;
+  list-style: none;
+  padding: 0;
+  margin: 1.25rem 0;
+  color: var(--muted);
+}
+.setup-steps li {
+  flex: 1;
+  border-bottom: 2px solid var(--line);
+  padding-bottom: 0.6rem;
+}
+.setup-steps [aria-current="step"] {
+  color: var(--accent);
+  border-color: var(--accent);
+  font-weight: 650;
+}
+.budget-scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--muted);
+  font-size: 0.875rem;
+}
+[id$="budget-value"] {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.settings-section > summary {
+  cursor: pointer;
+  font-weight: 650;
+  padding-block: 0.3rem;
+}
+.settings-section > summary + label {
+  margin-top: 1rem;
+}
+.settings-section textarea {
+  width: 100%;
+  box-sizing: border-box;
+  min-height: 6rem;
+  resize: vertical;
+  background: var(--surface);
+  color: inherit;
+  border: 1px solid var(--line);
+  border-radius: 0.65rem;
+  padding: 0.75rem;
+  font: inherit;
+}
+.settings-section [type="range"] {
+  width: 100%;
+  accent-color: var(--accent);
+}
+.memory-entries {
+  display: grid;
+  gap: 0.75rem;
+  margin-top: 1rem;
+}
+.memory-entry {
+  border: 1px solid var(--line);
+  border-radius: 0.75rem;
+  padding: 0.9rem;
+}
+.memory-entry > p {
+  margin: 0 0 0.6rem;
+}
+.memory-entry blockquote {
+  margin: 0.75rem 0;
+  padding-left: 0.75rem;
+  border-left: 2px solid var(--line);
+  overflow-wrap: anywhere;
+}
+.memory-entry details {
+  margin-top: 0.5rem;
+}
+.memory-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+.account-callback {
+  max-width: 32rem;
+  margin: 15vh auto;
+  padding: 2rem;
+  color: var(--text, #182026);
+}
+.account-callback p {
+  line-height: 1.6;
+}

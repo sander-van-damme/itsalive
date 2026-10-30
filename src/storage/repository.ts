@@ -1,6 +1,7 @@
 import { openDB, type DBSchema, type IDBPDatabase } from "idb";
 import type { CodingCheckpoint } from "../ai/checkpoint";
 import type { UsageRecord } from "../ai/types";
+import { credentialField, redactCredentials } from "../shared/redaction";
 import type {
   AppRecord,
   ChatMessage,
@@ -28,31 +29,43 @@ export interface ShellSnapshot {
   conversations: ChatMessage[];
   diagnostics: Diagnostic[];
   settings: { key: string; value: unknown }[];
+  /** Absent in earlier v2 archives; new backups preserve resumable candidate work. */
+  codingDrafts?: CodingCheckpoint[];
+}
+export interface DiagnosticRetention {
+  maxEntries: number;
+  /** Count since retention metadata began; older ring pruning may be unknowable. */
+  droppedCount: number;
+  earlierDroppedCount?: "unknown";
+  firstRecordedAt?: number;
+  lastRecordedAt?: number;
+  lastPrunedAt?: number;
+}
+const DIAGNOSTIC_LIMIT = 2000;
+const RETENTION_KEY = "diagnostics.retention";
+function diagnosticOrder(a: Diagnostic, b: Diagnostic): number {
+  const sequence = (row: Diagnostic) =>
+    (row as Diagnostic & { sequence?: number }).sequence ?? 0;
+  return (
+    a.timestamp - b.timestamp ||
+    (a.sessionId ?? "").localeCompare(b.sessionId ?? "") ||
+    sequence(a) - sequence(b) ||
+    a.id.localeCompare(b.id)
+  );
 }
 const uuid =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const secretField =
-  /^(?:api[-_]?key|authorization|password|token|access[-_]?token|refresh[-_]?token|credentials?|secret)$/i;
+function isCredentialSetting(key: string): boolean {
+  const field = key.split(/[.:]/).at(-1) ?? key;
+  return (
+    /^itsalive\.chatgpt(?:\.|$)/i.test(key) ||
+    credentialField.test(field) ||
+    field.toLowerCase() === "tokens"
+  );
+}
 /** Defense in depth. Arbitrary generated-app state is deliberately not filtered. */
-export function redact(value: unknown, depth = 0): unknown {
-  if (depth > 10) return "[depth limit]";
-  if (typeof value === "string")
-    return value
-      .replace(/\bBearer\s+[^\s"']+/gi, "Bearer [redacted]")
-      .replace(/\bsk-[A-Za-z0-9_-]{10,}/g, "[redacted]")
-      .slice(0, 12_000);
-  if (Array.isArray(value))
-    return value.slice(0, 100).map((item) => redact(item, depth + 1));
-  if (value && typeof value === "object")
-    return Object.fromEntries(
-      Object.entries(value)
-        .slice(0, 100)
-        .map(([key, item]) => [
-          key,
-          secretField.test(key) ? "[redacted]" : redact(item, depth + 1),
-        ]),
-    );
-  return value;
+export function redact(value: unknown): unknown {
+  return redactCredentials(value);
 }
 function validateRevision(revision: Revision): void {
   if (
@@ -114,6 +127,107 @@ function validateApp(app: AppRecord): void {
   )
     throw new Error("Invalid application record");
 }
+function validateCheckpoint(checkpoint: CodingCheckpoint): void {
+  if (
+    !checkpoint ||
+    checkpoint.version !== 1 ||
+    typeof checkpoint.id !== "string" ||
+    !checkpoint.id ||
+    typeof checkpoint.intent !== "string" ||
+    !checkpoint.intent.trim() ||
+    typeof checkpoint.originalRequest !== "string" ||
+    typeof checkpoint.correlationId !== "string" ||
+    typeof checkpoint.baseRevisionId !== "string" ||
+    !["coding-simple", "coding-standard", "coding-complex"].includes(
+      checkpoint.role,
+    ) ||
+    !["working", "paused"].includes(checkpoint.status) ||
+    !Number.isFinite(checkpoint.createdAt) ||
+    !Number.isFinite(checkpoint.updatedAt) ||
+    !Number.isInteger(checkpoint.turns) ||
+    checkpoint.turns < 0 ||
+    !Number.isInteger(checkpoint.toolCalls) ||
+    checkpoint.toolCalls < 0 ||
+    typeof checkpoint.finishRequested !== "boolean" ||
+    typeof checkpoint.summary !== "string" ||
+    !Array.isArray(checkpoint.changedFiles) ||
+    checkpoint.changedFiles.some(
+      (name) =>
+        typeof name !== "string" ||
+        name.startsWith("/") ||
+        name.split("/").includes(".."),
+    )
+  )
+    throw new Error("Invalid coding checkpoint");
+  validateRevision({
+    id: checkpoint.id,
+    appId: checkpoint.appId,
+    parent: checkpoint.baseRevisionId,
+    createdAt: checkpoint.createdAt,
+    message: checkpoint.intent,
+    project: checkpoint.project,
+  });
+  const validCalls = (calls: unknown): boolean =>
+    Array.isArray(calls) &&
+    calls.every(
+      (call) =>
+        call &&
+        typeof call === "object" &&
+        typeof call.id === "string" &&
+        typeof call.name === "string" &&
+        typeof call.arguments === "string",
+    );
+  const validMessages = (messages: unknown): boolean =>
+    Array.isArray(messages) &&
+    messages.every(
+      (message) =>
+        message &&
+        typeof message === "object" &&
+        ["system", "user", "assistant", "tool"].includes(message.role) &&
+        typeof message.content === "string" &&
+        (message.toolCallId === undefined ||
+          typeof message.toolCallId === "string") &&
+        (message.toolCalls === undefined || validCalls(message.toolCalls)) &&
+        (message.responseItems === undefined ||
+          Array.isArray(message.responseItems)),
+    );
+  if (
+    !validMessages(checkpoint.messages) ||
+    (checkpoint.archivedContexts !== undefined &&
+      (!Array.isArray(checkpoint.archivedContexts) ||
+        !checkpoint.archivedContexts.every(validMessages)))
+  )
+    throw new Error("Invalid checkpoint conversation");
+  if (
+    checkpoint.pending &&
+    (!validCalls(checkpoint.pending.calls) ||
+      !Number.isInteger(checkpoint.pending.next) ||
+      checkpoint.pending.next < 0 ||
+      checkpoint.pending.next > checkpoint.pending.calls.length ||
+      typeof checkpoint.pending.incomplete !== "boolean")
+  )
+    throw new Error("Invalid checkpoint continuation");
+  if (
+    checkpoint.receipts !== undefined &&
+    (!checkpoint.receipts ||
+      typeof checkpoint.receipts !== "object" ||
+      Array.isArray(checkpoint.receipts) ||
+      Object.values(checkpoint.receipts).some(
+        (receipt) =>
+          !receipt ||
+          typeof receipt.name !== "string" ||
+          typeof receipt.arguments !== "string" ||
+          typeof receipt.output !== "string" ||
+          typeof receipt.ok !== "boolean",
+      ))
+  )
+    throw new Error("Invalid checkpoint receipts");
+  if (
+    checkpoint.lastFailure !== undefined &&
+    (!checkpoint.lastFailure || typeof checkpoint.lastFailure.kind !== "string")
+  )
+    throw new Error("Invalid checkpoint failure");
+}
 export function validateShellSnapshot(snapshot: ShellSnapshot): void {
   if (
     !snapshot ||
@@ -160,33 +274,80 @@ export function validateShellSnapshot(snapshot: ShellSnapshot): void {
     }
     for (const id of visiting) checked.add(id);
   }
-  for (const message of snapshot.conversations)
+  const messageIds = new Set<string>();
+  for (const message of snapshot.conversations) {
     if (
       !message ||
       !appIds.has(message.appId) ||
       typeof message.id !== "string" ||
+      messageIds.has(message.id) ||
       typeof message.content !== "string" ||
       !["user", "assistant"].includes(message.role) ||
       !Number.isFinite(message.createdAt)
     )
       throw new Error("Invalid conversation");
-  for (const diagnostic of snapshot.diagnostics)
+    messageIds.add(message.id);
+  }
+  const diagnosticIds = new Set<string>();
+  for (const diagnostic of snapshot.diagnostics) {
     if (
       !diagnostic ||
       typeof diagnostic.id !== "string" ||
+      diagnosticIds.has(diagnostic.id) ||
       !Number.isFinite(diagnostic.timestamp) ||
       typeof diagnostic.event !== "string" ||
       typeof diagnostic.correlationId !== "string" ||
       !["INFO", "DEBUG"].includes(diagnostic.level)
     )
       throw new Error("Invalid diagnostic");
-  for (const setting of snapshot.settings)
+    diagnosticIds.add(diagnostic.id);
+  }
+  const settingKeys = new Set<string>();
+  for (const setting of snapshot.settings) {
     if (
       !setting ||
       typeof setting.key !== "string" ||
-      secretField.test(setting.key)
+      settingKeys.has(setting.key) ||
+      isCredentialSetting(setting.key)
     )
       throw new Error("Invalid or secret-bearing platform setting");
+    settingKeys.add(setting.key);
+    if (setting.key === "ai.usage") {
+      if (!Array.isArray(setting.value))
+        throw new Error("Invalid usage ledger");
+      const usageIds = new Set<string>();
+      for (const record of setting.value) {
+        if (
+          !record ||
+          typeof record.id !== "string" ||
+          !record.id ||
+          usageIds.has(record.id) ||
+          !Number.isFinite(record.timestamp) ||
+          !Number.isFinite(record.costUSD) ||
+          record.costUSD < 0
+        )
+          throw new Error("Invalid or duplicate usage record");
+        usageIds.add(record.id);
+      }
+    }
+  }
+  if (
+    snapshot.codingDrafts !== undefined &&
+    !Array.isArray(snapshot.codingDrafts)
+  )
+    throw new Error("Invalid coding drafts");
+  const draftApps = new Set<string>();
+  for (const draft of snapshot.codingDrafts ?? []) {
+    validateCheckpoint(draft);
+    const app = snapshot.apps.find((candidate) => candidate.id === draft.appId);
+    if (
+      !app ||
+      draftApps.has(draft.appId) ||
+      app.currentRevision !== draft.baseRevisionId
+    )
+      throw new Error("Duplicate, orphaned or stale coding draft");
+    draftApps.add(draft.appId);
+  }
 }
 export class Repository {
   private readonly database: Promise<IDBPDatabase<DatabaseSchema>>;
@@ -236,16 +397,7 @@ export class Repository {
     return (await this.database).get("codingDrafts", appId);
   }
   async saveCodingCheckpoint(checkpoint: CodingCheckpoint): Promise<void> {
-    if (checkpoint.version !== 1 || !checkpoint.id || !checkpoint.intent.trim())
-      throw new Error("Invalid coding checkpoint");
-    validateRevision({
-      id: checkpoint.id,
-      appId: checkpoint.appId,
-      parent: checkpoint.baseRevisionId,
-      createdAt: checkpoint.createdAt,
-      message: checkpoint.intent,
-      project: checkpoint.project,
-    });
+    validateCheckpoint(checkpoint);
     const tx = (await this.database).transaction(
       ["apps", "codingDrafts"],
       "readwrite",
@@ -430,22 +582,83 @@ export class Repository {
   }
   async appendDiagnostic(diagnostic: Diagnostic): Promise<void> {
     const db = await this.database;
-    const tx = db.transaction("diagnostics", "readwrite");
+    const tx = db.transaction(["diagnostics", "settings"], "readwrite");
+    const store = tx.objectStore("diagnostics");
     const clean = redact(diagnostic) as Diagnostic;
-    await tx.store.put(clean);
-    let excess = (await tx.store.count()) - 2000;
-    let cursor = await tx.store.index("timestamp").openCursor();
-    while (excess-- > 0 && cursor) {
-      await cursor.delete();
-      cursor = await cursor.continue();
+    await store.put(clean);
+    const retainedCount = await store.count();
+    let excess = Math.max(0, retainedCount - DIAGNOSTIC_LIMIT);
+    const dropped = excess;
+    let cursor = excess ? await store.index("timestamp").openCursor() : null;
+    while (excess > 0 && cursor) {
+      const timestamp = cursor.value.timestamp;
+      const simultaneous: Diagnostic[] = [];
+      do {
+        simultaneous.push(cursor.value);
+        cursor = await cursor.continue();
+      } while (cursor && cursor.value.timestamp === timestamp);
+      for (const oldest of simultaneous
+        .sort(diagnosticOrder)
+        .slice(0, excess)) {
+        await store.delete(oldest.id);
+        excess--;
+      }
     }
+    const previous = (await tx.objectStore("settings").get(RETENTION_KEY))
+      ?.value as DiagnosticRetention | undefined;
+    await tx.objectStore("settings").put({
+      key: RETENTION_KEY,
+      value: {
+        maxEntries: DIAGNOSTIC_LIMIT,
+        droppedCount: (previous?.droppedCount ?? 0) + dropped,
+        ...(previous?.earlierDroppedCount === "unknown" ||
+        (!previous && retainedCount > 1)
+          ? { earlierDroppedCount: "unknown" as const }
+          : {}),
+        firstRecordedAt: previous?.firstRecordedAt ?? diagnostic.timestamp,
+        lastRecordedAt: diagnostic.timestamp,
+        ...(previous?.lastPrunedAt === undefined
+          ? {}
+          : { lastPrunedAt: previous.lastPrunedAt }),
+        ...(dropped ? { lastPrunedAt: diagnostic.timestamp } : {}),
+      } satisfies DiagnosticRetention,
+    });
     await tx.done;
+  }
+  /** A single transaction prevents diagnostics and accounting from straddling different snapshots. */
+  async diagnosticSnapshot(): Promise<{
+    diagnostics: Diagnostic[];
+    usage: UsageRecord[];
+    retention: DiagnosticRetention;
+    capturedAt: number;
+  }> {
+    const tx = (await this.database).transaction(["diagnostics", "settings"]);
+    const [diagnostics, usage, retention] = await Promise.all([
+      tx.objectStore("diagnostics").index("timestamp").getAll(),
+      tx.objectStore("settings").get("ai.usage"),
+      tx.objectStore("settings").get(RETENTION_KEY),
+    ]);
+    await tx.done;
+    return {
+      diagnostics: diagnostics.sort(diagnosticOrder),
+      usage: Array.isArray(usage?.value) ? usage.value : [],
+      retention: (retention?.value as DiagnosticRetention | undefined) ?? {
+        maxEntries: DIAGNOSTIC_LIMIT,
+        droppedCount: 0,
+        ...(diagnostics.length
+          ? { earlierDroppedCount: "unknown" as const }
+          : {}),
+      },
+      capturedAt: Date.now(),
+    };
   }
   async listDiagnostics(appId?: string): Promise<Diagnostic[]> {
     const all = await (
       await this.database
     ).getAllFromIndex("diagnostics", "timestamp");
-    return appId ? all.filter((row) => row.appId === appId) : all;
+    return (appId ? all.filter((row) => row.appId === appId) : all).sort(
+      diagnosticOrder,
+    );
   }
   async getSetting<T>(key: string): Promise<T | undefined> {
     return (await (await this.database).get("settings", key))?.value as
@@ -453,7 +666,7 @@ export class Repository {
       | undefined;
   }
   async setSetting(key: string, value: unknown): Promise<void> {
-    if (secretField.test(key))
+    if (isCredentialSetting(key))
       throw new Error(
         "Store credentials separately from portable platform settings",
       );
@@ -485,24 +698,37 @@ export class Repository {
       "chat",
       "diagnostics",
       "settings",
+      "codingDrafts",
     ]);
-    const [apps, revisions, conversations, diagnostics, settings] =
-      await Promise.all([
-        tx.objectStore("apps").getAll(),
-        tx.objectStore("revisions").getAll(),
-        tx.objectStore("chat").getAll(),
-        tx.objectStore("diagnostics").getAll(),
-        tx.objectStore("settings").getAll(),
-      ]);
+    const [
+      apps,
+      revisions,
+      conversations,
+      diagnostics,
+      settings,
+      codingDrafts,
+    ] = await Promise.all([
+      tx.objectStore("apps").getAll(),
+      tx.objectStore("revisions").getAll(),
+      tx.objectStore("chat").getAll(),
+      tx.objectStore("diagnostics").getAll(),
+      tx.objectStore("settings").getAll(),
+      tx.objectStore("codingDrafts").getAll(),
+    ]);
     await tx.done;
     return {
       version: 2,
       apps,
       revisions,
       conversations,
-      diagnostics: diagnostics.map((row) => redact(row) as Diagnostic),
+      codingDrafts: codingDrafts.map(
+        (draft) => redact(draft) as CodingCheckpoint,
+      ),
+      diagnostics: diagnostics
+        .sort(diagnosticOrder)
+        .map((row) => redact(row) as Diagnostic),
       settings: settings
-        .filter((row) => !secretField.test(row.key))
+        .filter((row) => !isCredentialSetting(row.key))
         .map((row) => ({ key: row.key, value: redact(row.value) })),
     };
   }
@@ -528,12 +754,16 @@ export class Repository {
       await tx.objectStore("revisions").put(revision);
     for (const message of snapshot.conversations)
       await tx.objectStore("chat").put(message);
-    for (const row of snapshot.diagnostics.slice(-2000))
+    for (const row of snapshot.diagnostics)
       await tx.objectStore("diagnostics").put(redact(row) as Diagnostic);
     for (const setting of snapshot.settings)
       await tx
         .objectStore("settings")
         .put({ key: setting.key, value: redact(setting.value) });
+    for (const draft of snapshot.codingDrafts ?? [])
+      await tx
+        .objectStore("codingDrafts")
+        .put(redact(draft) as CodingCheckpoint);
     await tx.done;
   }
   async close(): Promise<void> {
