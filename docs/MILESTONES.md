@@ -72,3 +72,5 @@ Validation completed: `npm ci`, `npm run typecheck`, `npm test` (157 tests acros
 - [ ] Review, merge and deploy through the release process.
 
 The [review implementation report](review-2026-10-26/README.md) contains per-ticket criteria, screenshots, verification limits and the complete ID-to-evidence matrix. Deterministic success is not a claim that production access, model empathy or all generated accessibility behavior is already verified.
+
+[Draft PR #183](https://github.com/sander-van-damme/itsalive/pull/183) contains the implementation. A 30 October CI follow-up makes the onboarding cancellation test wait for the restored creation dialog before dismissing it; its goal-preservation and no-stale-request checks remain. The regression passed 12 consecutive focused runs and four related dialog cases.

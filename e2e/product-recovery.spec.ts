@@ -647,6 +647,9 @@ test("cancelled onboarding never runs a stale request after a later settings sav
   await expect(page.locator("#onboarding-dialog")).toBeVisible();
   await page.keyboard.press("Escape");
   const create = page.locator("#create-dialog");
+  // The native close event restores the draft asynchronously. Its input keeps
+  // its value while hidden, so wait for the restored dialog before dismissing it.
+  await expect(create).toBeVisible();
   await expect(
     create.getByLabel("What would you like to do?", { exact: true }),
   ).toHaveValue(goal);

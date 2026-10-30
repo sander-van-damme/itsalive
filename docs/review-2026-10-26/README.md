@@ -4,7 +4,7 @@ Every private review record maps to implementation work below. The original tran
 
 ## What changed
 
-The review is implemented on `codex/october-review`, based on `ebb347dd57576d8c43c3ab46be29f5bd481c9808`. The source and acceptance tests are reviewable together; production has not been deployed by this work. Validation resumed and completed on 28 October 2026.
+The review is implemented in [draft PR #183](https://github.com/sander-van-damme/itsalive/pull/183) on `codex/october-review`, based on `ebb347dd57576d8c43c3ab46be29f5bd481c9808`. The source and acceptance tests are reviewable together; production has not been deployed by this work. Local validation completed on 28 October 2026; the CI follow-up below was completed on 30 October.
 
 - Full-screen welcome and a connection/spending setup replace the initial crowded chat/settings view. A collapsible left sidebar keeps live conversation, app switching, history, speed, spending and settings available. App-title renaming is separate. Appearance supports system/light/dark, including the platform starter.
 - The companion receives actual app/source/state evidence, asks useful discovery questions for ambiguous goals, supplies selectable choices and resolves named-app references. Editable memory and general instructions are available to text and live conversation; delegated work receives relevant preferences.
@@ -250,6 +250,8 @@ Validated on 28 October 2026 with Node 24.19.0 and Chromium on Linux:
 | Actual provider         | Opt-in command attempted; no `OPENAI_API_KEY` supplied, so not run                                           |
 
 The full run includes the quality-repair, voice/memory, OAuth/revocation, work overlay, live-apply rollback, queued cancellation, pre-build retry and history traversal cases. Desktop/mobile light/dark screenshots were inspected. A restore-test timing flaw was fixed by waiting for a non-null app; the data and visible restored-state assertions remain. The final combined run has no failures.
+
+The first GitHub run passed TypeScript, all 241 unit tests and the builds, but exposed a timing flaw in the onboarding cancellation test. That test could dismiss the creation dialog before the native onboarding close event had reopened it, leaving Settings covered. It now waits for the restored dialog to be visible before dismissing it; the preserved-goal and no-stale-request assertions remain. On 30 October, the focused regression passed 12 consecutive runs and four related onboarding/settings/dialog cases passed. [Current PR checks](https://github.com/sander-van-damme/itsalive/pull/183/checks) record subsequent CI results.
 
 Tests use deterministic provider replies and simulated microphone transport. They do not establish live account permissions, actual billing, real audio quality or arbitrary model output quality.
 
